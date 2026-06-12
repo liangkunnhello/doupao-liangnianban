@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "electron:dev": "vite",
     "electron:build": "vite build && electron-builder",
-    "electron:preview": "vite build && electron ."
+    "electron:preview": "vite build && electron .",
+    "release": "npm run electron:build -- --publish always",
+    "release:dry": "npm run electron:build -- --publish never"
   },
   "dependencies": {
     "@fal-ai/client": "^1.10.0",
