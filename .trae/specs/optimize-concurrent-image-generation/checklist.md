@@ -1,0 +1,9 @@
+- [x] executeInBatches 使用滑动窗口（worker pool）模式，worker 完成一个 item 后立即取下一个
+- [x] 每个 item 成功后立即 storeImage + updateTaskInStore 追加到 outputImages
+- [x] 每个 item 失败后跳过，不影响其他 item
+- [x] 所有 item 完成后正确汇总结果并做最终收尾更新
+- [x] openaiCompatibleImageApi.ts 中 n>1 不再内部拆分并发（双重并发已消除）
+- [x] callImagesApiConcurrent 函数已移除
+- [x] callResponsesImageApi 中 n>1 不再并发拆分
+- [x] typecheck 通过
+- [x] 测试通过

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+local-saves/
+dev-proxy.config.json
+.wrangler/
+release/
+release-v2/
+*.exe
+*.blockmap
+*.nupkg
+latest.yml
+*.asar

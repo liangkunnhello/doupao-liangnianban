@@ -1,0 +1,8 @@
+- [x] running 状态下 DetailModal 左侧图片区域展示已完成的 outputImages（非仅流式预览/loading）
+- [x] running 状态下已完成图片支持分页导航（左右箭头 + 页码）
+- [x] running 状态下图片上方叠加"生成中"指示器，表明任务仍在进行
+- [x] 分页指示器显示 "N / M (共需 X 张)" 格式
+- [x] 新图片追加到 outputImages 后详情页自动加载展示
+- [x] 下载按钮在 running 状态下可用（对已完成的图片）
+- [x] 无已完成图片时保持原有行为（流式预览/loading spinner）
+- [x] typecheck 和 lint 通过

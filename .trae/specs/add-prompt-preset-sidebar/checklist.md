@@ -1,0 +1,21 @@
+# Verification Checklist
+
+- [x] PromptPreset 接口定义正确（id, title, prompt, createdAt, updatedAt, isFavorite）
+- [x] Store 包含 promptPresets 状态及 CRUD actions（add/update/delete）
+- [x] 预设数据通过 Zustand persist 持久化到 localStorage，刷新后保留
+- [x] PromptPresetSidebar 组件从右侧滑入/滑出（CSS transition 动画）
+- [x] 遮罩层覆盖在主内容上，点击遮罩层关闭侧边栏
+- [x] 侧边栏显示预设列表，按创建时间倒序排列
+- [x] 每个预设项显示标题、prompt 预览文本
+- [x] 每个预设项有「使用」按钮，点击后将 prompt 填入 InputBar 并关闭侧边栏
+- [x] 每个预设项有「删除」按钮，点击后弹出确认对话框，确认后删除
+- [x] 每个预设项有「编辑」按钮，可编辑标题和 prompt
+- [x] 空状态显示「暂无保存的预设」
+- [x] 响应式：桌面 320px 宽度，移动端全宽
+- [x] 按 Escape 键关闭侧边栏
+- [x] 在 App.tsx 中正确集成 PromptPresetSidebar
+- [x] 触发器按钮在 InputBar 中可见，点击打开侧边栏
+- [x] 保存为预设时弹出标题输入框
+- [x] 添加预设后显示 toast 提示"预设已保存"
+- [x] 删除预设后显示 toast 提示"预设已删除"
+- [x] 点击预设使用后正确替换 InputBar 中的提示词文本
