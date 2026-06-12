@@ -296,6 +296,7 @@ export default function TaskCard({
   const showSwipeAction = swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -487,7 +488,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && (
+          {task.status === 'error' && !isFalReconnecting && !hasPartialSuccess && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
@@ -506,6 +507,40 @@ export default function TaskCard({
                 {isInterrupted ? '已停止' : '失败'}
               </span>
             </div>
+          )}
+          {hasPartialSuccess && thumbSrc && (
+            <>
+              <img
+                src={thumbSrc}
+                data-image-id={task.outputImages[0]}
+                data-output-image-ids={task.outputImages.join(',')}
+                className="saveable-image w-full h-full object-cover"
+                loading="lazy"
+                alt=""
+              />
+              {task.outputImages.length > 1 && (
+                <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
+                  {task.batchItemStatuses
+                    ? `${task.batchItemStatuses.filter((s) => s === 'done').length}/${task.batchItemStatuses.length}`
+                    : task.outputImages.length}
+                </span>
+              )}
+            </>
+          )}
+          {hasPartialSuccess && !thumbSrc && (
+            <svg
+              className="w-8 h-8 text-gray-300"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+            </svg>
           )}
           {task.status === 'done' && thumbSrc && (
             <>
@@ -642,7 +677,17 @@ export default function TaskCard({
               {showN && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
                   <span className="text-gray-400 dark:text-gray-500">数量</span>
-                  {nDisplay.isMismatch ? <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{nDisplay.displayValue}</span>}
+                  {hasPartialSuccess && task.batchItemStatuses ? (
+                    <span className="text-gray-600 dark:text-gray-300">
+                      {task.batchItemStatuses.filter((s) => s === 'done').length}
+                      <span className="text-gray-400 dark:text-gray-500 mx-0.5">/</span>
+                      {task.batchItemStatuses.length}
+                    </span>
+                  ) : nDisplay.isMismatch ? (
+                    <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" />
+                  ) : (
+                    <span className="text-gray-600 dark:text-gray-300">{nDisplay.displayValue}</span>
+                  )}
                 </span>
               )}
             </div>

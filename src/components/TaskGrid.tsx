@@ -5,10 +5,11 @@ import TaskCard from './TaskCard'
 export default function TaskGrid() {
   const activeTabId = useStore((s) => s.activeWorkspaceTabId)
   const allTasks = useStore((s) => s.tasks)
-  const tabTasks = useStore((s) => {
-    const tab = s.activeWorkspaceTabId ? s.workspaceTabs.find((t) => t.id === s.activeWorkspaceTabId) : null
+  const workspaceTabs = useStore((s) => s.workspaceTabs)
+  const tabTasks = useMemo(() => {
+    const tab = activeTabId ? workspaceTabs.find((t) => t.id === activeTabId) : null
     return tab?.tasks ?? []
-  })
+  }, [activeTabId, workspaceTabs])
   const tasks = activeTabId ? tabTasks : allTasks
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)

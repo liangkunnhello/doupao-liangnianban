@@ -469,7 +469,7 @@ export default function WordLibrarySidebar() {
   return (
     <div
       ref={panelRef}
-      className="fixed z-[100] flex flex-col text-gray-100 overflow-hidden bg-gray-950 border border-white/[0.08]"
+      className="fixed z-[100] flex flex-col text-foreground overflow-hidden bg-background border border-border"
       style={{
         width: sz.w,
         minWidth: MIN_W,
@@ -481,7 +481,7 @@ export default function WordLibrarySidebar() {
       <div
         data-drag
         onMouseDown={onDragStart}
-        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-white/[0.08]"
+        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-border"
       >
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2.5">
@@ -491,13 +491,13 @@ export default function WordLibrarySidebar() {
               </svg>
             </div>
             <div>
-              <h3 className="text-base font-bold text-gray-100">词条库</h3>
-              <p className="text-[11px] text-gray-500 leading-tight">{entries.length} 个词条 · {groups.length} 个分组</p>
+              <h3 className="text-base font-bold text-foreground">词条库</h3>
+              <p className="text-[11px] text-muted-foreground leading-tight">{entries.length} 个词条 · {groups.length} 个分组</p>
             </div>
           </div>
           <button
             onClick={close}
-            className="rounded-lg p-1.5 text-gray-500 transition hover:bg-white/10 hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-sidebar-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/30"
             aria-label="关闭"
           >
             <CloseIcon className="h-4 w-4" />
@@ -505,27 +505,27 @@ export default function WordLibrarySidebar() {
         </div>
 
         <div className="relative">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索词条名称或内容..."
-            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm placeholder-gray-500 transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-gray-900 border border-white/[0.08] text-gray-100"
+            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm placeholder-muted-foreground transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-sidebar border border-border text-foreground"
           />
         </div>
       </div>
 
       {/* ===== Group pills ===== */}
-      <div className="shrink-0 px-4 py-2.5 border-b overflow-x-auto custom-scrollbar border-white/[0.08]">
+      <div className="shrink-0 px-4 py-2.5 border-b overflow-x-auto custom-scrollbar border-border">
         <div className="flex gap-1.5">
           <button
             onClick={() => setSelGroup('__all__')}
-            className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition hover:opacity-80 border border-white/[0.08]"
+            className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition hover:opacity-80 border border-border"
             style={{
-              background: selGroup === '__all__' ? '#2563eb' : '#1f2937',
-              color: selGroup === '__all__' ? '#fff' : '#9ca3af',
+              background: selGroup === '__all__' ? '#2563eb' : undefined,
+              color: selGroup === '__all__' ? '#fff' : undefined,
             }}
           >
             全部 {entries.length}
@@ -534,10 +534,10 @@ export default function WordLibrarySidebar() {
             <button
               key={g.id}
               onClick={() => setSelGroup(g.id)}
-              className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition hover:opacity-80 border border-white/[0.08]"
+              className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition hover:opacity-80 border border-border"
               style={{
-                background: selGroup === g.id ? '#2563eb' : '#1f2937',
-                color: selGroup === g.id ? '#fff' : '#9ca3af',
+                background: selGroup === g.id ? '#2563eb' : undefined,
+                color: selGroup === g.id ? '#fff' : undefined,
               }}
             >
               {g.name} {groupCounts[g.id] ?? 0}
@@ -549,7 +549,7 @@ export default function WordLibrarySidebar() {
       {/* ===== Entry list ===== */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-2.5 min-h-0">
         {filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-32 text-gray-600">
+          <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
             <svg className="w-8 h-8 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
             </svg>
@@ -570,7 +570,7 @@ export default function WordLibrarySidebar() {
                 borderColor: isActive ? 'rgba(37,99,235,0.35)' : 'transparent',
               }}
               onMouseEnter={(e) => {
-                if (!isActive) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)'
+                if (!isActive) (e.currentTarget as HTMLElement).style.background = 'hsl(var(--muted) / 0.5)'
               }}
               onMouseLeave={(e) => {
                 if (!isActive) (e.currentTarget as HTMLElement).style.background = 'transparent'
@@ -580,20 +580,20 @@ export default function WordLibrarySidebar() {
                 {entry.key ? entry.key[0] : '?'}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate" style={{ color: '#e8eaed' }}>{entry.key || '未命名'}</div>
-                <div className="text-xs text-gray-500 mt-0.5">{g?.name ?? '未知'} · {entry.entries.length}条 · 抽{entry.draw_count}</div>
+                <div className="text-sm font-medium truncate text-sidebar-foreground">{entry.key || '未命名'}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{g?.name ?? '未知'} · {entry.entries.length}条 · 抽{entry.draw_count}</div>
               </div>
               <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                 <button
                   onClick={(e) => { e.stopPropagation(); handleInsert(entry) }}
-                  className="px-2 py-1 rounded-md text-xs transition hover:text-white hover:bg-white/10 bg-gray-700 text-gray-400"
+                  className="px-2 py-1 rounded-md text-xs transition hover:text-foreground hover:bg-muted bg-muted text-muted-foreground"
                   title="插入到光标处"
                 >
                   插入
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleReplace(entry) }}
-                  className="px-2 py-1 rounded-md text-xs transition hover:text-white hover:bg-white/10 bg-gray-700 text-gray-400"
+                  className="px-2 py-1 rounded-md text-xs transition hover:text-foreground hover:bg-muted bg-muted text-muted-foreground"
                   title="替换选中文本"
                 >
                   替换
@@ -622,7 +622,7 @@ export default function WordLibrarySidebar() {
       )}
 
       {/* ===== Detail panel (fixed bottom) ===== */}
-      <div className="shrink-0 border-t flex flex-col border-white/[0.08]" style={{ minHeight: 200 }}>
+      <div className="shrink-0 border-t flex flex-col border-border" style={{ minHeight: 200 }}>
         {/* Detail header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-2 shrink-0">
           <div className="min-w-0 flex items-center gap-2">
@@ -632,8 +632,8 @@ export default function WordLibrarySidebar() {
               </svg>
             </div>
             <div>
-              <h4 className="text-sm font-bold" style={{ color: '#e8eaed' }}>词条详情</h4>
-              {activeEntry && <div className="text-xs text-gray-500 mt-0.5 truncate">ID: {activeEntry.key}</div>}
+              <h4 className="text-sm font-bold text-sidebar-foreground">词条详情</h4>
+              {activeEntry && <div className="text-xs text-muted-foreground mt-0.5 truncate">ID: {activeEntry.key}</div>}
             </div>
           </div>
           <button
@@ -651,41 +651,41 @@ export default function WordLibrarySidebar() {
         {/* Form row */}
         <div className="grid grid-cols-3 gap-2 px-4 pb-2 shrink-0">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">属性名称</label>
+            <label className="block text-xs text-muted-foreground mb-1">属性名称</label>
             <input
               value={editKey}
               onChange={(e) => setEditKey(e.target.value)}
               disabled={!activeEntry}
-              className="w-full px-2.5 py-1.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40 bg-gray-900 border border-white/[0.08] text-gray-100"
+              className="w-full px-2.5 py-1.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40 bg-sidebar border border-border text-foreground"
             />
           </div>
           <div className="relative" ref={groupRef}>
-            <label className="block text-xs text-gray-500 mb-1">所属分类</label>
+            <label className="block text-xs text-muted-foreground mb-1">所属分类</label>
             <button
               type="button"
               disabled={!activeEntry}
               onClick={() => activeEntry && setGroupOpen((o) => !o)}
-              className="w-full px-2.5 py-1.5 rounded-lg text-sm text-left transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 flex items-center justify-between disabled:opacity-40 bg-gray-900 border border-white/[0.08] text-gray-100"
+              className="w-full px-2.5 py-1.5 rounded-lg text-sm text-left transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 flex items-center justify-between disabled:opacity-40 bg-sidebar border border-border text-foreground"
             >
               <span className="truncate">{selGroupName}</span>
-              <svg className={`w-3.5 h-3.5 text-gray-500 transition-transform ${groupOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${groupOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </button>
             {groupOpen && activeEntry && (
-              <div className="absolute z-20 mt-1 w-full rounded-lg shadow-xl overflow-hidden bg-gray-900 border border-white/[0.08]">
+              <div className="absolute z-20 mt-1 w-full rounded-lg shadow-xl overflow-hidden bg-sidebar border border-border">
                 {groups.map((g) => (
                   <div
                     key={g.id}
                     onClick={() => { setEditGroupId(g.id); setGroupOpen(false) }}
-                    className="px-3 py-2 text-sm cursor-pointer transition hover:bg-white/5"
-                    style={{ color: g.id === editGroupId ? '#60a5fa' : '#e8eaed' }}
+                    className="px-3 py-2 text-sm cursor-pointer transition hover:bg-muted"
+                    style={{ color: g.id === editGroupId ? '#60a5fa' : undefined }}
                   >
                     {g.name}
                   </div>
                 ))}
                 {creatingGroup ? (
-                  <div className="px-3 py-2 border-t border-white/[0.08]">
+                  <div className="px-3 py-2 border-t border-border">
                     <input
                       autoFocus
                       value={newGroupName}
@@ -695,17 +695,17 @@ export default function WordLibrarySidebar() {
                         else if (e.key === 'Escape') { setCreatingGroup(false); setNewGroupName('') }
                       }}
                       placeholder="分组名称"
-                      className="w-full px-2 py-1 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-gray-950 border border-white/[0.08] text-gray-100"
+                      className="w-full px-2 py-1 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-background border border-border text-foreground"
                     />
                     <div className="flex items-center gap-2 mt-2">
                       <button onClick={onCreateGroup} className="px-2.5 py-1 rounded text-xs text-white bg-blue-600">确认</button>
-                      <button onClick={() => { setCreatingGroup(false); setNewGroupName('') }} className="px-2.5 py-1 rounded text-xs bg-gray-700 text-gray-400">取消</button>
+                      <button onClick={() => { setCreatingGroup(false); setNewGroupName('') }} className="px-2.5 py-1 rounded text-xs bg-muted text-muted-foreground">取消</button>
                     </div>
                   </div>
                 ) : (
                   <div
                     onClick={() => setCreatingGroup(true)}
-                    className="px-3 py-2 text-sm cursor-pointer transition hover:bg-white/5 border-t border-white/[0.08] text-blue-400"
+                    className="px-3 py-2 text-sm cursor-pointer transition hover:bg-muted border-t border-border text-blue-400"
                   >
                     + 新建分组
                   </div>
@@ -714,33 +714,33 @@ export default function WordLibrarySidebar() {
             )}
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">每次抽取</label>
+            <label className="block text-xs text-muted-foreground mb-1">每次抽取</label>
             <input
               type="number"
               min={1} max={999}
               value={editDraw}
               onChange={(e) => setEditDraw(Number(e.target.value))}
               disabled={!activeEntry}
-              className="w-full px-2.5 py-1.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40 bg-gray-900 border border-white/[0.08] text-gray-100"
+              className="w-full px-2.5 py-1.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40 bg-sidebar border border-border text-foreground"
             />
           </div>
         </div>
 
         {/* Textarea */}
         <div className="px-4 pb-3">
-          <label className="block text-xs text-gray-500 mb-1">候选词库</label>
+          <label className="block text-xs text-muted-foreground mb-1">候选词库</label>
           <textarea
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             disabled={!activeEntry}
             placeholder={activeEntry ? '每行一个词条' : '请先选择或创建词条'}
-            className="w-full px-3 py-2 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 resize-y disabled:opacity-40 bg-gray-900 border border-white/[0.08] text-gray-100"
+            className="w-full px-3 py-2 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 resize-y disabled:opacity-40 bg-sidebar border border-border text-foreground"
             style={{ minHeight: 72, maxHeight: 250, height: 250, resize: 'none' }}
           />
         </div>
 
         {/* Bottom actions - protected from overlap */}
-        <div className="flex items-center justify-between px-4 py-3 border-t shrink-0 border-white/[0.08]">
+        <div className="flex items-center justify-between px-4 py-3 border-t shrink-0 border-border">
           <button
             onClick={onDelete}
             disabled={!activeEntry}
@@ -755,7 +755,7 @@ export default function WordLibrarySidebar() {
             <button
               onClick={onReset}
               disabled={!activeEntry}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium transition hover:bg-white/10 disabled:opacity-30 flex items-center gap-1 bg-gray-700 text-gray-400"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition hover:bg-muted disabled:opacity-30 flex items-center gap-1 bg-muted text-muted-foreground"
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

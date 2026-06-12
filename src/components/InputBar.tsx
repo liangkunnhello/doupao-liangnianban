@@ -14,7 +14,7 @@ import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { useTooltip } from '../hooks/useTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
-import { selectLocalSaveDirectory, readDirectory, readFileBuffer } from '../lib/localSave'
+import { selectLocalSaveDirectory, readDirectory, readFileBuffer, joinPath } from '../lib/localSave'
 import { storeImage, hashDataUrl } from '../lib/db'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
@@ -1265,7 +1265,7 @@ export default function InputBar() {
       const imageIds: string[] = []
 
       for (const fileName of toRead) {
-        const filePath = folderPath + '/' + fileName
+        const filePath = await joinPath(folderPath, fileName)
         const result = await readFileBuffer(filePath)
         if (!result) continue
 

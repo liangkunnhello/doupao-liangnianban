@@ -10,8 +10,18 @@ const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
 
-autoUpdater.autoDownload = false
+autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = true
+// 允许预发布版本以跳过 getLatestTagName 的 406 错误
+// 实际版本均为稳定版，无影响
+autoUpdater.allowPrerelease = true
+
+// 配置 GitHub 作为更新源
+autoUpdater.setFeedURL({
+  provider: 'github',
+  owner: 'nideyilian',
+  repo: 'doupao',
+})
 
 function sendToWindow(channel: string, ...args: unknown[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -46,7 +56,11 @@ autoUpdater.on('update-downloaded', (info) => {
 })
 
 autoUpdater.on('error', (error) => {
-  sendToWindow('update:status', { status: 'error', message: error?.message || String(error) })
+  const message = error?.message || String(error)
+  // 截断过长的错误消息，避免渲染异常内容
+  const truncated = message.length > 200 ? message.slice(0, 200) + '...' : message
+  console.error('[autoUpdater] error:', message)
+  sendToWindow('update:status', { status: 'error', message: truncated })
 })
 
 function createWindow() {

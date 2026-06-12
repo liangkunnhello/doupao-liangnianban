@@ -415,7 +415,7 @@ export default function WorkspaceTabBar() {
   return (
     <div
       ref={panelRef}
-      className="fixed z-[100] flex flex-col text-gray-100 overflow-hidden bg-gray-950 border border-white/[0.08]"
+      className="fixed z-[100] flex flex-col text-foreground overflow-hidden bg-background border border-border"
       style={{
         width: sz.w,
         minWidth: MIN_W,
@@ -427,7 +427,7 @@ export default function WorkspaceTabBar() {
       <div
         data-drag
         onMouseDown={onDragStart}
-        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-white/[0.08]"
+        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-border"
       >
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2.5">
@@ -437,8 +437,8 @@ export default function WorkspaceTabBar() {
               </svg>
             </div>
             <div>
-              <h3 className="text-base font-bold text-gray-100">标签页</h3>
-              <p className="text-[11px] text-gray-500 leading-tight">{workspaceTabs.length} 个标签页 · {workspaceTabGroups.length} 个分组</p>
+              <h3 className="text-base font-bold text-foreground">标签页</h3>
+              <p className="text-[11px] text-muted-foreground leading-tight">{workspaceTabs.length} 个标签页 · {workspaceTabGroups.length} 个分组</p>
             </div>
           </div>
         </div>
@@ -456,7 +456,7 @@ export default function WorkspaceTabBar() {
           <button
             onClick={() => setWorkspaceTabManagerOpen(true)}
             title="标签管理"
-            className="flex-1 flex items-center justify-center gap-1 h-8 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium transition-colors border border-white/[0.08]"
+            className="flex-1 flex items-center justify-center gap-1 h-8 rounded-lg bg-muted hover:bg-muted/80 text-sidebar-foreground text-xs font-medium transition-colors border border-border"
           >
             <SettingsIcon className="w-3.5 h-3.5" />
             管理
@@ -464,7 +464,7 @@ export default function WorkspaceTabBar() {
           <button
             onClick={handleBatchRun}
             title="批量运行选中标签页"
-            className={`flex-1 flex items-center justify-center gap-1 h-8 rounded-lg text-xs font-medium transition-colors ${selectedWorkspaceTabIds.length > 0 ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-white/[0.08]'}`}
+            className={`flex-1 flex items-center justify-center gap-1 h-8 rounded-lg text-xs font-medium transition-colors ${selectedWorkspaceTabIds.length > 0 ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-muted hover:bg-muted/80 text-sidebar-foreground border border-border'}`}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -476,7 +476,7 @@ export default function WorkspaceTabBar() {
 
         {/* Search */}
         <div className="relative mt-2">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
@@ -484,7 +484,7 @@ export default function WorkspaceTabBar() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索标签页"
-            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm placeholder-gray-500 transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-gray-900 border border-white/[0.08] text-gray-100"
+            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm placeholder-muted-foreground transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-sidebar border border-border text-foreground"
           />
         </div>
       </div>
@@ -500,7 +500,7 @@ export default function WorkspaceTabBar() {
             onDragLeave={() => setDragOverGroupId(null)}
           >
             {group && (
-              <div className="px-2 py-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wider truncate">
+              <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider truncate">
                 {group.name}
               </div>
             )}
@@ -528,7 +528,7 @@ export default function WorkspaceTabBar() {
                   }}
                   className={`
                     group relative flex items-center gap-2 mx-1 px-2.5 py-2 rounded-xl cursor-pointer select-none transition-colors border
-                    ${isActive ? 'bg-blue-500/15 border-blue-500/35 text-blue-300' : 'border-transparent hover:bg-white/[0.04] text-gray-300'}
+                    ${isActive ? 'bg-blue-500/15 border-blue-500/35 text-blue-300' : 'border-transparent hover:bg-muted/50 text-sidebar-foreground'}
                     ${isSelected && !isActive ? 'ring-1 ring-blue-500/40' : ''}
                     ${isDragOver ? 'outline outline-1 outline-blue-500' : ''}
                   `}
@@ -537,7 +537,7 @@ export default function WorkspaceTabBar() {
                   <span className="flex-1 text-xs truncate">{tab.name}</span>
                   <button
                     onClick={(e) => handleCloseTab(e, tab.id)}
-                    className={`opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-white/10 transition-opacity ${isActive ? 'text-blue-300' : 'text-gray-500'}`}
+                    className={`opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted transition-opacity ${isActive ? 'text-blue-300' : 'text-muted-foreground'}`}
                     title="关闭"
                   >
                     <CloseIcon className="w-3 h-3" />
@@ -548,7 +548,7 @@ export default function WorkspaceTabBar() {
           </div>
         ))}
         {filteredTabs.length === 0 && (
-          <div className="px-3 py-4 text-xs text-gray-500 text-center">
+          <div className="px-3 py-4 text-xs text-muted-foreground text-center">
             {searchQuery ? '无匹配标签页' : '暂无标签页'}
           </div>
         )}
@@ -574,7 +574,7 @@ export default function WorkspaceTabBar() {
       {/* ===== Context menu ===== */}
       {contextMenu && (
         <div
-          className="fixed z-[200] min-w-[160px] rounded-lg border border-white/[0.08] bg-gray-900 shadow-xl py-1"
+          className="fixed z-[200] min-w-[160px] rounded-lg border border-border bg-sidebar shadow-xl py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -594,10 +594,10 @@ export default function WorkspaceTabBar() {
               setContextMenu(null)
             }}
           />
-          <div className="h-px bg-white/[0.08] my-1" />
+          <div className="h-px bg-border my-1" />
           {workspaceTabGroups.length > 0 && (
             <>
-              <div className="px-3 py-1 text-[10px] text-gray-500">移动到分组</div>
+              <div className="px-3 py-1 text-[10px] text-muted-foreground">移动到分组</div>
               <ContextMenuItem
                 icon={<span className="w-3.5 h-3.5 rounded-full border border-current" />}
                 label="未分组"
@@ -619,7 +619,7 @@ export default function WorkspaceTabBar() {
                   setContextMenu(null)
                 }}
               />
-              <div className="h-px bg-white/[0.08] my-1" />
+              <div className="h-px bg-border my-1" />
             </>
           )}
           <ContextMenuItem
@@ -651,7 +651,7 @@ function ContextMenuItem({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-white/5 transition-colors ${tone === 'danger' ? 'text-red-400' : 'text-gray-300'}`}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors ${tone === 'danger' ? 'text-red-400' : 'text-sidebar-foreground'}`}
     >
       {icon}
       <span>{label}</span>

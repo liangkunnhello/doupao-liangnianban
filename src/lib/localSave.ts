@@ -87,6 +87,12 @@ export async function readDirectory(dirPath: string): Promise<string[]> {
   return api.readDir(dirPath)
 }
 
+export async function joinPath(...paths: string[]): Promise<string> {
+  const api = getAPI()
+  if (!api) return paths.join('/')
+  return api.pathJoin(...paths)
+}
+
 const EXT_MAP: Record<string, string> = {
   png: 'png',
   jpeg: 'jpg',

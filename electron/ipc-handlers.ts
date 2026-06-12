@@ -12,7 +12,7 @@ export function initLocalSavePath(): void {
   try {
     const settings = readLocalSettings()
     if (!settings.localSavePath) {
-      settings.localSavePath = path.join(path.dirname(app.getPath('exe')), 'local-saves')
+      settings.localSavePath = path.join(app.getPath('userData'), 'local-saves')
       writeLocalSettings(settings)
     }
   } catch (err) {
@@ -132,7 +132,7 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('fs:get-default-path', async () => {
-    return path.join(path.dirname(app.getPath('exe')), 'local-saves')
+    return path.join(app.getPath('userData'), 'local-saves')
   })
 
   ipcMain.handle('fs:open-in-explorer', async (_event, { filePath }: { filePath: string }) => {

@@ -675,8 +675,9 @@ export function migratePersistedState(persistedState: unknown): unknown {
     ...persistedState,
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
-  // Migrate old data without workspaceTabs: create a default tab from galleryInputDraft or current input state
-  if (!Array.isArray(persistedState.workspaceTabs)) {
+  // Migrate old data without workspaceTabs or with empty workspaceTabs: create a default tab from galleryInputDraft or current input state
+  const hasValidWorkspaceTabs = Array.isArray(persistedState.workspaceTabs) && persistedState.workspaceTabs.length > 0
+  if (!hasValidWorkspaceTabs) {
     const galleryDraft = isRecord(persistedState.galleryInputDraft) ? persistedState.galleryInputDraft : null
     const prompt = typeof persistedState.prompt === 'string' ? persistedState.prompt : (galleryDraft && typeof galleryDraft.prompt === 'string' ? galleryDraft.prompt : '')
     const inputImages = Array.isArray(persistedState.inputImages)
@@ -1345,11 +1346,39 @@ function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversatio
 
 function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'inputImageFolder' | 'maskDraft' | 'maskEditorImageId'>) {
   if (state.appMode !== 'agent' || !state.activeAgentConversationId) return state.agentInputDrafts
+  
+  const existingDraft = state.agentInputDrafts[state.activeAgentConversationId]
+  if (existingDraft) {
+    const hasChanges = 
+      state.prompt !== existingDraft.prompt ||
+      state.inputImages.length !== existingDraft.inputImages.length ||
+      state.inputImages.some((img, idx) => img.id !== existingDraft.inputImages[idx]?.id) ||
+      state.inputImageFolder?.path !== existingDraft.inputImageFolder?.path ||
+      JSON.stringify(state.maskDraft) !== JSON.stringify(existingDraft.maskDraft) ||
+      state.maskEditorImageId !== existingDraft.maskEditorImageId
+    
+    if (!hasChanges) {
+      return state.agentInputDrafts
+    }
+  }
+  
   return setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, getCurrentAgentInputDraft(state))
 }
 
 function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'inputImageFolder' | 'maskDraft' | 'maskEditorImageId'>) {
   if (state.appMode !== 'gallery') return state.galleryInputDraft
+  const hasChanges = 
+    state.prompt !== state.galleryInputDraft?.prompt ||
+    state.inputImages.length !== state.galleryInputDraft?.inputImages.length ||
+    state.inputImages.some((img, idx) => img.id !== state.galleryInputDraft?.inputImages[idx]?.id) ||
+    state.inputImageFolder?.path !== state.galleryInputDraft?.inputImageFolder?.path ||
+    JSON.stringify(state.maskDraft) !== JSON.stringify(state.galleryInputDraft?.maskDraft) ||
+    state.maskEditorImageId !== state.galleryInputDraft?.maskEditorImageId
+
+  if (!hasChanges && state.galleryInputDraft) {
+    return state.galleryInputDraft
+  }
+
   const draft = getCurrentAgentInputDraft(state)
   return isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft)
 }
@@ -1386,8 +1415,37 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
     maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
   }
   if (state.appMode === 'gallery') {
-    // Also sync to active workspace tab
     const activeTabId = state.activeWorkspaceTabId
+    if (activeTabId) {
+      const activeTab = state.workspaceTabs.find((t) => t.id === activeTabId)
+      if (activeTab) {
+        const tabHasChanges =
+          activeTab.prompt !== draft.prompt ||
+          activeTab.inputImages.length !== draft.inputImages.length ||
+          activeTab.inputImages.some((img, idx) => img.id !== draft.inputImages[idx]?.id) ||
+          (patch.inputImageFolder !== undefined && activeTab.inputImageFolder?.path !== patch.inputImageFolder?.path) ||
+          (patch.params !== undefined && JSON.stringify(activeTab.params) !== JSON.stringify({ ...state.params, ...patch.params })) ||
+          JSON.stringify(activeTab.maskDraft) !== JSON.stringify(draft.maskDraft) ||
+          activeTab.maskEditorImageId !== draft.maskEditorImageId
+
+        if (!tabHasChanges) {
+          const existingDraft = state.galleryInputDraft
+          const draftHasChanges =
+            !existingDraft ||
+            existingDraft.prompt !== draft.prompt ||
+            existingDraft.inputImages.length !== draft.inputImages.length ||
+            existingDraft.inputImages.some((img, idx) => img.id !== draft.inputImages[idx]?.id) ||
+            existingDraft.inputImageFolder?.path !== draft.inputImageFolder?.path ||
+            JSON.stringify(existingDraft.maskDraft) !== JSON.stringify(draft.maskDraft) ||
+            existingDraft.maskEditorImageId !== draft.maskEditorImageId
+
+          if (!draftHasChanges) {
+            return patch
+          }
+        }
+      }
+    }
+
     const updatedTabs = activeTabId
       ? state.workspaceTabs.map((t) =>
           t.id === activeTabId
@@ -1411,6 +1469,22 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
     }
   }
   if (!state.activeAgentConversationId) return patch
+  
+  const existingDraft = state.agentInputDrafts[state.activeAgentConversationId]
+  if (existingDraft) {
+    const draftHasChanges =
+      existingDraft.prompt !== draft.prompt ||
+      existingDraft.inputImages.length !== draft.inputImages.length ||
+      existingDraft.inputImages.some((img, idx) => img.id !== draft.inputImages[idx]?.id) ||
+      existingDraft.inputImageFolder?.path !== draft.inputImageFolder?.path ||
+      JSON.stringify(existingDraft.maskDraft) !== JSON.stringify(draft.maskDraft) ||
+      existingDraft.maskEditorImageId !== draft.maskEditorImageId
+    
+    if (!draftHasChanges) {
+      return patch
+    }
+  }
+  
   return {
     ...patch,
     agentInputDrafts: setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, draft),
@@ -2151,6 +2225,17 @@ export const useStore = create<AppState>()(
       saveCurrentStateToActiveTab: () => set((state) => {
         const currentTabId = state.activeWorkspaceTabId
         if (!currentTabId) return state
+        const currentTab = state.workspaceTabs.find((t) => t.id === currentTabId)
+        if (!currentTab) return state
+        const hasChanges =
+          currentTab.prompt !== state.prompt ||
+          currentTab.inputImages.length !== state.inputImages.length ||
+          currentTab.inputImages.some((img, idx) => img.id !== state.inputImages[idx]?.id) ||
+          currentTab.inputImageFolder?.path !== state.inputImageFolder?.path ||
+          JSON.stringify(currentTab.params) !== JSON.stringify(state.params) ||
+          JSON.stringify(currentTab.maskDraft) !== JSON.stringify(state.maskDraft) ||
+          currentTab.maskEditorImageId !== state.maskEditorImageId
+        if (!hasChanges) return state
         return {
           workspaceTabs: state.workspaceTabs.map((t) =>
             t.id === currentTabId

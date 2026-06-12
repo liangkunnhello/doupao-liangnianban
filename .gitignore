@@ -5,6 +5,7 @@ local-saves/
 dev-proxy.config.json
 .wrangler/
 release/
+release_new/
 release-v2/
 *.exe
 *.blockmap

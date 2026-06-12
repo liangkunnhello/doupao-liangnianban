@@ -224,6 +224,7 @@ export default function DetailModal() {
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
   const rawImageUrls = task.rawImageUrls ?? []
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
@@ -407,7 +408,7 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {((task.status === 'done' || (task.status === 'running' && outputLen > 0)) && outputLen > 0) && (
+          {((task.status === 'done' || hasPartialSuccess || (task.status === 'running' && outputLen > 0)) && outputLen > 0) && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               <div className="relative group flex">
                 <button
@@ -448,7 +449,7 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {(task.status === 'done' || (task.status === 'running' && outputLen > 0)) && outputLen > 0 && currentOutputPreviewSrc && (
+          {(task.status === 'done' || hasPartialSuccess || (task.status === 'running' && outputLen > 0)) && outputLen > 0 && currentOutputPreviewSrc && (
             <>
               <img
                 src={currentOutputPreviewSrc}
@@ -479,6 +480,14 @@ export default function DetailModal() {
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                   生成中
+                </span>
+              )}
+              {hasPartialSuccess && (
+                <span className="absolute right-3 top-[15px] z-10 flex items-center gap-1 rounded bg-yellow-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  部分成功
                 </span>
               )}
               <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
@@ -638,7 +647,7 @@ export default function DetailModal() {
               <p className="text-sm font-medium text-yellow-500">重连中</p>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && (
+          {task.status === 'error' && !isFalReconnecting && !hasPartialSuccess && (
             <div className="w-full max-w-md px-4 text-center">
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
