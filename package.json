@@ -59,7 +59,7 @@
     "publish": {
       "provider": "github",
       "owner": "nideyilian",
-      "repo": "豆泡"
+      "repo": "doupao"
     },
     "win": {
       "target": [
