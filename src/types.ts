@@ -111,6 +111,7 @@ export interface AppSettings {
   agentWebSearch: boolean
   profiles: ApiProfile[]
   activeProfileId: string
+  backupInterval: number
 }
 
 // ===== 任务参数 =====

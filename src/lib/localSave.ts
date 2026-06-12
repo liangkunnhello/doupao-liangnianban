@@ -15,6 +15,14 @@ type ElectronAPI = {
   openInExplorer: (filePath: string) => Promise<void>
   getLocalSavePath: () => Promise<string | null>
   setLocalSavePath: (path: string) => Promise<void>
+  readJsonText: (filePath: string) => Promise<string | null>
+  writeJsonText: (filePath: string, content: string, backupInterval?: number) => Promise<boolean>
+  listBackups: (filePath: string) => Promise<string[]>
+  checkBackupHasData: (backupPath: string) => Promise<boolean>
+  restoreFromBackup: (backupPath: string, targetPath: string) => Promise<boolean>
+  deleteBackup: (backupPath: string) => Promise<boolean>
+  saveZipBuffer: (filePath: string, buffer: ArrayBuffer) => Promise<boolean>
+  getDesktopPath: () => Promise<string>
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   checkForUpdate: () => Promise<{ success: boolean; error?: string }>
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>
@@ -247,4 +255,44 @@ export async function saveAgentConversationToLocal(
   const markdown = formatAgentConversationMarkdown(conversation)
   const success = await api.saveText(filePath, markdown)
   return success ? filePath : null
+}
+
+export async function getBackupList(): Promise<string[]> {
+  const api = getAPI()
+  if (!api) return []
+  const defaultPath = await api.getDefaultPath()
+  const dataPath = defaultPath.replace(/[\\/]local-saves$/, '')
+  return api.listBackups(dataPath + '/gpt-image-playground.json')
+}
+
+export async function checkBackupHasData(backupPath: string): Promise<boolean> {
+  const api = getAPI()
+  if (!api) return false
+  return api.checkBackupHasData(backupPath)
+}
+
+export async function restoreFromBackupFile(backupPath: string): Promise<boolean> {
+  const api = getAPI()
+  if (!api) return false
+  const defaultPath = await api.getDefaultPath()
+  const dataPath = defaultPath.replace(/[\\/]local-saves$/, '')
+  return api.restoreFromBackup(backupPath, dataPath + '/gpt-image-playground.json')
+}
+
+export async function deleteBackupFile(backupPath: string): Promise<boolean> {
+  const api = getAPI()
+  if (!api) return false
+  return api.deleteBackup(backupPath)
+}
+
+export async function saveZipToPath(filePath: string, buffer: ArrayBuffer): Promise<boolean> {
+  const api = getAPI()
+  if (!api) return false
+  return api.saveZipBuffer(filePath, buffer)
+}
+
+export async function getDesktopPath(): Promise<string | null> {
+  const api = getAPI()
+  if (!api) return null
+  return api.getDesktopPath()
 }

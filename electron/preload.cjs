@@ -14,5 +14,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openInExplorer: (filePath) => ipcRenderer.invoke('fs:open-in-explorer', { filePath }),
   getLocalSavePath: () => ipcRenderer.invoke('store:get-local-save-path'),
   setLocalSavePath: (path) => ipcRenderer.invoke('store:set-local-save-path', { path }),
+  readJsonText: (filePath) => ipcRenderer.invoke('fs:read-json-text', { filePath }),
+  writeJsonText: (filePath, content, backupInterval) => ipcRenderer.invoke('fs:write-json-text', { filePath, content, backupInterval }),
+  listBackups: (filePath) => ipcRenderer.invoke('fs:list-backups', { filePath }),
+  checkBackupHasData: (backupPath) => ipcRenderer.invoke('fs:check-backup-has-data', { backupPath }),
+  restoreFromBackup: (backupPath, targetPath) => ipcRenderer.invoke('fs:restore-from-backup', { backupPath, targetPath }),
+  deleteBackup: (backupPath) => ipcRenderer.invoke('fs:delete-backup', { backupPath }),
+  saveZipBuffer: (filePath, buffer) => ipcRenderer.invoke('fs:save-zip-buffer', { filePath, buffer }),
+  getDesktopPath: () => ipcRenderer.invoke('fs:get-desktop-path'),
   isElectron: true,
 })

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import type {
   AgentConversation,
   AgentMessage,
@@ -126,7 +126,7 @@ function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
 
-export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
+export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'backup' | 'about'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -844,6 +844,9 @@ export function getPersistedState(state: AppState) {
     activeWorkspaceTabId: state.activeWorkspaceTabId,
     workspaceTabGroups: state.workspaceTabGroups,
     workspaceTabBarExpanded: state.workspaceTabBarExpanded,
+    lastAutoBackupAt: state.lastAutoBackupAt,
+    firstBackupReminderShown: state.firstBackupReminderShown,
+    backupReminderCount: state.backupReminderCount,
   }
 }
 
@@ -1173,6 +1176,14 @@ interface AppState {
   moveWorkspaceTabToGroup: (tabId: string, groupId: string | null) => void
   updateWorkspaceTabState: (id: string, patch: Partial<WorkspaceTab>) => void
   saveCurrentStateToActiveTab: () => void
+
+  // 自动备份
+  lastAutoBackupAt: number
+  setLastAutoBackupAt: (t: number) => void
+  firstBackupReminderShown: boolean
+  setFirstBackupReminderShown: (v: boolean) => void
+  backupReminderCount: number
+  setBackupReminderCount: (v: number) => void
 }
 
 function isImageReferencedByState(state: AppState, imageId: string) {
@@ -2253,6 +2264,14 @@ export const useStore = create<AppState>()(
           ),
         }
       }),
+
+      // 自动备份
+      lastAutoBackupAt: 0,
+      setLastAutoBackupAt: (t) => set({ lastAutoBackupAt: t }),
+      firstBackupReminderShown: false,
+      setFirstBackupReminderShown: (v) => set({ firstBackupReminderShown: v }),
+      backupReminderCount: 0,
+      setBackupReminderCount: (v) => set({ backupReminderCount: v }),
     }),
     {
       name: 'gpt-image-playground',
@@ -2260,6 +2279,37 @@ export const useStore = create<AppState>()(
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
       merge: mergePersistedState,
+      storage: createJSONStorage(() => {
+        const w = window as unknown as { electronAPI?: {
+          getDefaultPath: () => Promise<string>
+          readJsonText: (filePath: string) => Promise<string | null>
+          writeJsonText: (filePath: string, content: string, backupInterval?: number) => Promise<boolean>
+          isElectron: boolean
+        } }
+        const isElectronEnv = typeof w?.electronAPI !== 'undefined' && w.electronAPI?.isElectron === true
+        if (!isElectronEnv) return localStorage
+        const api = w.electronAPI!
+        const fileName = 'gpt-image-playground.json'
+        return {
+          getItem: async (_name: string) => {
+            const defaultPath = await api.getDefaultPath()
+            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
+            const result = await api.readJsonText(filePath)
+            return result
+          },
+          setItem: async (_name: string, value: string) => {
+            const defaultPath = await api.getDefaultPath()
+            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
+            const interval = useStore.getState().settings.backupInterval
+            await api.writeJsonText(filePath, value, interval)
+          },
+          removeItem: async (_name: string) => {
+            const defaultPath = await api.getDefaultPath()
+            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
+            await api.writeJsonText(filePath, '')
+          },
+        }
+      }),
     },
   ),
 )
@@ -5796,6 +5846,90 @@ function formatExportFileTime(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }
 
+/** 生成 ZIP 数据 */
+async function generateExportZipBuffer(options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<Uint8Array> {
+  const tasks = options.exportTasks ? await getAllTasks() : []
+  const images = options.exportTasks ? await getAllImages() : []
+  const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
+  const exportedAt = Date.now()
+  const imageCreatedAtFallback = new Map<string, number>()
+
+  if (options.exportTasks) {
+    for (const task of tasks) {
+      for (const id of [
+        ...(task.inputImageIds || []),
+        ...(task.maskImageId ? [task.maskImageId] : []),
+        ...(task.outputImages || []),
+        ...(task.streamPartialImageIds || []),
+      ]) {
+        const prev = imageCreatedAtFallback.get(id)
+        if (prev == null || task.createdAt < prev) {
+          imageCreatedAtFallback.set(id, task.createdAt)
+        }
+      }
+    }
+  }
+
+  const imageFiles: ExportData['imageFiles'] = {}
+  const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
+  const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
+
+  if (options.exportTasks) {
+    for (const img of images) {
+      const { ext, bytes } = dataUrlToBytes(img.dataUrl)
+      const path = `images/${img.id}.${ext}`
+      const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
+      imageFiles[img.id] = {
+        path,
+        createdAt,
+        source: img.source,
+        width: img.width,
+        height: img.height,
+      }
+      zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
+
+      const thumbnail = await getImageThumbnail(img.id)
+      if (thumbnail?.thumbnailDataUrl) {
+        const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
+        const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
+        imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
+        imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
+        thumbnailFiles[img.id] = {
+          path: thumbnailPath,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          thumbnailVersion: thumbnail.thumbnailVersion,
+        }
+        zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
+      }
+    }
+  }
+
+  const manifest: ExportData = {
+    version: 3,
+    exportedAt: new Date(exportedAt).toISOString(),
+  }
+
+  if (options.exportConfig) manifest.settings = settings
+  if (options.exportTasks) {
+    manifest.tasks = tasks
+    manifest.favoriteCollections = favoriteCollections
+    manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
+    manifest.agentConversations = getPersistableAgentConversations(agentConversations)
+    manifest.imageFiles = imageFiles
+    manifest.thumbnailFiles = thumbnailFiles
+  }
+  if (options.exportWordLibrary) {
+    manifest.wordLibraryGroups = wordLibraryGroups
+    manifest.wordLibraryEntries = wordLibraryEntries
+  }
+
+  zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
+
+  const zipped = zipSync(zipFiles, { level: 6 })
+  return zipped
+}
+
 /** 导出选项 */
 export interface ExportOptions {
   exportConfig?: boolean
@@ -5907,6 +6041,97 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
         'error',
       )
   }
+}
+
+/** 导出数据到指定路径 */
+export async function exportDataToPath(filePath: string, options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<boolean> {
+  const tasks = options.exportTasks ? await getAllTasks() : []
+  const images = options.exportTasks ? await getAllImages() : []
+  const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
+  const exportedAt = Date.now()
+  const imageCreatedAtFallback = new Map<string, number>()
+
+  if (options.exportTasks) {
+    for (const task of tasks) {
+      for (const id of [
+        ...(task.inputImageIds || []),
+        ...(task.maskImageId ? [task.maskImageId] : []),
+        ...(task.outputImages || []),
+        ...(task.streamPartialImageIds || []),
+      ]) {
+        const prev = imageCreatedAtFallback.get(id)
+        if (prev == null || task.createdAt < prev) {
+          imageCreatedAtFallback.set(id, task.createdAt)
+        }
+      }
+    }
+  }
+
+  const imageFiles: ExportData['imageFiles'] = {}
+  const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
+  const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
+
+  if (options.exportTasks) {
+    for (const img of images) {
+      const { ext, bytes } = dataUrlToBytes(img.dataUrl)
+      const path = `images/${img.id}.${ext}`
+      const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
+      imageFiles[img.id] = {
+        path,
+        createdAt,
+        source: img.source,
+        width: img.width,
+        height: img.height,
+      }
+      zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
+
+      const thumbnail = await getImageThumbnail(img.id)
+      if (thumbnail?.thumbnailDataUrl) {
+        const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
+        const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
+        imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
+        imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
+        thumbnailFiles[img.id] = {
+          path: thumbnailPath,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          thumbnailVersion: thumbnail.thumbnailVersion,
+        }
+        zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
+        cacheThumbnail(img.id, {
+          dataUrl: thumbnail.thumbnailDataUrl,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          thumbnailVersion: thumbnail.thumbnailVersion,
+        })
+      }
+    }
+  }
+
+  const manifest: ExportData = {
+    version: 3,
+    exportedAt: new Date(exportedAt).toISOString(),
+  }
+
+  if (options.exportConfig) manifest.settings = settings
+  if (options.exportTasks) {
+    manifest.tasks = tasks
+    manifest.favoriteCollections = favoriteCollections
+    manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
+    manifest.agentConversations = getPersistableAgentConversations(agentConversations)
+    manifest.imageFiles = imageFiles
+    manifest.thumbnailFiles = thumbnailFiles
+  }
+  if (options.exportWordLibrary) {
+    manifest.wordLibraryGroups = wordLibraryGroups
+    manifest.wordLibraryEntries = wordLibraryEntries
+  }
+
+  zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
+
+  const zipped = zipSync(zipFiles, { level: 6 })
+  const { saveZipToPath } = await import('./lib/localSave')
+  return saveZipToPath(filePath, zipped.buffer as ArrayBuffer)
 }
 
 /** 导入选项 */

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
+import { useStore, exportData, exportDataToPath, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_FAL_BASE_URL,
@@ -30,7 +30,7 @@ import {
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer } from '../lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getDesktopPath } from '../lib/localSave'
 import { useAutoUpdate } from '../hooks/useAutoUpdate'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -345,6 +345,8 @@ export default function SettingsModal() {
   const [localSavePath, setLocalSavePath] = useState<string | null>(null)
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
+  const [backups, setBackups] = useState<string[]>([])
+  const [isLoadingBackups, setIsLoadingBackups] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
@@ -457,6 +459,15 @@ export default function SettingsModal() {
   useEffect(() => {
     getLocalSavePath().then(setLocalSavePath)
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'backup' && isElectronEnv()) {
+      setIsLoadingBackups(true)
+      getBackupList()
+        .then((list) => setBackups(list))
+        .finally(() => setIsLoadingBackups(false))
+    }
+  }, [activeTab])
 
   const handleSelectDirectory = async () => {
     try {
@@ -1226,6 +1237,16 @@ export default function SettingsModal() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
                 </svg>
                 数据管理
+              </button>
+              <button
+                onClick={() => setActiveTab('backup')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'backup' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                备份管理
               </button>
               <button
                 onClick={() => setActiveTab('about')}
@@ -2142,6 +2163,189 @@ export default function SettingsModal() {
                     </p>
                   )}
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'backup' && (
+              <div className="space-y-4">
+                <div className="rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05] flex items-start gap-3">
+                  <svg className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                    每次保存数据时，系统会自动创建一份备份。备份文件保存在应用数据目录的 backups 文件夹中，最多保留 30 份最近的备份。设置为 0 表示每次保存都备份。
+                  </div>
+                </div>
+
+                {isElectronEnv() ? (
+                  <>
+                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">备份间隔</h4>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number"
+                        min={0}
+                        max={1440}
+                        value={draft.backupInterval}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10)
+                          if (!Number.isNaN(val) && val >= 0 && val <= 1440) {
+                            commitSettings({ ...draft, backupInterval: val })
+                          }
+                        }}
+                        className="w-20 px-3 py-2 text-sm bg-gray-50 dark:bg-white/[0.05] border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-700 dark:text-gray-300 text-center"
+                      />
+                      <span className="text-sm text-gray-600 dark:text-gray-300">分钟</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
+                        {draft.backupInterval === 0 ? '每次保存都备份' : `至少间隔 ${draft.backupInterval} 分钟才创建新备份`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">一键备份</h4>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      立即生成一份包含所有配置和任务的 ZIP 备份文件，保存到桌面。
+                    </p>
+                    <button
+                      onClick={async () => {
+                        const desktop = await getDesktopPath()
+                        if (!desktop) {
+                          showToast('无法获取桌面路径', 'error')
+                          return
+                        }
+                        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+                        const fileName = `doupao_backup_${ts}.zip`
+                        const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
+                        showToast('正在生成备份...', 'info')
+                        const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true })
+                        if (success) {
+                          showToast(`备份已保存到桌面：${fileName}`, 'success')
+                        } else {
+                          showToast('备份保存失败', 'error')
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      备份到桌面
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">自动备份列表</h4>
+                      </div>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">共 {backups.length} 个备份</span>
+                    </div>
+
+                    {isLoadingBackups ? (
+                      <div className="flex items-center justify-center py-8 text-sm text-gray-400 dark:text-gray-500">
+                        <svg className="w-4 h-4 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        加载中...
+                      </div>
+                    ) : backups.length === 0 ? (
+                      <div className="text-center py-8 text-sm text-gray-400 dark:text-gray-500">
+                        暂无备份文件
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+                        {backups.map((backupPath, index) => {
+                          const fileName = backupPath.split(/[\\/]/).pop() || backupPath
+                          const match = fileName.match(/-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-\d+\.json$/)
+                          const displayDate = match
+                            ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`
+                            : fileName
+                          return (
+                            <div
+                              key={backupPath}
+                              className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl bg-gray-50/50 dark:bg-white/[0.03] border border-gray-100 dark:border-white/[0.04] hover:bg-gray-100/50 dark:hover:bg-white/[0.05] transition-colors"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="text-xs text-gray-400 dark:text-gray-500 font-mono w-6 text-right shrink-0">
+                                  {index + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="text-sm text-gray-700 dark:text-gray-200 truncate">{displayDate}</div>
+                                  <div className="text-[11px] text-gray-400 dark:text-gray-500 truncate font-mono">{fileName}</div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  onClick={() =>
+                                    setConfirmDialog({
+                                      title: '恢复备份',
+                                      message: `确定要恢复到「${displayDate}」的备份吗？当前数据将被覆盖，此操作不可撤销。`,
+                                      action: async () => {
+                                        const success = await restoreFromBackupFile(backupPath)
+                                        if (success) {
+                                          showToast('备份已恢复，请刷新页面以生效', 'success')
+                                          setBackups(await getBackupList())
+                                        } else {
+                                          showToast('恢复备份失败', 'error')
+                                        }
+                                      },
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20 transition-colors"
+                                >
+                                  恢复
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setConfirmDialog({
+                                      title: '删除备份',
+                                      message: `确定要删除「${displayDate}」的备份吗？此操作不可恢复。`,
+                                      action: async () => {
+                                        const success = await deleteBackupFile(backupPath)
+                                        if (success) {
+                                          showToast('备份已删除', 'success')
+                                          setBackups((prev) => prev.filter((b) => b !== backupPath))
+                                        } else {
+                                          showToast('删除备份失败', 'error')
+                                        }
+                                      },
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors"
+                                >
+                                  删除
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  </>
+                ) : (
+                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm">
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      备份管理功能仅在 Electron 桌面版应用中可用，当前浏览器环境下不可用。
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 

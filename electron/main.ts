@@ -77,7 +77,7 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    title: 'GPT Image Playground',
+    title: 'DOUPAO Image',
     autoHideMenuBar: true,
     webPreferences: {
       preload: preloadPath,

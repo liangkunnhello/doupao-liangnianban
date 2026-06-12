@@ -57,7 +57,7 @@ function loadSavedDock(): 'left' | 'right' | null {
     const raw = localStorage.getItem(DOCK_STORAGE_KEY)
     if (raw === 'left' || raw === 'right') return raw
   } catch { /* ignore */ }
-  return null
+  return 'left'
 }
 
 export default function WorkspaceTabBar() {
@@ -518,6 +518,10 @@ export default function WorkspaceTabBar() {
                   onDragLeave={onDragLeaveTab}
                   onDragEnd={onDragEnd}
                   onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    handleRename(tab.id)
+                  }}
                   onClick={(e) => {
                     if (e.ctrlKey || e.metaKey) {
                       toggleWorkspaceTabSelection(tab.id)

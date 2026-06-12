@@ -65,7 +65,7 @@ function loadSavedDock(): 'left' | 'right' | null {
     const raw = localStorage.getItem(DOCK_STORAGE_KEY)
     if (raw === 'left' || raw === 'right') return raw
   } catch { /* ignore */ }
-  return null
+  return 'right'
 }
 
 export default function WordLibrarySidebar() {
