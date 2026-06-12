@@ -1,6 +1,7 @@
 import { useStore } from '../store'
+import { clearFailedTasks } from '../store'
 import Select from './Select'
-import { ChevronLeftIcon, FavoriteIcon, CollectionManageIcon } from './icons'
+import { ChevronLeftIcon, FavoriteIcon, CollectionManageIcon, TrashIcon } from './icons'
 
 export default function SearchBar() {
   const searchQuery = useStore((s) => s.searchQuery)
@@ -13,6 +14,7 @@ export default function SearchBar() {
   const setActiveFavoriteCollectionId = useStore((s) => s.setActiveFavoriteCollectionId)
   const openManageCollectionsModal = useStore((s) => s.openManageCollectionsModal)
   const inCollectionOverview = filterFavorite && !activeFavoriteCollectionId
+  const hasFailedTasks = useStore((s) => s.tasks.some((t) => t.status === 'error'))
 
   const handleFavoriteClick = () => {
     if (activeFavoriteCollectionId) {
@@ -59,6 +61,15 @@ export default function SearchBar() {
               className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
             />
           </div>
+        )}
+        {!inCollectionOverview && hasFailedTasks && (
+          <button
+            onClick={clearFailedTasks}
+            className="p-2.5 rounded-xl border border-red-200 dark:border-red-500/30 bg-white dark:bg-gray-900 text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all"
+            title="清除失败记录"
+          >
+            <TrashIcon className="w-5 h-5" />
+          </button>
         )}
       </div>
       <div className="relative flex-1 z-10">

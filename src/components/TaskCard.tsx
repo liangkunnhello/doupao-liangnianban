@@ -424,7 +424,14 @@ export default function TaskCard({
               />
               {task.outputImages.length > 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {task.outputImages.length}
+                  {task.batchItemStatuses
+                    ? `${task.batchItemStatuses.filter((s) => s === 'done').length}/${task.batchItemStatuses.length}`
+                    : task.outputImages.length}
+                </span>
+              )}
+              {task.batchItemStatuses && task.batchItemStatuses.some((s) => s === 'error') && task.outputImages.length <= 1 && (
+                <span className="absolute bottom-1 right-1 bg-black/60 text-yellow-300 text-xs px-1.5 py-0.5 rounded">
+                  {task.batchItemStatuses.filter((s) => s === 'done').length}/{task.batchItemStatuses.length}
                 </span>
               )}
               <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">

@@ -30,7 +30,6 @@ import { useGlobalClickSuppression } from './lib/clickSuppression'
 let customProviderConfigUrlImportStarted = false
 
 export default function App() {
-  const setSettings = useStore((s) => s.setSettings)
   const appMode = useStore((s) => s.appMode)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
@@ -40,7 +39,7 @@ export default function App() {
     const searchParams = new URLSearchParams(window.location.search)
     const nextSettings = buildSettingsFromUrlParams(useStore.getState().settings, searchParams)
 
-    setSettings(nextSettings)
+    useStore.getState().setSettings(nextSettings)
 
     if (hasUrlSettingParams(searchParams)) {
       clearUrlSettingParams(searchParams)
@@ -69,7 +68,7 @@ export default function App() {
       (window as unknown as Record<string, unknown>).__storeInitialized = true
       initStore()
     }
-  }, [setSettings])
+  }, [])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {

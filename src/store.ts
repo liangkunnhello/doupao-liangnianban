@@ -8,6 +8,8 @@ import type {
   ApiProfile,
   AppSettings,
   AppMode,
+  BatchItemError,
+  BatchItemStatus,
   TaskParams,
   InputImage,
   InputImageFolder,
@@ -2397,6 +2399,17 @@ function isApiRequestNetworkError(err: unknown): boolean {
   return false
 }
 
+function isStreamingRelatedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /流式|stream/i.test(message)
+}
+
+function getStreamingErrorHint(err: unknown, profile?: Pick<ApiProfile, 'provider' | 'apiMode' | 'streamImages' | 'streamPartialImages'> | null): string {
+  if (profile?.streamImages !== true) return ''
+  if (!isStreamingRelatedError(err)) return ''
+  return '\n提示：这可能是当前接口不支持流式传输导致的，可尝试关闭「流式传输」功能后重试。'
+}
+
 function getApiModeApiName(apiMode: ApiMode) {
   return apiMode === 'responses' ? 'Responses API' : 'Image API'
 }
@@ -4191,15 +4204,54 @@ async function executeAgentRound(
             : undefined,
         })
 
-        // If not streaming and we have an image, complete the pre-created task.
-        if (batchResult.image && !shouldStreamAssistantMessage) {
-          await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
+        if (!shouldStreamAssistantMessage) {
+          if (batchResult.image) {
+            await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
+          } else if (batchResult.error) {
+            const taskId = taskIdByToolCallId.get(batchToolCallId)
+            if (taskId) {
+              const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+              if (latestTask && latestTask.status === 'running') {
+                updateTaskInStore(taskId, {
+                  status: 'error',
+                  error: batchResult.error,
+                  rawResponsePayload: batchResult.rawResponsePayload,
+                  finishedAt: Date.now(),
+                  elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
+                })
+                useStore.getState().setTaskStreamPreview(taskId)
+                void saveTaskToLocalFS(taskId)
+              }
+            }
+          }
         }
 
         return batchResult
       })
 
       const batchResults = await Promise.allSettled(batchPromises)
+
+      for (let i = 0; i < batchResults.length; i++) {
+        const settled = batchResults[i]
+        if (settled.status !== 'fulfilled') continue
+        const r = settled.value
+        if (r.image || !r.error) continue
+        const { batchToolCallId } = batchExecutionItems[i]
+        const taskId = taskIdByToolCallId.get(batchToolCallId)
+        if (!taskId) continue
+        const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+        if (latestTask && latestTask.status === 'running') {
+          updateTaskInStore(taskId, {
+            status: 'error',
+            error: r.error,
+            rawResponsePayload: r.rawResponsePayload,
+            finishedAt: Date.now(),
+            elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
+          })
+          useStore.getState().setTaskStreamPreview(taskId)
+          void saveTaskToLocalFS(taskId)
+        }
+      }
 
       // Build function_call_output
       const outputImages: Array<{ id: string; status: string; error?: string }> = []
@@ -4368,6 +4420,20 @@ async function executeAgentRound(
         }
       }
 
+      for (const taskId of streamingTaskIds) {
+        const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+        if (latestTask && latestTask.status === 'running') {
+          updateTaskInStore(taskId, {
+            status: 'error',
+            error: '接口未返回图片数据',
+            finishedAt: Date.now(),
+            elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
+          })
+          useStore.getState().setTaskStreamPreview(taskId)
+          void saveTaskToLocalFS(taskId)
+        }
+      }
+
       // Check for function calls that require continuation
       const batchFunctionCalls = currentResponseOutputItems.filter(
         (item) => item.type === 'function_call' && item.name === 'generate_image_batch',
@@ -4508,6 +4574,10 @@ async function executeAgentRound(
     if (networkErrorHint && !message.includes(IMAGE_FETCH_CORS_HINT)) {
       message += `\n${networkErrorHint}`
     }
+    const streamingHint = getStreamingErrorHint(err, activeProfile)
+    if (streamingHint && !message.includes(streamingHint)) {
+      message += streamingHint
+    }
 
     updateAgentConversation(conversationId, (current) => {
       const failedRound = current.rounds.find((round) => round.id === roundId)
@@ -4604,11 +4674,10 @@ async function executeTask(taskId: string) {
     const maxConcurrent = normalizeMaxConcurrent(activeProfile.maxConcurrent)
     const maxRetries = normalizeMaxRetries(activeProfile.maxRetries)
 
-    // 通用辅助函数：分批执行图片生成，每轮结果实时追加到任务卡片
     async function executeInBatches<T>(
       items: T[],
       batchHandler: (item: T, index: number) => Promise<CallApiResult>,
-    ): Promise<CallApiResult> {
+    ): Promise<CallApiResult & { batchItemStatuses?: BatchItemStatus[]; batchItemErrors?: BatchItemError[] }> {
       if (items.length === 0) return { images: [] }
 
       const total = items.length
@@ -4620,6 +4689,8 @@ async function executeTask(taskId: string) {
       let firstActualParamsValue: Partial<TaskParams> | undefined
       let successCount = 0
       let failureCount = 0
+      const itemStatuses: BatchItemStatus[] = new Array(total).fill('done')
+      const itemErrors: BatchItemError[] = []
 
       async function retryItem(fn: () => Promise<CallApiResult>): Promise<CallApiResult> {
         let lastError: unknown
@@ -4679,8 +4750,10 @@ async function executeTask(taskId: string) {
               })
               void saveTaskImagesToLocalFS(taskId, newOutputIds, existingOutputIds.length)
             }
-          } catch {
+          } catch (err) {
             failureCount++
+            itemStatuses[index] = 'error'
+            itemErrors.push({ index, error: err instanceof Error ? err.message : String(err) })
           }
         }
       }
@@ -4699,6 +4772,7 @@ async function executeTask(taskId: string) {
         actualParamsList: allActualParamsList,
         revisedPrompts: allRevisedPrompts,
         ...(allRawImageUrls.length ? { rawImageUrls: allRawImageUrls } : {}),
+        ...(failureCount > 0 ? { batchItemStatuses: itemStatuses, batchItemErrors: itemErrors } : {}),
       }
     }
 
@@ -4783,12 +4857,15 @@ async function executeTask(taskId: string) {
       const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
       clearOpenAIWatchdogTimer(taskId)
       useStore.getState().setTaskStreamPreview(taskId)
+      const hasPartialFailure = result.batchItemStatuses && result.batchItemErrors && result.batchItemErrors.length > 0
       updateTaskInStore(taskId, {
         streamPartialImageIds: undefined,
         rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
         actualParams: finalActualParams,
         actualParamsByImage,
         revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
+        batchItemStatuses: result.batchItemStatuses,
+        batchItemErrors: result.batchItemErrors,
         status: 'done',
         finishedAt: Date.now(),
         elapsed: Date.now() - task.createdAt,
@@ -4797,8 +4874,15 @@ async function executeTask(taskId: string) {
       })
       void deleteUnreferencedImageIds(partialImageIdsToClean)
 
-      useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
-      if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
+      if (hasPartialFailure) {
+        const failCount = result.batchItemErrors!.length
+        const totalCount = result.batchItemStatuses!.length
+        useStore.getState().showToast(`生成完成，${totalCount - failCount}/${totalCount} 张成功`, 'info')
+        if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，${totalCount - failCount}/${totalCount} 张成功，${failCount} 张失败。`)
+      } else {
+        useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+        if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
+      }
       void saveTaskToLocalFS(task.id)
       const currentMask = useStore.getState().maskDraft
       if (
@@ -4926,6 +5010,7 @@ async function executeTask(taskId: string) {
     const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
+    const hasPartialFailure = (result as any).batchItemStatuses && (result as any).batchItemErrors && (result as any).batchItemErrors.length > 0
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       streamPartialImageIds: undefined,
@@ -4933,6 +5018,8 @@ async function executeTask(taskId: string) {
       actualParams,
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
+      batchItemStatuses: (result as any).batchItemStatuses,
+      batchItemErrors: (result as any).batchItemErrors,
       status: 'done',
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
@@ -4941,8 +5028,15 @@ async function executeTask(taskId: string) {
     })
     void deleteUnreferencedImageIds(partialImageIdsToClean)
 
-    useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
-    if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
+    if (hasPartialFailure) {
+      const failCount = (result as any).batchItemErrors!.length
+      const totalCount = (result as any).batchItemStatuses!.length
+      useStore.getState().showToast(`生成完成，${totalCount - failCount}/${totalCount} 张成功`, 'info')
+      if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，${totalCount - failCount}/${totalCount} 张成功，${failCount} 张失败。`)
+    } else {
+      useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+      if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
+    }
     void saveTaskToLocalFS(task.id)
     const currentMask = useStore.getState().maskDraft
     if (
@@ -4998,6 +5092,10 @@ async function executeTask(taskId: string) {
       const networkErrorHint = getApiRequestNetworkErrorHint(err, latestTask.createdAt, usesApiProxy, hintProfile)
       if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
         errorMessage += `\n${networkErrorHint}`
+      }
+      const streamingHint = getStreamingErrorHint(err, hintProfile)
+      if (streamingHint && !errorMessage.includes(streamingHint)) {
+        errorMessage += streamingHint
       }
       updateTaskInStore(taskId, {
         status: 'error',
@@ -5430,6 +5528,67 @@ export async function removeTask(task: TaskRecord) {
   }
 
   showToast('任务已删除', 'success')
+}
+
+export async function clearFailedTasks() {
+  const { tasks, setTasks, workspaceTabs, showToast, setConfirmDialog } = useStore.getState()
+  const failedTasks = tasks.filter((t) => t.status === 'error')
+  const partialFailureTasks = tasks.filter((t) => t.status === 'done' && t.batchItemStatuses?.some((s) => s === 'error'))
+  if (!failedTasks.length && !partialFailureTasks.length) {
+    showToast('没有失败记录', 'info')
+    return
+  }
+  const totalCount = failedTasks.length + partialFailureTasks.length
+  const hasPartial = partialFailureTasks.length > 0
+  setConfirmDialog({
+    title: '清除失败记录',
+    message: hasPartial
+      ? `确定清空 **${failedTasks.length}** 条完全失败的任务记录，并清除 **${partialFailureTasks.length}** 条部分失败任务中的失败标记？成功的图片会保留，不可恢复。`
+      : `确定清空所有 **${failedTasks.length}** 条生成失败的任务记录？此操作会同步清理对应的孤立图片资源，不可恢复。`,
+    tone: 'danger',
+    buttons: [
+      {
+        label: '清除',
+        tone: 'danger',
+        action: async () => {
+          useStore.getState().setConfirmDialog(null)
+          const currentTasks = useStore.getState().tasks
+          const remainingTasks = currentTasks.filter((t) => t.status !== 'error')
+          const remaining = await scrubAgentOutputPayloadsForDeletedTasks(failedTasks, remainingTasks)
+          const updatedTasks = remaining.map((t) => {
+            if (t.batchItemStatuses?.some((s) => s === 'error')) {
+              const { batchItemStatuses, batchItemErrors, ...rest } = t
+              return rest
+            }
+            return t
+          })
+          setTasks(updatedTasks)
+          const updatedTabs = useStore.getState().workspaceTabs.map((tab) => ({
+            ...tab,
+            tasks: tab.tasks
+              .filter((t) => t.status !== 'error')
+              .map((t) => {
+                if (t.batchItemStatuses?.some((s) => s === 'error')) {
+                  const { batchItemStatuses, batchItemErrors, ...rest } = t
+                  return rest
+                }
+                return t
+              }),
+          }))
+          useStore.setState({ workspaceTabs: updatedTabs })
+          for (const task of failedTasks) await dbDeleteTask(task.id)
+          for (const task of partialFailureTasks) {
+            void saveTaskToLocalFS(task.id)
+          }
+          const failedImageIds = new Set<string>()
+          for (const t of failedTasks) addTaskReferencedImageIds(failedImageIds, t)
+          await deleteUnreferencedImageIds(failedImageIds)
+          showToast(`已清除 ${totalCount} 条失败记录${hasPartial ? '（部分失败仅清标记）' : ''}`, 'success')
+        },
+      },
+      { label: '取消', tone: 'secondary', action: () => useStore.getState().setConfirmDialog(null) },
+    ],
+  })
 }
 
 /** 清空数据选项 */

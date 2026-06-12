@@ -159,6 +159,13 @@ export interface MaskDraft {
 
 export type TaskStatus = 'running' | 'done' | 'error'
 
+export type BatchItemStatus = 'done' | 'error'
+
+export interface BatchItemError {
+  index: number
+  error: string
+}
+
 export interface TaskRecord {
   id: string
   prompt: string
@@ -197,6 +204,10 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 并发多图每个请求的状态，按请求顺序排列，仅部分失败时有值 */
+  batchItemStatuses?: BatchItemStatus[]
+  /** 并发多图每个失败请求的错误信息 */
+  batchItemErrors?: BatchItemError[]
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
   streamPartialImageIds?: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */

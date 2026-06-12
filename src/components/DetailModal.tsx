@@ -529,9 +529,41 @@ export default function DetailModal() {
                   <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
                     {task.status === 'running' && task.params.n > outputLen
                       ? `${imageIndex + 1} / ${outputLen} (共需 ${task.params.n} 张)`
-                      : `${imageIndex + 1} / ${outputLen}`}
+                      : task.batchItemStatuses
+                        ? `${imageIndex + 1} / ${task.batchItemStatuses.length}${task.batchItemStatuses.some((s) => s === 'error') ? ` (${task.batchItemStatuses.filter((s) => s === 'done').length} 成功)` : ''}`
+                        : `${imageIndex + 1} / ${outputLen}`}
                   </span>
+                  {task.batchItemStatuses && (
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-1">
+                      {task.batchItemStatuses.map((s, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setImageIndex(i)}
+                          className={`w-2 h-2 rounded-full transition ${
+                            i === imageIndex
+                              ? s === 'error' ? 'bg-red-400' : 'bg-white'
+                              : s === 'error' ? 'bg-red-400/40' : 'bg-white/40'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </>
+              )}
+              {task.batchItemStatuses && outputLen <= 1 && task.batchItemStatuses.length > 1 && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                  {task.batchItemStatuses.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setImageIndex(i)}
+                      className={`w-2 h-2 rounded-full transition ${
+                        i === imageIndex
+                          ? s === 'error' ? 'bg-red-400' : 'bg-white'
+                          : s === 'error' ? 'bg-red-400/40' : 'bg-white/40'
+                      }`}
+                    />
+                  ))}
+                </div>
               )}
             </>
           )}

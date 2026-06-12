@@ -375,8 +375,8 @@ function BatchActionButton({
   )
 }
 
-/** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
+const MAX_FOLDER_IMAGES = 999
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[]) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -862,7 +862,7 @@ export default function InputBar() {
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
       ]
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
+  const atImageLimit = !inputImageFolder && inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = inputImageFolder ? '已选择图片文件夹' : atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '选择图片文件夹'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
@@ -1261,7 +1261,7 @@ export default function InputBar() {
         return
       }
 
-      const toRead = imageFiles.slice(0, API_MAX_IMAGES)
+      const toRead = imageFiles.slice(0, MAX_FOLDER_IMAGES)
       const imageIds: string[] = []
 
       for (const fileName of toRead) {
@@ -1293,8 +1293,8 @@ export default function InputBar() {
 
       setInputImageFolder({ path: folderPath, imageIds })
 
-      if (imageFiles.length > API_MAX_IMAGES) {
-        showToast(`文件夹图片过多，已读取前 ${API_MAX_IMAGES} 张`, 'info')
+      if (imageFiles.length > MAX_FOLDER_IMAGES) {
+        showToast(`文件夹图片过多，已读取前 ${MAX_FOLDER_IMAGES} 张`, 'info')
       } else {
         showToast(`已读取 ${imageIds.length} 张图片`, 'success')
       }
