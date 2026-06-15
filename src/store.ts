@@ -753,7 +753,7 @@ function normalizeFavoriteCollections(value: unknown): FavoriteCollection[] {
 }
 
 function ensureDefaultFavoriteCollection(collections: FavoriteCollection[]) {
-  if (collections.length > 0) return collections
+  if (collections.some((collection) => collection.id === DEFAULT_FAVORITE_COLLECTION_ID)) return collections
   return [createDefaultFavoriteCollection(), ...collections]
 }
 
@@ -1215,6 +1215,11 @@ interface AppState {
   setFirstBackupReminderShown: (v: boolean) => void
   backupReminderCount: number
   setBackupReminderCount: (v: number) => void
+
+  // Agent 流式文本缓冲（不参与持久化，避免频繁更新 agentConversations）
+  agentStreamingTexts: Record<string, string>
+  setAgentStreamingText: (conversationId: string, messageId: string, text: string) => void
+  clearAgentStreamingText: (conversationId: string, messageId?: string) => void
 }
 
 function isImageReferencedByState(state: AppState, imageId: string) {
@@ -2303,6 +2308,27 @@ export const useStore = create<AppState>()(
       setFirstBackupReminderShown: (v) => set({ firstBackupReminderShown: v }),
       backupReminderCount: 0,
       setBackupReminderCount: (v) => set({ backupReminderCount: v }),
+
+      // Agent 流式文本缓冲（不参与持久化）
+      agentStreamingTexts: {},
+      setAgentStreamingText: (conversationId, messageId, text) => set((s) => ({
+        agentStreamingTexts: {
+          ...s.agentStreamingTexts,
+          [`${conversationId}:${messageId}`]: text,
+        },
+      })),
+      clearAgentStreamingText: (conversationId, messageId) => set((s) => {
+        const keyPrefix = messageId ? `${conversationId}:${messageId}` : `${conversationId}:`
+        const next = { ...s.agentStreamingTexts }
+        if (messageId) {
+          delete next[`${conversationId}:${messageId}`]
+        } else {
+          for (const key of Object.keys(next)) {
+            if (key.startsWith(keyPrefix)) delete next[key]
+          }
+        }
+        return { agentStreamingTexts: next }
+      }),
     }),
     {
       name: 'gpt-image-playground',
@@ -2348,6 +2374,7 @@ export const useStore = create<AppState>()(
 let lastStoredAgentConversations = useStore.getState().agentConversations
 let agentConversationPersistRunning = false
 let agentConversationPersistQueued = false
+let agentConversationPersistDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 async function flushAgentConversationsToIndexedDB() {
   if (agentConversationPersistRunning) {
@@ -2374,7 +2401,12 @@ useStore.subscribe((state) => {
     agentConversationPersistQueued = true
     return
   }
-  void flushAgentConversationsToIndexedDB()
+  // Debounce IndexedDB writes to avoid excessive serialization during streaming
+  if (agentConversationPersistDebounceTimer) clearTimeout(agentConversationPersistDebounceTimer)
+  agentConversationPersistDebounceTimer = setTimeout(() => {
+    agentConversationPersistDebounceTimer = null
+    void flushAgentConversationsToIndexedDB()
+  }, 500)
 })
 
 // ===== Actions =====
@@ -3230,6 +3262,18 @@ function markAgentRoundStopped(conversationId: string, roundId: string) {
   const now = Date.now()
   const stoppedTasks = markAgentRoundTasksStopped(conversationId, roundId, now)
   let stoppedRound = false
+  // Flush any pending streaming text before updating conversation state
+  const conversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
+  const round = conversation?.rounds.find((item) => item.id === roundId)
+  const assistantMessage = round
+    ? (round.assistantMessageId
+      ? conversation?.messages.find((message) => message.id === round.assistantMessageId)
+      : conversation?.messages.find((message) => message.roundId === round.id && message.role === 'assistant'))
+    : undefined
+  if (assistantMessage) {
+    flushAgentAssistantMessageContent(conversationId, assistantMessage.id)
+    useStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
+  }
   updateAgentConversation(conversationId, (current) => {
     const round = current.rounds.find((item) => item.id === roundId)
     if (!round || round.status !== 'running') return current
@@ -3272,7 +3316,19 @@ function markAgentRoundStopped(conversationId: string, roundId: string) {
   return stoppedRound || stoppedTasks
 }
 
-function appendAgentAssistantMessageContent(conversationId: string, messageId: string, delta: string) {
+// ===== Agent streaming text debounce =====
+const agentTextFlushTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const agentTextBuffers = new Map<string, string>()
+
+function getAgentTextFlushKey(conversationId: string, messageId: string) {
+  return `${conversationId}:${messageId}`
+}
+
+function flushAgentAssistantMessageContent(conversationId: string, messageId: string) {
+  const key = getAgentTextFlushKey(conversationId, messageId)
+  const delta = agentTextBuffers.get(key)
+  agentTextBuffers.delete(key)
+  agentTextFlushTimers.delete(key)
   if (!delta) return
   updateAgentConversation(conversationId, (current) => ({
     ...current,
@@ -3283,6 +3339,30 @@ function appendAgentAssistantMessageContent(conversationId: string, messageId: s
         : message,
     ),
   }))
+}
+
+function appendAgentAssistantMessageContent(conversationId: string, messageId: string, delta: string) {
+  if (!delta) return
+  const key = getAgentTextFlushKey(conversationId, messageId)
+  const existing = agentTextBuffers.get(key) ?? ''
+  agentTextBuffers.set(key, existing + delta)
+  // Update lightweight streaming text state immediately for UI responsiveness
+  useStore.getState().setAgentStreamingText(conversationId, messageId, existing + delta)
+  // Debounce heavy agentConversations update
+  const existingTimer = agentTextFlushTimers.get(key)
+  if (existingTimer) clearTimeout(existingTimer)
+  agentTextFlushTimers.set(
+    key,
+    setTimeout(() => flushAgentAssistantMessageContent(conversationId, messageId), 80),
+  )
+}
+
+function clearAgentTextFlushTimer(conversationId: string, messageId: string) {
+  const key = getAgentTextFlushKey(conversationId, messageId)
+  const timer = agentTextFlushTimers.get(key)
+  if (timer) clearTimeout(timer)
+  agentTextFlushTimers.delete(key)
+  agentTextBuffers.delete(key)
 }
 
 async function generateAgentConversationTitle(
@@ -3330,6 +3410,15 @@ export function stopAgentResponse(conversationId = useStore.getState().activeAge
   const activeRunningRound = [...getActiveAgentRounds(conversation)].reverse().find((round) => round.status === 'running')
   const runningRound = activeRunningRound ?? conversation.rounds.find((round) => round.status === 'running')
   if (!runningRound) return
+
+  // Clear any pending streaming text flush and buffer
+  const assistantMessage = runningRound.assistantMessageId
+    ? conversation.messages.find((message) => message.id === runningRound.assistantMessageId)
+    : conversation.messages.find((message) => message.roundId === runningRound.id && message.role === 'assistant')
+  if (assistantMessage) {
+    clearAgentTextFlushTimer(conversationId, assistantMessage.id)
+    useStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
+  }
 
   const controller = agentRoundControllers.get(getAgentRoundControllerKey(conversationId, runningRound.id))
   if (controller) {
@@ -4494,10 +4583,18 @@ async function executeAgentRound(
           ? (outputItems) => {
               if (controller.signal.aborted) return
               currentResponseOutputItems = outputItems
-              updateAgentConversation(conversationId, (current) => ({
-                ...current,
-                rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseOutput: mergeResponseOutputItems(accumulatedOutputItems, outputItems) } : item),
-              }))
+              // Debounce output items updates to avoid excessive store updates
+              const existingTimer = agentTextFlushTimers.get(getAgentTextFlushKey(conversationId, roundId + ':outputItems'))
+              if (existingTimer) clearTimeout(existingTimer)
+              agentTextFlushTimers.set(
+                getAgentTextFlushKey(conversationId, roundId + ':outputItems'),
+                setTimeout(() => {
+                  updateAgentConversation(conversationId, (current) => ({
+                    ...current,
+                    rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseOutput: mergeResponseOutputItems(accumulatedOutputItems, outputItems) } : item),
+                  }))
+                }, 120),
+              )
             }
           : undefined,
         onImageToolStarted: shouldStreamAssistantMessage
@@ -4529,6 +4626,15 @@ async function executeAgentRound(
       lastResponseId = result.responseId ?? lastResponseId
       currentResponseOutputItems = currentResponseOutputItems.length ? currentResponseOutputItems : result.outputItems ?? []
       accumulatedOutputItems = mergeResponseOutputItems(accumulatedOutputItems, currentResponseOutputItems)
+
+      // Force flush any pending text delta before processing the response
+      flushAgentAssistantMessageContent(conversationId, assistantMessageId)
+      const outputItemsKey = getAgentTextFlushKey(conversationId, roundId + ':outputItems')
+      const outputItemsTimer = agentTextFlushTimers.get(outputItemsKey)
+      if (outputItemsTimer) {
+        clearTimeout(outputItemsTimer)
+        agentTextFlushTimers.delete(outputItemsKey)
+      }
 
       const responseText = result.text.trim()
       if (responseText && accumulatedText === textBeforeResponse) {
@@ -4868,7 +4974,6 @@ async function executeTask(taskId: string) {
       if (items.length === 0) return { images: [] }
 
       const total = items.length
-      let nextIndex = 0
       let allImages: string[] = []
       let allActualParamsList: Array<Partial<TaskParams> | undefined> = []
       let allRevisedPrompts: Array<string | undefined> = []
@@ -4897,61 +5002,85 @@ async function executeTask(taskId: string) {
         throw lastError
       }
 
-      const worker = async () => {
-        while (nextIndex < total) {
-          const latestTaskCheck = useStore.getState().tasks.find((t) => t.id === taskId)
-          if (!latestTaskCheck || latestTaskCheck.status !== 'running') {
-            break
-          }
+      let activeCount = 0
+      const waitQueue: Array<() => void> = []
 
-          const index = nextIndex++
-          const item = items[index]
+      async function acquire() {
+        if (activeCount < maxConcurrent) {
+          activeCount++
+          return
+        }
+        await new Promise<void>((resolve) => waitQueue.push(resolve))
+      }
 
-          try {
-            const result = await retryItem(() => batchHandler(item, index))
-            successCount++
-
-            const itemImages = result.images
-            const itemActualParamsList = result.actualParamsList?.length
-              ? result.actualParamsList
-              : result.images.map(() => result.actualParams)
-            const itemRevisedPrompts = result.revisedPrompts?.length
-              ? result.revisedPrompts
-              : result.images.map(() => undefined)
-            const itemRawImageUrls = result.rawImageUrls ?? []
-
-            allImages = allImages.concat(itemImages)
-            allActualParamsList = allActualParamsList.concat(itemActualParamsList)
-            allRevisedPrompts = allRevisedPrompts.concat(itemRevisedPrompts)
-            allRawImageUrls = allRawImageUrls.concat(itemRawImageUrls)
-            if (!firstActualParamsValue) {
-              firstActualParamsValue = result.actualParams
-            }
-
-            const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
-            if (latestTask && latestTask.status === 'running') {
-              const newOutputIds: string[] = []
-              for (const dataUrl of itemImages) {
-                const imgId = await storeImage(dataUrl, 'generated')
-                cacheImage(imgId, dataUrl)
-                newOutputIds.push(imgId)
-              }
-              const existingOutputIds = latestTask.outputImages || []
-              updateTaskInStore(taskId, {
-                outputImages: [...existingOutputIds, ...newOutputIds],
-              })
-              void saveTaskImagesToLocalFS(taskId, newOutputIds, existingOutputIds.length)
-            }
-          } catch (err) {
-            failureCount++
-            itemStatuses[index] = 'error'
-            itemErrors.push({ index, error: err instanceof Error ? err.message : String(err) })
-          }
+      function release() {
+        activeCount--
+        if (waitQueue.length > 0 && activeCount < maxConcurrent) {
+          activeCount++
+          const next = waitQueue.shift()!
+          next()
         }
       }
 
-      const workerCount = Math.min(maxConcurrent, total)
-      await Promise.all(Array.from({ length: workerCount }, () => worker()))
+      const results = await Promise.allSettled(
+        items.map(async (item, index) => {
+          const latestTaskCheck = useStore.getState().tasks.find((t) => t.id === taskId)
+          if (!latestTaskCheck || latestTaskCheck.status !== 'running') {
+            throw new Error('任务已中止')
+          }
+
+          await acquire()
+          try {
+            return await retryItem(() => batchHandler(item, index))
+          } finally {
+            release()
+          }
+        }),
+      )
+
+      for (let i = 0; i < results.length; i++) {
+        const settled = results[i]
+        if (settled.status === 'fulfilled') {
+          successCount++
+          const result = settled.value
+
+          const itemImages = result.images
+          const itemActualParamsList = result.actualParamsList?.length
+            ? result.actualParamsList
+            : result.images.map(() => result.actualParams)
+          const itemRevisedPrompts = result.revisedPrompts?.length
+            ? result.revisedPrompts
+            : result.images.map(() => undefined)
+          const itemRawImageUrls = result.rawImageUrls ?? []
+
+          allImages = allImages.concat(itemImages)
+          allActualParamsList = allActualParamsList.concat(itemActualParamsList)
+          allRevisedPrompts = allRevisedPrompts.concat(itemRevisedPrompts)
+          allRawImageUrls = allRawImageUrls.concat(itemRawImageUrls)
+          if (!firstActualParamsValue) {
+            firstActualParamsValue = result.actualParams
+          }
+
+          const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+          if (latestTask && latestTask.status === 'running') {
+            const newOutputIds: string[] = []
+            for (const dataUrl of itemImages) {
+              const imgId = await storeImage(dataUrl, 'generated')
+              cacheImage(imgId, dataUrl)
+              newOutputIds.push(imgId)
+            }
+            const existingOutputIds = latestTask.outputImages || []
+            updateTaskInStore(taskId, {
+              outputImages: [...existingOutputIds, ...newOutputIds],
+            })
+            void saveTaskImagesToLocalFS(taskId, newOutputIds, existingOutputIds.length)
+          }
+        } else {
+          failureCount++
+          itemStatuses[i] = 'error'
+          itemErrors.push({ index: i, error: settled.reason instanceof Error ? settled.reason.message : String(settled.reason) })
+        }
+      }
 
       if (successCount === 0) {
         throw new Error('所有请求均失败')
@@ -4970,8 +5099,7 @@ async function executeTask(taskId: string) {
 
     if (useFolderMode) {
       const imageCount = task.inputImageIds.length
-      const effectiveN = Math.max(n, maxConcurrent)
-      const folderItems = Array.from({ length: effectiveN }, (_, i) => i)
+      const folderItems = Array.from({ length: n }, (_, i) => i)
       const result = await executeInBatches(folderItems, async (_, i) => {
         const imgId = task.inputImageIds[i % imageCount]
         const singleDataUrl = await ensureImageCached(imgId)

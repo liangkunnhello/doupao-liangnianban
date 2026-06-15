@@ -536,6 +536,8 @@ export default function AgentWorkspace() {
     [conversation],
   )
 
+  const agentStreamingTexts = useStore((s) => s.agentStreamingTexts)
+
   const activeMessages = useMemo(() => {
     if (!conversation) return []
     const messages: AgentMessage[] = []
@@ -545,10 +547,19 @@ export default function AgentWorkspace() {
       const assistantMessage = round.assistantMessageId
         ? conversation.messages.find((message) => message.id === round.assistantMessageId)
         : conversation.messages.find((message) => message.roundId === round.id && message.role === 'assistant')
-      if (assistantMessage) messages.push(assistantMessage)
+      if (assistantMessage) {
+        // Merge streaming text buffer for real-time display while keeping persisted state debounced
+        const streamingKey = `${conversation.id}:${assistantMessage.id}`
+        const streamingText = agentStreamingTexts[streamingKey]
+        if (streamingText && round.status === 'running') {
+          messages.push({ ...assistantMessage, content: assistantMessage.content + streamingText })
+        } else {
+          messages.push(assistantMessage)
+        }
+      }
     }
     return messages
-  }, [activeRounds, conversation])
+  }, [activeRounds, conversation, agentStreamingTexts])
 
   useEffect(() => {
     const conversationId = conversation?.id ?? null

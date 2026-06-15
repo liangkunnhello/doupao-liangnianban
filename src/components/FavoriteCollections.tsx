@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { TaskRecord, FavoriteCollection } from '../types'
 import {
   ALL_FAVORITES_COLLECTION_ID,
+  DEFAULT_FAVORITE_COLLECTION_ID,
   createFavoriteCollection,
   deleteFavoriteCollection,
   ensureImageThumbnailCached,
@@ -867,7 +868,7 @@ export function FavoriteCollectionPickerModal() {
   }
 
   return createPortal(
-    <div data-no-drag-select className="fixed inset-0 z-[105] flex items-center justify-center p-4 sm:p-0" onClick={closePicker}>
+    <div data-no-drag-select className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-0" onClick={closePicker}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-overlay-in" />
       <div ref={modalRef} className="relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 dark:border-[#333] dark:bg-[#1c1c1e] animate-modal-in" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 shrink-0 relative border-b border-gray-100 dark:border-[#333]">
@@ -1301,7 +1302,7 @@ export function ManageCollectionsModal() {
   }
 
   return createPortal(
-    <div data-no-drag-select className="fixed inset-0 z-[105] flex items-center justify-center p-4 sm:p-0" onClick={closeManage}>
+    <div data-no-drag-select className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-0" onClick={closeManage}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-overlay-in" />
       <div ref={modalRef} className="relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 dark:border-[#333] dark:bg-[#1c1c1e] animate-modal-in" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 shrink-0 relative border-b border-gray-100 dark:border-[#333]">
@@ -1317,11 +1318,10 @@ export function ManageCollectionsModal() {
         </div>
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-3 pb-1">
           <div className="flex-1 overflow-y-auto custom-scrollbar relative">
-            {selectableCollections.length === 0 ? (
-              <div className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">暂无收藏夹</div>
-            ) : selectableCollections.map((collection) => {
+            {selectableCollections.map((collection) => {
               const isDefault = collection.id === defaultFavoriteCollectionId
-              const canDelete = collections.length > 1
+              const isSystemDefault = collection.id === DEFAULT_FAVORITE_COLLECTION_ID
+              const canDelete = !isSystemDefault && collections.length > 1
               return (
               <div 
                 key={collection.id} 
@@ -1387,7 +1387,7 @@ export function ManageCollectionsModal() {
                       <>
                         <FavoriteActionButton tooltip={isDefault ? '取消默认收藏夹' : '设为默认收藏夹'} onClick={(e) => handleSetDefault(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${isDefault ? 'text-yellow-500 dark:text-yellow-400' : 'text-gray-400 hover:text-yellow-500 dark:hover:text-yellow-400'}`}><FavoriteIcon filled={isDefault} className="w-3.5 h-3.5" /></FavoriteActionButton>
                         <FavoriteActionButton tooltip="重命名" onClick={(e) => startRename(e, collection)} className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors"><EditIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
-                        <FavoriteActionButton tooltip={canDelete ? '删除' : '至少保留一个收藏夹'} disabled={!canDelete} onClick={(e) => handleDelete(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${canDelete ? 'text-gray-400 hover:text-red-500 dark:hover:text-red-400' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}><TrashIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
+                        <FavoriteActionButton tooltip={canDelete ? '删除' : isSystemDefault ? '默认标签不可删除' : '至少保留一个收藏夹'} disabled={!canDelete} onClick={(e) => handleDelete(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${canDelete ? 'text-gray-400 hover:text-red-500 dark:hover:text-red-400' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}><TrashIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
                       </>
                     )}
                   </div>

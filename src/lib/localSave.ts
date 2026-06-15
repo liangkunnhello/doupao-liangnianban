@@ -257,12 +257,46 @@ export async function saveAgentConversationToLocal(
   return success ? filePath : null
 }
 
-export async function getBackupList(): Promise<string[]> {
+export async function getBackupList(customPath?: string): Promise<string[]> {
   const api = getAPI()
   if (!api) return []
   const defaultPath = await api.getDefaultPath()
   const dataPath = defaultPath.replace(/[\\/]local-saves$/, '')
   return api.listBackups(dataPath + '/gpt-image-playground.json')
+}
+
+export async function getBackupPath(): Promise<string> {
+  const api = getAPI()
+  if (!api) return ''
+  const defaultPath = await api.getDefaultPath()
+  const dataPath = defaultPath.replace(/[\\/]local-saves$/, '')
+  return dataPath + '/backups'
+}
+
+export async function selectBackupDirectory(): Promise<string | null> {
+  const api = getAPI()
+  if (!api) return null
+  const result = await api.selectDirectory()
+  return result || null
+}
+
+export async function createBackupInPath(targetPath: string): Promise<boolean> {
+  const api = getAPI()
+  if (!api) return false
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const fileName = `doupao_backup_${ts}.json`
+  const filePath = targetPath.replace(/[\\/]$/, '') + '/' + fileName
+  const defaultPath = await api.getDefaultPath()
+  const dataPath = defaultPath.replace(/[\\/]local-saves$/, '')
+  const sourcePath = dataPath + '/gpt-image-playground.json'
+  try {
+    const content = await api.readJsonText(sourcePath)
+    if (!content) return false
+    await api.ensureDir(targetPath)
+    return await api.writeJsonText(filePath, content, true)
+  } catch {
+    return false
+  }
 }
 
 export async function checkBackupHasData(backupPath: string): Promise<boolean> {

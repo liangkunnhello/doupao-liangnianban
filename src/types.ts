@@ -113,6 +113,7 @@ export interface AppSettings {
   activeProfileId: string
   agentProfileId: string | null
   backupInterval: number
+  customBackupPath: string
 }
 
 // ===== 任务参数 =====

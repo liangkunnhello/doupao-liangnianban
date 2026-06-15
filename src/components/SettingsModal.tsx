@@ -30,7 +30,7 @@ import {
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getDesktopPath } from '../lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getDesktopPath, getBackupPath, selectBackupDirectory, createBackupInPath } from '../lib/localSave'
 import { useAutoUpdate } from '../hooks/useAutoUpdate'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -347,6 +347,10 @@ export default function SettingsModal() {
   const [clearTasks, setClearTasks] = useState(true)
   const [backups, setBackups] = useState<string[]>([])
   const [isLoadingBackups, setIsLoadingBackups] = useState(false)
+  const [selectedBackups, setSelectedBackups] = useState<Set<string>>(new Set())
+  const [isSelectMode, setIsSelectMode] = useState(false)
+  const [backupPath, setBackupPath] = useState<string>('')
+  const [isSelectingPath, setIsSelectingPath] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
@@ -466,6 +470,7 @@ export default function SettingsModal() {
       getBackupList()
         .then((list) => setBackups(list))
         .finally(() => setIsLoadingBackups(false))
+      getBackupPath().then(setBackupPath)
     }
   }, [activeTab])
 
@@ -2239,33 +2244,79 @@ export default function SettingsModal() {
                       <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">一键备份</h4>
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      立即生成一份包含所有配置和任务的 ZIP 备份文件，保存到桌面。
+                      立即生成一份包含所有配置和任务的 ZIP 备份文件，保存到自定义位置或桌面。
                     </p>
-                    <button
-                      onClick={async () => {
-                        const desktop = await getDesktopPath()
-                        if (!desktop) {
-                          showToast('无法获取桌面路径', 'error')
-                          return
-                        }
-                        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-                        const fileName = `doupao_backup_${ts}.zip`
-                        const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
-                        showToast('正在生成备份...', 'info')
-                        const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true })
-                        if (success) {
-                          showToast(`备份已保存到桌面：${fileName}`, 'success')
-                        } else {
-                          showToast('备份保存失败', 'error')
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                      备份到桌面
-                    </button>
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">备份到：</span>
+                        <input
+                          type="text"
+                          value={draft.customBackupPath || ''}
+                          placeholder="默认：桌面"
+                          readOnly
+                          className="flex-1 px-3 py-2 text-sm bg-gray-50 dark:bg-white/[0.05] border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-700 dark:text-gray-300 truncate"
+                        />
+                        <button
+                          onClick={async () => {
+                            const path = await selectBackupDirectory()
+                            if (path) {
+                              commitSettings({ ...draft, customBackupPath: path })
+                            }
+                          }}
+                          className="px-3 py-2 text-sm bg-gray-100 dark:bg-white/[0.08] rounded-lg hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors shrink-0"
+                        >
+                          选择路径
+                        </button>
+                        {draft.customBackupPath && (
+                          <button
+                            onClick={() => commitSettings({ ...draft, customBackupPath: '' })}
+                            className="px-3 py-2 text-sm bg-red-50 dark:bg-red-500/10 text-red-500 rounded-lg hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors shrink-0"
+                          >
+                            重置
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const targetPath = draft.customBackupPath || await getDesktopPath()
+                          if (!targetPath) {
+                            showToast('无法获取备份路径', 'error')
+                            return
+                          }
+                          showToast('正在生成备份...', 'info')
+                          if (draft.customBackupPath) {
+                            const success = await createBackupInPath(targetPath)
+                            if (success) {
+                              showToast(`备份已保存到：${targetPath}`, 'success')
+                              setBackups(await getBackupList())
+                            } else {
+                              showToast('备份保存失败', 'error')
+                            }
+                          } else {
+                            const desktop = await getDesktopPath()
+                            if (!desktop) {
+                              showToast('无法获取桌面路径', 'error')
+                              return
+                            }
+                            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+                            const fileName = `doupao_backup_${ts}.zip`
+                            const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
+                            const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true })
+                            if (success) {
+                              showToast(`备份已保存到桌面：${fileName}`, 'success')
+                            } else {
+                              showToast('备份保存失败', 'error')
+                            }
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors w-fit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        备份
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm">
@@ -2277,7 +2328,72 @@ export default function SettingsModal() {
                         </svg>
                         <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">自动备份列表</h4>
                       </div>
-                      <span className="text-xs text-gray-400 dark:text-gray-500">共 {backups.length} 个备份</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-400 dark:text-gray-500">共 {backups.length} 个备份</span>
+                        {backups.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            {!isSelectMode ? (
+                              <button
+                                onClick={() => {
+                                  setIsSelectMode(true)
+                                  setSelectedBackups(new Set())
+                                }}
+                                className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-100 dark:bg-white/[0.08] hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors"
+                              >
+                                选择
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    if (selectedBackups.size === backups.length) {
+                                      setSelectedBackups(new Set())
+                                    } else {
+                                      setSelectedBackups(new Set(backups))
+                                    }
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-100 dark:bg-white/[0.08] hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors"
+                                >
+                                  {selectedBackups.size === backups.length ? '取消全选' : '全选'}
+                                </button>
+                                {selectedBackups.size > 0 && (
+                                  <button
+                                    onClick={() =>
+                                      setConfirmDialog({
+                                        title: '批量删除备份',
+                                        message: `确定要删除选中的 ${selectedBackups.size} 个备份吗？此操作不可恢复。`,
+                                        action: async () => {
+                                          let deletedCount = 0
+                                          for (const path of selectedBackups) {
+                                            const success = await deleteBackupFile(path)
+                                            if (success) deletedCount++
+                                          }
+                                          showToast(`已删除 ${deletedCount} 个备份`, 'success')
+                                          setBackups((prev) => prev.filter((b) => !selectedBackups.has(b)))
+                                          setSelectedBackups(new Set())
+                                          setIsSelectMode(false)
+                                        },
+                                      })
+                                    }
+                                    className="px-2.5 py-1.5 text-xs rounded-lg bg-red-50 dark:bg-red-500/10 text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
+                                  >
+                                    删除选中 ({selectedBackups.size})
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    setIsSelectMode(false)
+                                    setSelectedBackups(new Set())
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-100 dark:bg-white/[0.08] hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors"
+                                >
+                                  取消
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {isLoadingBackups ? (
@@ -2300,12 +2416,33 @@ export default function SettingsModal() {
                           const displayDate = match
                             ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`
                             : fileName
+                          const isSelected = selectedBackups.has(backupPath)
                           return (
                             <div
                               key={backupPath}
-                              className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl bg-gray-50/50 dark:bg-white/[0.03] border border-gray-100 dark:border-white/[0.04] hover:bg-gray-100/50 dark:hover:bg-white/[0.05] transition-colors"
+                              className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl transition-colors ${
+                                isSelected
+                                  ? 'bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20'
+                                  : 'bg-gray-50/50 dark:bg-white/[0.03] border border-gray-100 dark:border-white/[0.04] hover:bg-gray-100/50 dark:hover:bg-white/[0.05]'
+                              }`}
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
+                                {isSelectMode && (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(e) => {
+                                      const newSelected = new Set(selectedBackups)
+                                      if (e.target.checked) {
+                                        newSelected.add(backupPath)
+                                      } else {
+                                        newSelected.delete(backupPath)
+                                      }
+                                      setSelectedBackups(newSelected)
+                                    }}
+                                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 shrink-0"
+                                  />
+                                )}
                                 <span className="text-xs text-gray-400 dark:text-gray-500 font-mono w-6 text-right shrink-0">
                                   {index + 1}
                                 </span>
@@ -2314,48 +2451,50 @@ export default function SettingsModal() {
                                   <div className="text-[11px] text-gray-400 dark:text-gray-500 truncate font-mono">{fileName}</div>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <button
-                                  onClick={() =>
-                                    setConfirmDialog({
-                                      title: '恢复备份',
-                                      message: `确定要恢复到「${displayDate}」的备份吗？当前数据将被覆盖，此操作不可撤销。`,
-                                      action: async () => {
-                                        const success = await restoreFromBackupFile(backupPath)
-                                        if (success) {
-                                          showToast('备份已恢复，请刷新页面以生效', 'success')
-                                          setBackups(await getBackupList())
-                                        } else {
-                                          showToast('恢复备份失败', 'error')
-                                        }
-                                      },
-                                    })
-                                  }
-                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20 transition-colors"
-                                >
-                                  恢复
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    setConfirmDialog({
-                                      title: '删除备份',
-                                      message: `确定要删除「${displayDate}」的备份吗？此操作不可恢复。`,
-                                      action: async () => {
-                                        const success = await deleteBackupFile(backupPath)
-                                        if (success) {
-                                          showToast('备份已删除', 'success')
-                                          setBackups((prev) => prev.filter((b) => b !== backupPath))
-                                        } else {
-                                          showToast('删除备份失败', 'error')
-                                        }
-                                      },
-                                    })
-                                  }
-                                  className="px-2.5 py-1.5 text-xs rounded-lg bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors"
-                                >
-                                  删除
-                                </button>
-                              </div>
+                              {!isSelectMode && (
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    onClick={() =>
+                                      setConfirmDialog({
+                                        title: '恢复备份',
+                                        message: `确定要恢复到「${displayDate}」的备份吗？当前数据将被覆盖，此操作不可撤销。`,
+                                        action: async () => {
+                                          const success = await restoreFromBackupFile(backupPath)
+                                          if (success) {
+                                            showToast('备份已恢复，请刷新页面以生效', 'success')
+                                            setBackups(await getBackupList())
+                                          } else {
+                                            showToast('恢复备份失败', 'error')
+                                          }
+                                        },
+                                      })
+                                    }
+                                    className="px-2.5 py-1.5 text-xs rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20 transition-colors"
+                                  >
+                                    恢复
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      setConfirmDialog({
+                                        title: '删除备份',
+                                        message: `确定要删除「${displayDate}」的备份吗？此操作不可恢复。`,
+                                        action: async () => {
+                                          const success = await deleteBackupFile(backupPath)
+                                          if (success) {
+                                            showToast('备份已删除', 'success')
+                                            setBackups((prev) => prev.filter((b) => b !== backupPath))
+                                          } else {
+                                            showToast('删除备份失败', 'error')
+                                          }
+                                        },
+                                      })
+                                    }
+                                    className="px-2.5 py-1.5 text-xs rounded-lg bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors"
+                                  >
+                                    删除
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )
                         })}

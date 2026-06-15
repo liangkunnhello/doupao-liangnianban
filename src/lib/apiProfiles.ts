@@ -548,6 +548,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
       ? record.agentProfileId
       : null,
     backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 0,
+    customBackupPath: typeof record.customBackupPath === 'string' ? record.customBackupPath : '',
   }
 }
 
@@ -850,4 +851,5 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentWebSearch: false,
   backupInterval: 0,
   agentProfileId: null,
+  customBackupPath: '',
 })

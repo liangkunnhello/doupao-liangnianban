@@ -114,7 +114,7 @@ vi.mock('./lib/agentApi', () => ({
 }))
 import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -205,7 +205,7 @@ describe('favorite collection deletion', () => {
     await deleteFavoriteCollection(collectionA.id, true)
 
     const state = useStore.getState()
-    expect(state.favoriteCollections.map((collection) => collection.id)).toEqual([collectionB.id])
+    expect(state.favoriteCollections.map((collection) => collection.id)).toEqual([DEFAULT_FAVORITE_COLLECTION_ID, collectionB.id])
     expect(state.activeFavoriteCollectionId).toBeNull()
     expect(state.selectedFavoriteCollectionIds).toEqual([])
     expect(state.tasks).toHaveLength(1)
