@@ -469,7 +469,7 @@ export default function WordLibrarySidebar() {
   return (
     <div
       ref={panelRef}
-      className="fixed z-[100] flex flex-col text-foreground overflow-hidden bg-background border border-border"
+      className="fixed z-40 flex flex-col text-foreground overflow-hidden bg-background border border-border"
       style={{
         width: sz.w,
         minWidth: MIN_W,

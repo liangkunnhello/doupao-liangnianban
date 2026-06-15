@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { initStore, exportDataToPath } from './store'
 import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
@@ -8,24 +8,26 @@ import { isElectron as isElectronEnv, getDesktopPath, getBackupList, restoreFrom
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
-import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
-import DetailModal from './components/DetailModal'
-import Lightbox from './components/Lightbox'
-import SettingsModal from './components/SettingsModal'
 import ConfirmDialog from './components/ConfirmDialog'
 import PromptInputDialog from './components/PromptInputDialog'
 import Toast from './components/Toast'
-import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
-import SupportPromptModal from './components/SupportPromptModal'
-import { FavoriteCollectionPickerModal, FavoriteCollectionsView, ManageCollectionsModal } from './components/FavoriteCollections'
-import RandomPromptModal from './components/RandomPromptModal'
 import WordLibrarySidebar from './components/WordLibrarySidebar'
 import ErrorBoundary from './components/ErrorBoundary'
 import VarEntryEditor from './components/VarEntryEditor'
 import WorkspaceTabBar from './components/WorkspaceTabBar'
-import WorkspaceTabManagerModal from './components/WorkspaceTabManagerModal'
+const AgentWorkspace = React.lazy(() => import('./components/AgentWorkspace'))
+const DetailModal = React.lazy(() => import('./components/DetailModal'))
+const Lightbox = React.lazy(() => import('./components/Lightbox'))
+const SettingsModal = React.lazy(() => import('./components/SettingsModal'))
+const MaskEditorModal = React.lazy(() => import('./components/MaskEditorModal'))
+const SupportPromptModal = React.lazy(() => import('./components/SupportPromptModal'))
+const FavoriteCollectionPickerModal = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.FavoriteCollectionPickerModal })))
+const FavoriteCollectionsView = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.FavoriteCollectionsView })))
+const ManageCollectionsModal = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.ManageCollectionsModal })))
+const RandomPromptModal = React.lazy(() => import('./components/RandomPromptModal'))
+const WorkspaceTabManagerModal = React.lazy(() => import('./components/WorkspaceTabManagerModal'))
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 let customProviderConfigUrlImportStarted = false
@@ -179,7 +181,7 @@ export default function App() {
       <div>
         <Header />
         {appMode === 'agent' ? (
-          <AgentWorkspace />
+          <React.Suspense fallback={null}><AgentWorkspace /></React.Suspense>
         ) : (
           <main data-home-main data-drag-select-surface className="pb-48">
             <div className="safe-area-x max-w-7xl mx-auto">
@@ -189,6 +191,7 @@ export default function App() {
           </main>
         )}
         <InputBar />
+      <React.Suspense fallback={null}>
       <DetailModal />
       <Lightbox />
       <SettingsModal />
@@ -204,6 +207,7 @@ export default function App() {
       <VarEntryEditor />
       <RandomPromptModal />
       <WorkspaceTabManagerModal />
+      </React.Suspense>
       </div>
     </ErrorBoundary>
   )

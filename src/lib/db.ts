@@ -279,6 +279,61 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
   return id
 }
 
+export function batchDeleteImages(ids: string[]): Promise<void> {
+  if (ids.length === 0) return Promise.resolve()
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
+        const imageStore = tx.objectStore(STORE_IMAGES)
+        const thumbStore = tx.objectStore(STORE_THUMBNAILS)
+        for (const id of ids) {
+          imageStore.delete(id)
+          thumbStore.delete(id)
+        }
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+        tx.onabort = () => reject(tx.error)
+      }),
+  )
+}
+
+export function batchGetImages(ids: string[]): Promise<Map<string, StoredImage>> {
+  if (ids.length === 0) return Promise.resolve(new Map())
+  const idSet = new Set(ids)
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_IMAGES, 'readonly')
+        const store = tx.objectStore(STORE_IMAGES)
+        const req = store.getAll()
+        req.onsuccess = () => {
+          const map = new Map<string, StoredImage>()
+          for (const img of req.result as StoredImage[]) {
+            if (idSet.has(img.id)) map.set(img.id, img)
+          }
+          resolve(map)
+        }
+        req.onerror = () => reject(req.error)
+      }),
+  )
+}
+
+export function batchPutTasks(tasks: TaskRecord[]): Promise<void> {
+  if (tasks.length === 0) return Promise.resolve()
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_TASKS, 'readwrite')
+        const store = tx.objectStore(STORE_TASKS)
+        for (const task of tasks) store.put(task)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+        tx.onabort = () => reject(tx.error)
+      }),
+  )
+}
+
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()

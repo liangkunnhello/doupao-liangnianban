@@ -24,6 +24,7 @@ import type {
   WordLibraryGroup,
   WordLibraryEntry,
 } from './types'
+import type { StoredImage } from './types'
 import type { CallApiOptions, CallApiResult } from './lib/imageApiShared'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
@@ -48,6 +49,9 @@ import {
   deleteImage,
   clearImages,
   storeImage,
+  batchDeleteImages,
+  batchGetImages,
+  batchPutTasks,
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
@@ -676,7 +680,8 @@ export function migratePersistedState(persistedState: unknown): unknown {
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
   // Migrate old data without workspaceTabs or with empty workspaceTabs: create a default tab from galleryInputDraft or current input state
-  const hasValidWorkspaceTabs = Array.isArray(persistedState.workspaceTabs) && persistedState.workspaceTabs.length > 0
+  const hasWorkspaceTabsField = Array.isArray((persistedState as Record<string, unknown>).workspaceTabs)
+  const hasValidWorkspaceTabs = hasWorkspaceTabsField && ((persistedState as Record<string, unknown>).workspaceTabs as unknown[]).length > 0
   if (!hasValidWorkspaceTabs) {
     const galleryDraft = isRecord(persistedState.galleryInputDraft) ? persistedState.galleryInputDraft : null
     const prompt = typeof persistedState.prompt === 'string' ? persistedState.prompt : (galleryDraft && typeof galleryDraft.prompt === 'string' ? galleryDraft.prompt : '')
@@ -835,14 +840,18 @@ export function getPersistedState(state: AppState) {
     supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
     wordLibraryGroups: state.wordLibraryGroups,
     wordLibraryEntries: state.wordLibraryEntries,
-    workspaceTabs: state.workspaceTabs.map((tab) => ({
-      ...tab,
-      inputImages: tab.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
-      inputImageFolder: tab.inputImageFolder,
-      tasks: tab.tasks,
-    })),
-    activeWorkspaceTabId: state.activeWorkspaceTabId,
-    workspaceTabGroups: state.workspaceTabGroups,
+    ...(state.workspaceTabs.length > 0
+      ? {
+          workspaceTabs: state.workspaceTabs.map((tab) => ({
+            ...tab,
+            inputImages: tab.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
+            inputImageFolder: tab.inputImageFolder,
+            tasks: tab.tasks,
+          })),
+          activeWorkspaceTabId: state.activeWorkspaceTabId,
+          workspaceTabGroups: state.workspaceTabGroups,
+        }
+      : {}),
     workspaceTabBarExpanded: state.workspaceTabBarExpanded,
     lastAutoBackupAt: state.lastAutoBackupAt,
     firstBackupReminderShown: state.firstBackupReminderShown,
@@ -905,11 +914,35 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections(persisted.favoriteCollections))
     : currentState.favoriteCollections
   const defaultFavoriteCollectionId = resolveDefaultFavoriteCollectionId(favoriteCollections, persisted.defaultFavoriteCollectionId)
+  // Gallery 模式下顶层输入状态（params/inputImageFolder）应镜像活动 workspace 标签页，
+  // 与 setAppMode 的恢复逻辑保持一致。
+  const normalizedWorkspaceTabs = Array.isArray(persisted.workspaceTabs) && persisted.workspaceTabs.length > 0
+    ? persisted.workspaceTabs.map((tab) => ({
+        ...tab,
+        inputImages: normalizeInputImages(tab.inputImages),
+        inputImageFolder: isRecord(tab.inputImageFolder) && typeof tab.inputImageFolder.path === 'string' && Array.isArray(tab.inputImageFolder.imageIds)
+          ? { path: tab.inputImageFolder.path, imageIds: tab.inputImageFolder.imageIds.filter((id: unknown): id is string => typeof id === 'string') }
+          : null,
+        params: isRecord(tab.params) ? { ...DEFAULT_PARAMS, ...tab.params } : { ...DEFAULT_PARAMS },
+        maskDraft: normalizeMaskDraft(tab.maskDraft),
+        tasks: Array.isArray(tab.tasks) ? tab.tasks : [],
+      }))
+    : currentState.workspaceTabs
+  const persistedActiveWorkspaceTabId = typeof persisted.activeWorkspaceTabId === 'string' ? persisted.activeWorkspaceTabId : currentState.activeWorkspaceTabId
+  const activeWorkspaceTabForRestore = appMode === 'gallery' && persistedActiveWorkspaceTabId
+    ? normalizedWorkspaceTabs.find((t) => t.id === persistedActiveWorkspaceTabId) ?? null
+    : null
+  const restoredParams = activeWorkspaceTabForRestore
+    ? activeWorkspaceTabForRestore.params
+    : (isRecord(persisted.params) ? { ...DEFAULT_PARAMS, ...persisted.params } : currentState.params)
+  const restoredInputImageFolder = activeWorkspaceTabForRestore
+    ? activeWorkspaceTabForRestore.inputImageFolder
+    : (restoredAgentDraft ? restoredAgentDraft.inputImageFolder ?? null : galleryInputDraft?.inputImageFolder ?? null)
   return {
     ...currentState,
-    ...persisted,
-    settings,
     appMode,
+    settings,
+    dismissedCodexCliPrompts: persisted.dismissedCodexCliPrompts ?? currentState.dismissedCodexCliPrompts,
     galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,
     agentConversations,
     activeAgentConversationId,
@@ -924,22 +957,15 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
-    wordLibraryGroups: Array.isArray(persisted.wordLibraryGroups) ? persisted.wordLibraryGroups : currentState.wordLibraryGroups,
-    wordLibraryEntries: Array.isArray(persisted.wordLibraryEntries) ? persisted.wordLibraryEntries : currentState.wordLibraryEntries,
-    workspaceTabs: Array.isArray(persisted.workspaceTabs)
-      ? persisted.workspaceTabs.map((tab) => ({
-          ...tab,
-          inputImages: normalizeInputImages(tab.inputImages),
-          inputImageFolder: isRecord(tab.inputImageFolder) && typeof tab.inputImageFolder.path === 'string' && Array.isArray(tab.inputImageFolder.imageIds)
-            ? { path: tab.inputImageFolder.path, imageIds: tab.inputImageFolder.imageIds.filter((id: unknown): id is string => typeof id === 'string') }
-            : null,
-          params: isRecord(tab.params) ? { ...DEFAULT_PARAMS, ...tab.params } : { ...DEFAULT_PARAMS },
-          maskDraft: normalizeMaskDraft(tab.maskDraft),
-          tasks: Array.isArray(tab.tasks) ? tab.tasks : [],
-        }))
-      : currentState.workspaceTabs,
-    activeWorkspaceTabId: typeof persisted.activeWorkspaceTabId === 'string' ? persisted.activeWorkspaceTabId : currentState.activeWorkspaceTabId,
-    workspaceTabGroups: Array.isArray(persisted.workspaceTabGroups)
+    wordLibraryGroups: Array.isArray(persisted.wordLibraryGroups) && persisted.wordLibraryGroups.length > 0
+      ? persisted.wordLibraryGroups
+      : currentState.wordLibraryGroups,
+    wordLibraryEntries: Array.isArray(persisted.wordLibraryEntries) && persisted.wordLibraryEntries.length > 0
+      ? persisted.wordLibraryEntries
+      : currentState.wordLibraryEntries,
+    workspaceTabs: normalizedWorkspaceTabs,
+    activeWorkspaceTabId: persistedActiveWorkspaceTabId,
+    workspaceTabGroups: Array.isArray(persisted.workspaceTabGroups) && persisted.workspaceTabGroups.length > 0
       ? persisted.workspaceTabGroups.map((g) => ({
           id: String(g.id ?? Math.random().toString(36).slice(2, 9)),
           name: String(g.name ?? '未命名分组'),
@@ -948,8 +974,13 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
         }))
       : currentState.workspaceTabGroups,
     workspaceTabBarExpanded: typeof persisted.workspaceTabBarExpanded === 'boolean' ? persisted.workspaceTabBarExpanded : currentState.workspaceTabBarExpanded,
+    lastAutoBackupAt: persisted.lastAutoBackupAt ?? currentState.lastAutoBackupAt,
+    firstBackupReminderShown: Boolean(persisted.firstBackupReminderShown),
+    backupReminderCount: typeof persisted.backupReminderCount === 'number' ? persisted.backupReminderCount : currentState.backupReminderCount,
     prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
     inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
+    inputImageFolder: restoredInputImageFolder,
+    params: restoredParams,
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
     maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
   }
@@ -2791,9 +2822,9 @@ export async function initStore() {
   if (normalizedFavorites.defaultFavoriteCollectionId !== favoriteState.defaultFavoriteCollectionId) {
     useStore.getState().setDefaultFavoriteCollectionId(normalizedFavorites.defaultFavoriteCollectionId)
   }
-  await Promise.all(tasks
+  const tasksToWrite = tasks
     .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
-    .map((task) => putTask(task)))
+  if (tasksToWrite.length > 0) await batchPutTasks(tasksToWrite)
   for (const interruptedTask of interruptedTasks) {
     if (interruptedTask.outputImages?.length) {
       void saveTaskToLocalFS(interruptedTask.id)
@@ -2866,15 +2897,36 @@ export async function initStore() {
 
   // 只枚举 key 清理孤立图片，避免启动时把所有 4K 原图读进内存。
   const imageIds = await getAllImageIds()
+  const orphanIds: string[] = []
   const referencedImageIds: string[] = []
   for (const imgId of imageIds) {
     if (referencedIds.has(imgId)) {
       referencedImageIds.push(imgId)
     } else {
-      await deleteImage(imgId)
+      orphanIds.push(imgId)
     }
   }
+  if (orphanIds.length > 0) await batchDeleteImages(orphanIds)
   scheduleThumbnailBackfill(referencedImageIds)
+
+  const idsToFetch = new Set<string>()
+  for (const img of persistedInputImages) {
+    if (!img.dataUrl) idsToFetch.add(img.id)
+  }
+  if (galleryInputDraft) {
+    for (const img of galleryInputDraft.inputImages) {
+      if (!img.dataUrl) idsToFetch.add(img.id)
+    }
+  }
+  for (const [conversationId, draft] of Object.entries(agentInputDrafts)) {
+    for (const img of draft.inputImages) {
+      if (!img.dataUrl) idsToFetch.add(img.id)
+    }
+  }
+  for (const round of agentConversations.flatMap(c => c.rounds)) {
+    for (const id of round.inputImageIds) idsToFetch.add(id)
+  }
+  const imageMap = idsToFetch.size > 0 ? await batchGetImages([...idsToFetch]) : new Map<string, StoredImage>()
 
   const restoredInputImages: InputImage[] = []
   for (const img of persistedInputImages) {
@@ -2883,7 +2935,7 @@ export async function initStore() {
       cacheImage(img.id, img.dataUrl)
       continue
     }
-    const storedImage = await getImage(img.id)
+    const storedImage = imageMap.get(img.id)
     if (storedImage?.dataUrl) {
       restoredInputImages.push({ ...img, dataUrl: storedImage.dataUrl })
       cacheImage(img.id, storedImage.dataUrl)
@@ -2901,7 +2953,7 @@ export async function initStore() {
         cacheImage(img.id, img.dataUrl)
         continue
       }
-      const storedImage = await getImage(img.id)
+      const storedImage = imageMap.get(img.id)
       if (storedImage?.dataUrl) {
         restoredGalleryImages.push({ ...img, dataUrl: storedImage.dataUrl })
         cacheImage(img.id, storedImage.dataUrl)
@@ -2940,7 +2992,7 @@ export async function initStore() {
         cacheImage(img.id, img.dataUrl)
         continue
       }
-      const storedImage = await getImage(img.id)
+      const storedImage = imageMap.get(img.id)
       if (storedImage?.dataUrl) {
         restoredDraftImages.push({ ...img, dataUrl: storedImage.dataUrl })
         cacheImage(img.id, storedImage.dataUrl)

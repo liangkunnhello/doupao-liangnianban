@@ -131,7 +131,7 @@ export default function WordLibraryManager() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[55] flex items-center justify-center p-4"
       onClick={close}
     >
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md" />

@@ -56,11 +56,37 @@ autoUpdater.on('update-downloaded', (info) => {
 })
 
 autoUpdater.on('error', (error) => {
-  const message = error?.message || String(error)
-  // 截断过长的错误消息，避免渲染异常内容
-  const truncated = message.length > 200 ? message.slice(0, 200) + '...' : message
-  console.error('[autoUpdater] error:', message)
-  sendToWindow('update:status', { status: 'error', message: truncated })
+  const rawMessage = error?.message || String(error)
+  console.error('[autoUpdater] error:', rawMessage)
+
+  // 将技术错误转换为用户友好的中文提示
+  let friendlyMessage = rawMessage
+  if (rawMessage.includes('Cannot find latest.yml') || rawMessage.includes('latest.yml')) {
+    friendlyMessage = '未找到更新文件，可能还没有发布新版本'
+  } else if (rawMessage.includes('404')) {
+    friendlyMessage = '未找到更新资源，请稍后重试'
+  } else if (rawMessage.includes('406')) {
+    friendlyMessage = '服务器拒绝了请求，请检查网络或稍后再试'
+  } else if (rawMessage.includes('403')) {
+    friendlyMessage = '访问被拒绝，可能是请求过于频繁'
+  } else if (rawMessage.includes('429')) {
+    friendlyMessage = '请求过于频繁，请稍后再试'
+  } else if (/50[0-9]/.test(rawMessage)) {
+    friendlyMessage = '更新服务器暂时不可用，请稍后重试'
+  } else if (rawMessage.includes('422')) {
+    friendlyMessage = '更新请求格式错误，请检查发布配置'
+  } else if (rawMessage.includes('ECONNREFUSED') || rawMessage.includes('ETIMEDOUT') || rawMessage.includes('ENOTFOUND') || rawMessage.includes('ENETUNREACH')) {
+    friendlyMessage = '网络连接失败，请检查网络后重试'
+  } else if (rawMessage.includes('certificate') || rawMessage.includes('CERT')) {
+    friendlyMessage = '网络证书验证失败，请检查网络环境'
+  } else if (rawMessage.includes('redirect') || rawMessage.includes('redirected')) {
+    friendlyMessage = '更新地址发生跳转，请稍后重试'
+  } else if (rawMessage.length > 120) {
+    // 对于未识别的长错误，截断并提示用户
+    friendlyMessage = '更新服务暂时不可用，请稍后重试'
+  }
+
+  sendToWindow('update:status', { status: 'error', message: friendlyMessage })
 })
 
 function createWindow() {
@@ -79,6 +105,8 @@ function createWindow() {
     minHeight: 600,
     title: 'DOUPAO Image',
     autoHideMenuBar: true,
+    show: false,
+    backgroundColor: '#1a1a2e',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -87,6 +115,10 @@ function createWindow() {
       webSecurity: false,
       devTools: false,
     },
+  })
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
   })
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -144,7 +176,9 @@ app.whenReady().then(() => {
   createWindow()
 
   if (!process.env.VITE_DEV_SERVER_URL) {
-    autoUpdater.checkForUpdates()
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 5000)
   }
 
   app.on('activate', () => {

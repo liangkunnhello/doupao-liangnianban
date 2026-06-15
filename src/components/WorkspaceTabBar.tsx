@@ -415,7 +415,7 @@ export default function WorkspaceTabBar() {
   return (
     <div
       ref={panelRef}
-      className="fixed z-[100] flex flex-col text-foreground overflow-hidden bg-background border border-border"
+      className="fixed z-40 flex flex-col text-foreground overflow-hidden bg-background border border-border"
       style={{
         width: sz.w,
         minWidth: MIN_W,
@@ -578,7 +578,7 @@ export default function WorkspaceTabBar() {
       {/* ===== Context menu ===== */}
       {contextMenu && (
         <div
-          className="fixed z-[200] min-w-[160px] rounded-lg border border-border bg-sidebar shadow-xl py-1"
+          className="fixed z-50 min-w-[160px] rounded-lg border border-border bg-sidebar shadow-xl py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >

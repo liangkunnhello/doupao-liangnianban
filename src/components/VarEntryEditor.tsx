@@ -74,7 +74,7 @@ export default function VarEntryEditor() {
   if (!config) return null
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-start justify-center pt-16" onClick={handleClose}>
+    <div className="fixed inset-0 z-[55] flex items-start justify-center pt-16" onClick={handleClose}>
       {/* 遮罩 */}
       <div className="absolute inset-0 bg-black/10 dark:bg-black/20" />
 

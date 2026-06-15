@@ -65,6 +65,23 @@ vi.mock('./lib/db', () => {
       images.set(id, { id, dataUrl, source, createdAt: Date.now() })
       return id
     },
+    batchDeleteImages: async (ids: string[]) => {
+      for (const id of ids) {
+        images.delete(id)
+        thumbnails.delete(id)
+      }
+    },
+    batchGetImages: async (ids: string[]) => {
+      const map = new Map<string, StoredImage>()
+      for (const id of ids) {
+        const img = images.get(id)
+        if (img) map.set(id, img)
+      }
+      return map
+    },
+    batchPutTasks: async (taskList: TaskRecord[]) => {
+      for (const task of taskList) tasks.set(task.id, task)
+    },
   }
 })
 vi.mock('./lib/api', () => ({

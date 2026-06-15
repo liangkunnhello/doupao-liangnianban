@@ -17,6 +17,7 @@ type AutoUpdateHook = {
   check: () => void
   download: () => void
   install: () => void
+  reset: () => void
 }
 
 export { type UpdateStatus }
@@ -47,6 +48,10 @@ export function useAutoUpdate(): AutoUpdateHook {
     window.electronAPI?.installUpdate?.()
   }, [])
 
+  const reset = useCallback(() => {
+    setState({ status: 'idle' })
+  }, [])
+
   return {
     status: state.status,
     version: 'version' in state ? state.version : undefined,
@@ -55,5 +60,6 @@ export function useAutoUpdate(): AutoUpdateHook {
     check,
     download,
     install,
+    reset,
   }
 }
