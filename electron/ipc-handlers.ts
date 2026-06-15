@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'path'
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync } from 'fs'
 
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
 
@@ -157,9 +157,23 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('fs:read-json-text', async (_event, { filePath }: { filePath: string }) => {
     try {
       if (!existsSync(filePath)) return null
-      return readFileSync(filePath, 'utf-8')
+      const content = readFileSync(filePath, 'utf-8')
+      if (content && content.trim()) return content
+      const bakPath = filePath + '.bak'
+      if (existsSync(bakPath)) {
+        const bakContent = readFileSync(bakPath, 'utf-8')
+        if (bakContent && bakContent.trim()) return bakContent
+      }
+      return null
     } catch (err) {
       console.error('读取 JSON 文本失败:', err)
+      const bakPath = filePath + '.bak'
+      try {
+        if (existsSync(bakPath)) {
+          const bakContent = readFileSync(bakPath, 'utf-8')
+          if (bakContent && bakContent.trim()) return bakContent
+        }
+      } catch {}
       return null
     }
   })
@@ -203,7 +217,18 @@ export function registerIpcHandlers(): void {
           console.error('自动备份失败（不影响写入）:', backupErr)
         }
       }
-      writeFileSync(filePath, content, 'utf-8')
+      const bakPath = filePath + '.bak'
+      if (existsSync(filePath)) {
+        try { copyFileSync(filePath, bakPath) } catch {}
+      }
+      const tmpPath = filePath + '.tmp'
+      writeFileSync(tmpPath, content, 'utf-8')
+      try {
+        renameSync(tmpPath, filePath)
+      } catch {
+        try { copyFileSync(tmpPath, filePath) } catch {}
+        try { unlinkSync(tmpPath) } catch {}
+      }
       return true
     } catch (err) {
       console.error('写入 JSON 文本失败:', err)

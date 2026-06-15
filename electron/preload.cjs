@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLocalSavePath: () => ipcRenderer.invoke('store:get-local-save-path'),
   setLocalSavePath: (path) => ipcRenderer.invoke('store:set-local-save-path', { path }),
   readJsonText: (filePath) => ipcRenderer.invoke('fs:read-json-text', { filePath }),
-  writeJsonText: (filePath, content, backupInterval) => ipcRenderer.invoke('fs:write-json-text', { filePath, content, backupInterval }),
+  writeJsonText: (filePath, content, backupIntervalOrSkip) => ipcRenderer.invoke('fs:write-json-text', { filePath, content, skipBackup: typeof backupIntervalOrSkip === 'boolean' ? backupIntervalOrSkip : undefined, backupInterval: typeof backupIntervalOrSkip === 'number' ? backupIntervalOrSkip : undefined }),
   listBackups: (filePath) => ipcRenderer.invoke('fs:list-backups', { filePath }),
   checkBackupHasData: (backupPath) => ipcRenderer.invoke('fs:check-backup-has-data', { backupPath }),
   restoreFromBackup: (backupPath, targetPath) => ipcRenderer.invoke('fs:restore-from-backup', { backupPath, targetPath }),

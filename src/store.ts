@@ -2283,7 +2283,7 @@ export const useStore = create<AppState>()(
         const w = window as unknown as { electronAPI?: {
           getDefaultPath: () => Promise<string>
           readJsonText: (filePath: string) => Promise<string | null>
-          writeJsonText: (filePath: string, content: string, backupInterval?: number) => Promise<boolean>
+          writeJsonText: (filePath: string, content: string, backupIntervalOrSkip?: number | boolean) => Promise<boolean>
           isElectron: boolean
         } }
         const isElectronEnv = typeof w?.electronAPI !== 'undefined' && w.electronAPI?.isElectron === true
@@ -2306,7 +2306,7 @@ export const useStore = create<AppState>()(
           removeItem: async (_name: string) => {
             const defaultPath = await api.getDefaultPath()
             const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
-            await api.writeJsonText(filePath, '')
+            try { await api.writeJsonText(filePath, '', true) } catch {}
           },
         }
       }),
