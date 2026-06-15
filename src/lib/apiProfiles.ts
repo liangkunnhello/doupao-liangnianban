@@ -67,7 +67,7 @@ export function normalizeMaxConcurrent(value: unknown, fallback: number | undefi
   const fallbackValue = fallback ?? DEFAULT_MAX_CONCURRENT
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) return fallbackValue
-  return Math.min(50, Math.max(1, Math.trunc(numeric)))
+  return Math.min(999, Math.max(1, Math.trunc(numeric)))
 }
 
 export function normalizeMaxRetries(value: unknown, fallback: number | undefined = DEFAULT_MAX_RETRIES): number {
@@ -544,6 +544,9 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
     profiles,
     activeProfileId,
+    agentProfileId: typeof record.agentProfileId === 'string' && profiles.some((p) => p.id === record.agentProfileId)
+      ? record.agentProfileId
+      : null,
     backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 0,
   }
 }
@@ -642,6 +645,16 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
     maxConcurrent: normalizeMaxConcurrent(record.maxConcurrent, profile.maxConcurrent),
     maxRetries: normalizeMaxRetries(record.maxRetries, profile.maxRetries),
   }
+}
+
+export function getAgentApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
+  const normalized = normalizeSettings(settings)
+  const agentProfileId = normalized.agentProfileId
+  if (agentProfileId) {
+    const profile = normalized.profiles.find((p) => p.id === agentProfileId)
+    if (profile) return profile
+  }
+  return getActiveApiProfile(settings)
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {
@@ -836,4 +849,5 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
   backupInterval: 0,
+  agentProfileId: null,
 })

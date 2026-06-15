@@ -27,7 +27,7 @@ import type {
 import type { StoredImage } from './types'
 import type { CallApiOptions, CallApiResult } from './lib/imageApiShared'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getAgentApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -1586,9 +1586,9 @@ export const useStore = create<AppState>()(
 
         const state = get()
         const settings = normalizeSettings(state.settings)
-        const activeProfile = getActiveApiProfile(settings)
+        const agentProfile = getAgentApiProfile(settings)
 
-        if (activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses') {
+        if (agentProfile.provider === 'openai' && agentProfile.apiMode === 'responses') {
           const galleryInputDraft = saveGalleryInputDraft(state)
           set((state) => ({
             appMode: 'agent',
@@ -1603,14 +1603,14 @@ export const useStore = create<AppState>()(
           return
         }
 
-        if (activeProfile.provider === 'openai' && activeProfile.apiMode !== 'responses') {
+        if (agentProfile.provider === 'openai' && agentProfile.apiMode !== 'responses') {
           state.setConfirmDialog({
             title: '需要 Responses API 配置',
-            message: `当前配置「${activeProfile.name}」使用的是 Images API，仅支持生成图片，无 Agent 模式需要的对话能力。\n\n请前往 API 配置页，将当前配置调整为 Responses API，或切换/新建一个支持 Responses API 的配置。`,
+            message: `Agent 配置「${agentProfile.name}」使用的是 Images API，仅支持生成图片，无 Agent 模式需要的对话能力。\n\n请前往 API 配置页，将 Agent 配置调整为 Responses API，或切换/新建一个支持 Responses API 的配置。`,
             confirmText: '去设置',
             cancelText: '取消',
             action: () => {
-              useStore.getState().setShowSettings(true, 'api')
+              useStore.getState().setShowSettings(true, 'agent')
             },
           })
           return
@@ -1618,11 +1618,11 @@ export const useStore = create<AppState>()(
 
         state.setConfirmDialog({
           title: '配置不支持 Agent 模式',
-          message: `当前配置「${activeProfile.name}」所属的服务商暂不支持 Agent 模式。Agent 模式需要使用支持 Responses API 的 OpenAI 配置。\n\n请前往 API 配置页，切换或新建一个支持 Responses API 的配置。`,
+          message: `Agent 配置「${agentProfile.name}」所属的服务商暂不支持 Agent 模式。Agent 模式需要使用支持 Responses API 的 OpenAI 配置。\n\n请前往 API 配置页，切换或新建一个支持 Responses API 的配置。`,
           confirmText: '去设置',
           cancelText: '取消',
           action: () => {
-            useStore.getState().setShowSettings(true, 'api')
+            useStore.getState().setShowSettings(true, 'agent')
           },
         })
       },
@@ -3879,7 +3879,7 @@ export async function submitAgentMessage() {
   const state = useStore.getState()
   const { settings, prompt, inputImages, maskDraft, params, showToast } = state
   const normalizedSettings = normalizeSettings(settings)
-  const activeProfile = getActiveApiProfile(normalizedSettings)
+  const activeProfile = getAgentApiProfile(normalizedSettings)
 
   if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
     state.setAppMode('agent')
@@ -4029,7 +4029,7 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
   const state = useStore.getState()
   const { settings, params, showToast } = state
   const normalizedSettings = normalizeSettings(settings)
-  const activeProfile = getActiveApiProfile(normalizedSettings)
+  const activeProfile = getAgentApiProfile(normalizedSettings)
 
   if (activeProfile.provider !== 'openai' || activeProfile.apiMode !== 'responses') {
     state.setAppMode('agent')
@@ -4899,6 +4899,11 @@ async function executeTask(taskId: string) {
 
       const worker = async () => {
         while (nextIndex < total) {
+          const latestTaskCheck = useStore.getState().tasks.find((t) => t.id === taskId)
+          if (!latestTaskCheck || latestTaskCheck.status !== 'running') {
+            break
+          }
+
           const index = nextIndex++
           const item = items[index]
 
@@ -4964,9 +4969,11 @@ async function executeTask(taskId: string) {
     }
 
     if (useFolderMode) {
-      const folderItems = Array.from({ length: n }, (_, i) => i)
-      const result = await executeInBatches(folderItems, async (i) => {
-        const imgId = task.inputImageIds[i % task.inputImageIds.length]
+      const imageCount = task.inputImageIds.length
+      const effectiveN = Math.max(n, maxConcurrent)
+      const folderItems = Array.from({ length: effectiveN }, (_, i) => i)
+      const result = await executeInBatches(folderItems, async (_, i) => {
+        const imgId = task.inputImageIds[i % imageCount]
         const singleDataUrl = await ensureImageCached(imgId)
         if (!singleDataUrl) throw new Error('输入图片已不存在')
         return callImageApi({

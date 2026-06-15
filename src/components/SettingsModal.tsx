@@ -590,6 +590,9 @@ export default function SettingsModal() {
       activeProfileId: normalizedProfiles.some((profile) => profile.id === nextDraft.activeProfileId)
         ? nextDraft.activeProfileId
         : (normalizedProfiles[0]?.id ?? fallbackProfile.id),
+      agentProfileId: nextDraft.agentProfileId && normalizedProfiles.some((profile) => profile.id === nextDraft.agentProfileId)
+        ? nextDraft.agentProfileId
+        : null,
     })
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
@@ -1451,6 +1454,29 @@ export default function SettingsModal() {
 
             {activeTab === 'agent' && (
               <div className="space-y-4">
+                <div>
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 专用配置</span>
+                  <div className="w-full">
+                    <Select
+                      value={draft.agentProfileId ?? '__gallery__'}
+                      onChange={(val) => {
+                        const nextAgentProfileId = val === '__gallery__' ? null : String(val)
+                        commitSettings({ ...draft, agentProfileId: nextAgentProfileId })
+                      }}
+                      options={[
+                        { label: '跟随画廊配置', value: '__gallery__' },
+                        ...draft.profiles.map((profile) => ({
+                          label: `${profile.name}（${getApiProviderLabel(draft, profile.provider)}）`,
+                          value: profile.id,
+                        })),
+                      ]}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                    />
+                  </div>
+                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    选择 Agent 模式使用的 API 配置。选择「跟随画廊配置」时，Agent 模式使用与画廊模式相同的配置。
+                  </div>
+                </div>
                 <label className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
                   <input
@@ -1892,21 +1918,19 @@ export default function SettingsModal() {
                 <div className="block space-y-3">
                   <label className="block">
                     <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大并发数</span>
-                    <Select
+                    <input
+                      type="number"
+                      min={1}
+                      max={999}
                       value={normalizeMaxConcurrent(activeProfile.maxConcurrent)}
-                      onChange={(value) => updateActiveProfile({ maxConcurrent: normalizeMaxConcurrent(value) }, true)}
-                      options={[
-                        { label: '1（串行）', value: 1 },
-                        { label: '3', value: 3 },
-                        { label: `5（默认）`, value: 5 },
-                        { label: '10', value: 10 },
-                        { label: '15', value: 15 },
-                        { label: '20', value: 20 },
-                      ]}
+                      onChange={(e) => {
+                        const val = e.target.value === '' ? 1 : Math.max(1, Math.min(999, Number(e.target.value)))
+                        updateActiveProfile({ maxConcurrent: normalizeMaxConcurrent(val) }, true)
+                      }}
                       className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                     />
                     <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                      批量生成图片时的最大并发请求数。使用中转站或低速率限制的 API 时建议设为 3-5，避免触发限流导致失败。官方 API 可设为 10-15。
+                      批量生成图片时的最大并发请求数（1-999）。使用中转站或低速率限制的 API 时建议设为 3-5，避免触发限流导致失败。官方 API 可设为 10-15。
                     </div>
                   </label>
                   <label className="block">

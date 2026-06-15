@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, typ
 import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import WordLibrarySidebarToggle from './WordLibrarySidebarToggle'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
@@ -765,11 +765,13 @@ export default function InputBar() {
   const isMobile = useIsMobile()
 
   const currentActiveProfile = useMemo(() => getActiveApiProfile(settings), [settings])
-  const activeProfile = useMemo(() => (
-    settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
-      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
-      : currentActiveProfile
-  ), [currentActiveProfile, reusedTaskApiProfileId, settings])
+  const agentActiveProfile = useMemo(() => getAgentApiProfile(settings), [settings])
+  const activeProfile = useMemo(() => {
+    if (settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId) {
+      return settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
+    }
+    return appMode === 'agent' ? agentActiveProfile : currentActiveProfile
+  }, [currentActiveProfile, agentActiveProfile, appMode, reusedTaskApiProfileId, settings])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null

@@ -449,7 +449,7 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {(task.status === 'done' || hasPartialSuccess || (task.status === 'running' && outputLen > 0)) && outputLen > 0 && currentOutputPreviewSrc && (
+          {((task.status === 'done' || hasPartialSuccess) || (task.status === 'running' && outputLen > 0 && streamPreviewLen === 0)) && outputLen > 0 && currentOutputPreviewSrc && (
             <>
               <img
                 src={currentOutputPreviewSrc}
@@ -474,7 +474,7 @@ export default function DetailModal() {
                 alt=""
               />
               {task.status === 'running' && (
-                <span className="absolute right-3 top-[15px] z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                <span className="absolute left-4 bottom-3 z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -483,7 +483,7 @@ export default function DetailModal() {
                 </span>
               )}
               {hasPartialSuccess && (
-                <span className="absolute right-3 top-[15px] z-10 flex items-center gap-1 rounded bg-yellow-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                <span className="absolute left-4 bottom-3 z-10 flex items-center gap-1 rounded bg-yellow-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
@@ -602,7 +602,7 @@ export default function DetailModal() {
                     </svg>
                   )}
                   {streamPreviewLoaded && (
-                    <span className="absolute top-4 right-4 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                    <span className="absolute top-4 right-3 z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
                       流式预览
                     </span>
                   )}

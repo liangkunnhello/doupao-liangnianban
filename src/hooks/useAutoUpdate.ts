@@ -29,11 +29,23 @@ export function useAutoUpdate(): AutoUpdateHook {
     const api = window.electronAPI
     if (!api?.onUpdateStatus) return
 
+    let resetTimer: ReturnType<typeof setTimeout> | null = null
+
     const unsubscribe = api.onUpdateStatus((payload: UpdateStatus) => {
       setState(payload)
+
+      if (payload.status === 'not-available' || payload.status === 'error') {
+        if (resetTimer) clearTimeout(resetTimer)
+        resetTimer = setTimeout(() => {
+          setState({ status: 'idle' })
+        }, 3000)
+      }
     })
 
-    return unsubscribe
+    return () => {
+      if (resetTimer) clearTimeout(resetTimer)
+      unsubscribe()
+    }
   }, [])
 
   const check = useCallback(() => {

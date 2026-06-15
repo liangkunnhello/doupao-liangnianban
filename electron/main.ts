@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
@@ -9,6 +9,9 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
+
+const iconPath = path.join(__dirname, '../public/app-icon.png')
+const appIcon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined
 
 autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = true
@@ -107,6 +110,7 @@ function createWindow() {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: '#1a1a2e',
+    icon: appIcon,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
