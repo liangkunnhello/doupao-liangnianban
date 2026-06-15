@@ -112,6 +112,8 @@ export interface AppSettings {
   profiles: ApiProfile[]
   activeProfileId: string
   agentProfileId: string | null
+  agentUseCustomProfile: boolean
+  agentProfile: ApiProfile
   backupInterval: number
   customBackupPath: string
 }

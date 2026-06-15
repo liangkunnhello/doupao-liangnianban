@@ -324,7 +324,9 @@ export default function SettingsModal() {
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
   const [agentMaxToolRoundsInput, setAgentMaxToolRoundsInput] = useState(String(settings.agentMaxToolRounds))
+  const [agentTimeoutInput, setAgentTimeoutInput] = useState(String(settings.agentProfile.timeout))
   const [showApiKey, setShowApiKey] = useState(false)
+  const [showAgentApiKey, setShowAgentApiKey] = useState(false)
   const [showProfileMenu, setShowProfileMenu] = useState(false)
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
@@ -706,6 +708,17 @@ export default function SettingsModal() {
     commitSettings(nextDraft)
   }
 
+  const updateAgentProfile = (patch: Partial<ApiProfile>, commit = false) => {
+    const nextDraft = { ...draft, agentProfile: { ...draft.agentProfile, ...patch } }
+    setDraft(nextDraft)
+    if (commit) commitSettings(nextDraft)
+  }
+
+  const commitAgentProfilePatch = (patch: Partial<ApiProfile>) => {
+    const nextDraft = { ...draft, agentProfile: { ...draft.agentProfile, ...patch } }
+    commitSettings(nextDraft)
+  }
+
   const handleClose = () => {
     if (showZipDownloadRouteManager) {
       setShowZipDownloadRouteManager(false)
@@ -719,9 +732,13 @@ export default function SettingsModal() {
     const normalizedAgentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
       ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
       : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
+    const normalizedAgentTimeout = agentTimeoutInput.trim() === '' || Number.isNaN(Number(agentTimeoutInput))
+      ? DEFAULT_SETTINGS.agentProfile.timeout
+      : Number(agentTimeoutInput)
     const nextDraft = {
       ...draft,
       agentMaxToolRounds: normalizedAgentMaxToolRounds,
+      agentProfile: { ...draft.agentProfile, timeout: normalizedAgentTimeout },
       profiles: activeProviderIsOpenAICompatible
         ? draft.profiles.map((profile) =>
             profile.id === activeProfile.id ? { ...profile, timeout: normalizedTimeout } : profile,
@@ -729,6 +746,7 @@ export default function SettingsModal() {
         : draft.profiles,
     }
     setAgentMaxToolRoundsInput(String(normalizedAgentMaxToolRounds))
+    setAgentTimeoutInput(String(normalizedAgentTimeout))
     commitSettings(nextDraft)
     setShowSettings(false)
   }
@@ -1459,29 +1477,166 @@ export default function SettingsModal() {
 
             {activeTab === 'agent' && (
               <div className="space-y-4">
-                <div>
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 专用配置</span>
-                  <div className="w-full">
-                    <Select
-                      value={draft.agentProfileId ?? '__gallery__'}
-                      onChange={(val) => {
-                        const nextAgentProfileId = val === '__gallery__' ? null : String(val)
-                        commitSettings({ ...draft, agentProfileId: nextAgentProfileId })
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">使用独立配置</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
+                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
+                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
+                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
+                        commitSettings({ ...draft, agentMaxToolRounds, agentUseCustomProfile: !draft.agentUseCustomProfile })
                       }}
-                      options={[
-                        { label: '跟随画廊配置', value: '__gallery__' },
-                        ...draft.profiles.map((profile) => ({
-                          label: `${profile.name}（${getApiProviderLabel(draft, profile.provider)}）`,
-                          value: profile.id,
-                        })),
-                      ]}
-                      className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-                    />
+                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentUseCustomProfile ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={draft.agentUseCustomProfile}
+                      aria-label="使用独立配置"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentUseCustomProfile ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
                   </div>
-                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                    选择 Agent 模式使用的 API 配置。选择「跟随画廊配置」时，Agent 模式使用与画廊模式相同的配置。
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    开启后，Agent 模式将使用下方独立配置的 API 参数，不再跟随画廊配置。
                   </div>
                 </div>
+
+                {!draft.agentUseCustomProfile && (
+                  <div>
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 专用配置</span>
+                    <div className="w-full">
+                      <Select
+                        value={draft.agentProfileId ?? '__gallery__'}
+                        onChange={(val) => {
+                          const nextAgentProfileId = val === '__gallery__' ? null : String(val)
+                          commitSettings({ ...draft, agentProfileId: nextAgentProfileId })
+                        }}
+                        options={[
+                          { label: '跟随画廊配置', value: '__gallery__' },
+                          ...draft.profiles.map((profile) => ({
+                            label: `${profile.name}（${getApiProviderLabel(draft, profile.provider)}）`,
+                            value: profile.id,
+                          })),
+                        ]}
+                        className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                      />
+                    </div>
+                    <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                      选择 Agent 模式使用的 API 配置。选择「跟随画廊配置」时，Agent 模式使用与画廊模式相同的配置。
+                    </div>
+                  </div>
+                )}
+
+                {draft.agentUseCustomProfile && (
+                  <>
+                    <div>
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API URL</span>
+                      <input
+                        value={draft.agentProfile.baseUrl}
+                        onChange={(e) => updateAgentProfile({ baseUrl: e.target.value })}
+                        onBlur={() => commitAgentProfilePatch({ baseUrl: draft.agentProfile.baseUrl.trim() })}
+                        type="text"
+                        placeholder="https://api.openai.com"
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                        支持 OpenAI 格式 API 的 URL。
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                      <div className="relative">
+                        <input
+                          value={draft.agentProfile.apiKey}
+                          onChange={(e) => updateAgentProfile({ apiKey: e.target.value })}
+                          onBlur={() => commitAgentProfilePatch({ apiKey: draft.agentProfile.apiKey.trim() })}
+                          type={showAgentApiKey ? 'text' : 'password'}
+                          placeholder="sk-..."
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAgentApiKey(!showAgentApiKey)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
+                          aria-label={showAgentApiKey ? '隐藏 API Key' : '显示 API Key'}
+                        >
+                          {showAgentApiKey ? (
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                              <line x1="1" y1="1" x2="23" y2="23" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                        用于调用 Agent API 的密钥。
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型</span>
+                      <input
+                        value={draft.agentProfile.model}
+                        onChange={(e) => updateAgentProfile({ model: e.target.value })}
+                        onBlur={() => commitAgentProfilePatch({ model: draft.agentProfile.model.trim() })}
+                        type="text"
+                        placeholder="gpt-4o"
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                        支持 Responses API 的模型名称。
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">超时时间</span>
+                      <input
+                        value={agentTimeoutInput}
+                        onChange={(e) => setAgentTimeoutInput(e.target.value)}
+                        onBlur={() => {
+                          const nextTimeout = agentTimeoutInput.trim() === '' || Number.isNaN(Number(agentTimeoutInput))
+                            ? DEFAULT_SETTINGS.agentProfile.timeout
+                            : Number(agentTimeoutInput)
+                          setAgentTimeoutInput(String(nextTimeout))
+                          updateAgentProfile({ timeout: nextTimeout }, true)
+                        }}
+                        type="number"
+                        min={1}
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                        请求超时时间（秒）。
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 模式</span>
+                      <div className="w-full">
+                        <Select
+                          value={draft.agentProfile.apiMode}
+                          onChange={(val) => commitAgentProfilePatch({ apiMode: val as 'images' | 'responses' })}
+                          options={[
+                            { label: 'Images API', value: 'images' },
+                            { label: 'Responses API', value: 'responses' },
+                          ]}
+                          className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                        />
+                      </div>
+                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                        Images API 用于图像生成，Responses API 用于 Agent 对话。
+                      </div>
+                    </div>
+                  </>
+                )}
                 <label className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
                   <input

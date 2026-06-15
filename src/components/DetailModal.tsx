@@ -89,7 +89,7 @@ export default function DetailModal() {
 
   useEffect(() => {
     const count = task?.status === 'running'
-      ? streamPreviewItems.length
+      ? (task?.outputImages?.length || 0) + streamPreviewItems.length
       : task?.outputImages?.length ?? 0
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
   }, [imageIndex, streamPreviewItems.length, task?.outputImages?.length, task?.status])
@@ -142,7 +142,7 @@ export default function DetailModal() {
     }
   }, [task])
 
-  const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
+  const currentOutputImageId = (imageIndex < (task?.outputImages?.length || 0) ? task?.outputImages?.[imageIndex] : '') || ''
   const currentOutputPreviewSrc = currentOutputImageId ? outputPreviewSrcs[currentOutputImageId] || '' : ''
   const maskTargetId = task?.maskTargetImageId || null
   const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
@@ -449,7 +449,7 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {((task.status === 'done' || hasPartialSuccess) || (task.status === 'running' && outputLen > 0 && streamPreviewLen === 0)) && outputLen > 0 && currentOutputPreviewSrc && (
+          {((task.status === 'done' || hasPartialSuccess) || (task.status === 'running' && outputLen > 0)) && outputLen > 0 && currentOutputPreviewSrc && (
             <>
               <img
                 src={currentOutputPreviewSrc}
@@ -511,14 +511,13 @@ export default function DetailModal() {
                   )
                 )}
               </div>
-              {outputLen > 1 && (
+              {(outputLen > 1 || (task.status === 'running' && outputLen + streamPreviewLen > 1)) && (
                 <>
                   <button
-                    onClick={() =>
-                      setImageIndex(
-                        (imageIndex - 1 + outputLen) % outputLen,
-                      )
-                    }
+                    onClick={() => {
+                      const total = task.status === 'running' ? outputLen + streamPreviewLen : outputLen
+                      setImageIndex((imageIndex - 1 + total) % total)
+                    }}
                     className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -526,9 +525,10 @@ export default function DetailModal() {
                     </svg>
                   </button>
                   <button
-                    onClick={() =>
-                      setImageIndex((imageIndex + 1) % outputLen)
-                    }
+                    onClick={() => {
+                      const total = task.status === 'running' ? outputLen + streamPreviewLen : outputLen
+                      setImageIndex((imageIndex + 1) % total)
+                    }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -536,8 +536,8 @@ export default function DetailModal() {
                     </svg>
                   </button>
                   <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                    {task.status === 'running' && task.params.n > outputLen
-                      ? `${imageIndex + 1} / ${outputLen} (共需 ${task.params.n} 张)`
+                    {task.status === 'running'
+                      ? `${imageIndex + 1} / ${outputLen + streamPreviewLen}${task.params.n > outputLen + streamPreviewLen ? ` (共需 ${task.params.n} 张)` : ''}`
                       : task.batchItemStatuses
                         ? `${imageIndex + 1} / ${task.batchItemStatuses.length}${task.batchItemStatuses.some((s) => s === 'error') ? ` (${task.batchItemStatuses.filter((s) => s === 'done').length} 成功)` : ''}`
                         : `${imageIndex + 1} / ${outputLen}`}
@@ -576,7 +576,7 @@ export default function DetailModal() {
               )}
             </>
           )}
-          {(task.status === 'running' || isFalReconnecting) && outputLen === 0 && (
+          {(task.status === 'running' || isFalReconnecting) && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -584,7 +584,7 @@ export default function DetailModal() {
                 </svg>
                 {formatDuration()}
               </div>
-              {task.status === 'running' && streamPreviewLen > 0 && (
+              {task.status === 'running' && streamPreviewLen > 0 && imageIndex >= outputLen && (
                 <>
                   {currentStreamPreviewSrc ? (
                     <img
@@ -606,32 +606,9 @@ export default function DetailModal() {
                       流式预览
                     </span>
                   )}
-                  {streamPreviewLen > 1 && (
-                    <>
-                      <button
-                        onClick={() => setImageIndex((imageIndex - 1 + streamPreviewLen) % streamPreviewLen)}
-                        className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => setImageIndex((imageIndex + 1) % streamPreviewLen)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </button>
-                      <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                        {imageIndex + 1} / {streamPreviewLen}
-                      </span>
-                    </>
-                  )}
                 </>
               )}
-              {task.status === 'running' && streamPreviewLen === 0 && (
+              {task.status === 'running' && outputLen === 0 && streamPreviewLen === 0 && (
                 <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

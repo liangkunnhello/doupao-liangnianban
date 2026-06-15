@@ -9,6 +9,26 @@ const MAX_PIXELS = 8_294_400
 export type SizeTier = '1K' | '2K' | '4K'
 type PresetRatio = '1:1' | '3:2' | '2:3' | '16:9' | '9:16' | '4:3' | '3:4' | '21:9'
 
+/** 推荐尺寸集合（来自官方可用尺寸列表） */
+const RECOMMENDED_SIZE_SET = new Set([
+  '1024x1024',
+  '1536x1024',
+  '1024x1536',
+  '2048x2048',
+  '2048x1152',
+  '3840x2160',
+  '2160x3840',
+  '1280x720',
+  '1088x1920',
+  '1136x640',
+  '720x1280',
+  '368x256',
+])
+
+export function isRecommendedSize(size: string): boolean {
+  return RECOMMENDED_SIZE_SET.has(normalizeImageSize(size) || size)
+}
+
 function roundToMultiple(value: number, multiple: number) {
   return Math.max(multiple, Math.round(value / multiple) * multiple)
 }

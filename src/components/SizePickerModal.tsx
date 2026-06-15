@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { calculateImageSize, isRecommendedSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -257,12 +257,19 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       const [w, h] = item.value.split(':').map(Number)
                       const isHorizontal = w > h
                       const isSquare = w === h
+                      const sizeForRatio = calculateImageSize(tier, item.value)
+                      const recommended = sizeForRatio ? isRecommendedSize(sizeForRatio) : false
                       return (
                         <button
                           key={item.value}
-                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1.5 !py-2.5`}
+                          className={`${buttonClass(ratio === item.value)} flex flex-col items-center justify-center gap-1 !py-2 relative`}
                           onClick={() => setRatio(item.value)}
                         >
+                          {recommended && (
+                            <span className="absolute top-0.5 right-0.5 text-[9px] leading-none px-1 py-0.5 rounded bg-green-500 text-white font-medium">
+                              推荐
+                            </span>
+                          )}
                           <div className="flex h-5 w-5 items-center justify-center">
                             <div
                               className="border-[1.5px] border-current rounded-[3px] opacity-60"

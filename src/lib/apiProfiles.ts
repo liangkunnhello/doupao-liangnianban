@@ -547,6 +547,12 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentProfileId: typeof record.agentProfileId === 'string' && profiles.some((p) => p.id === record.agentProfileId)
       ? record.agentProfileId
       : null,
+    agentUseCustomProfile: typeof record.agentUseCustomProfile === 'boolean' ? record.agentUseCustomProfile : false,
+    agentProfile: normalizeApiProfile(
+      isRecord(record.agentProfile) ? record.agentProfile : {},
+      createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
+      customProviderIds,
+    ),
     backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 0,
     customBackupPath: typeof record.customBackupPath === 'string' ? record.customBackupPath : '',
   }
@@ -650,6 +656,9 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
 
 export function getAgentApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
   const normalized = normalizeSettings(settings)
+  if (normalized.agentUseCustomProfile) {
+    return normalized.agentProfile
+  }
   const agentProfileId = normalized.agentProfileId
   if (agentProfileId) {
     const profile = normalized.profiles.find((p) => p.id === agentProfileId)
@@ -849,7 +858,9 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
-  backupInterval: 0,
   agentProfileId: null,
+  agentUseCustomProfile: false,
+  agentProfile: createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
+  backupInterval: 0,
   customBackupPath: '',
 })
