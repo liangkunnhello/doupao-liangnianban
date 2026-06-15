@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.6.2",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -61,7 +61,8 @@
     "publish": {
       "provider": "github",
       "owner": "nideyilian",
-      "repo": "doupao"
+      "repo": "doupao",
+      "releaseType": "release"
     },
     "win": {
       "target": [

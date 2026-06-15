@@ -46,6 +46,12 @@ export default defineConfig(({ command }) => {
                 formats: ['cjs'],
                 fileName: () => 'preload.cjs',
               },
+              rollupOptions: {
+                output: {
+                  format: 'cjs',
+                  inlineDynamicImports: true,
+                },
+              },
             },
           },
         },

@@ -9,10 +9,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pathJoin: (...paths: string[]) => ipcRenderer.invoke('fs:path-join', { paths }),
   checkExists: (filePath: string) => ipcRenderer.invoke('fs:check-exists', { filePath }),
   readDir: (dirPath: string) => ipcRenderer.invoke('fs:read-dir', { dirPath }),
+  readFileBuffer: (filePath: string) => ipcRenderer.invoke('fs:read-file-buffer', { filePath }),
   getDefaultPath: () => ipcRenderer.invoke('fs:get-default-path'),
   openInExplorer: (filePath: string) => ipcRenderer.invoke('fs:open-in-explorer', { filePath }),
   getLocalSavePath: () => ipcRenderer.invoke('store:get-local-save-path'),
   setLocalSavePath: (path: string) => ipcRenderer.invoke('store:set-local-save-path', { path }),
+  readJsonText: (filePath: string) => ipcRenderer.invoke('fs:read-json-text', { filePath }),
+  writeJsonText: (filePath: string, content: string, backupIntervalOrSkip?: boolean | number) => ipcRenderer.invoke('fs:write-json-text', { filePath, content, skipBackup: typeof backupIntervalOrSkip === 'boolean' ? backupIntervalOrSkip : undefined, backupInterval: typeof backupIntervalOrSkip === 'number' ? backupIntervalOrSkip : undefined }),
+  listBackups: (filePath: string) => ipcRenderer.invoke('fs:list-backups', { filePath }),
+  checkBackupHasData: (backupPath: string) => ipcRenderer.invoke('fs:check-backup-has-data', { backupPath }),
+  restoreFromBackup: (backupPath: string, targetPath: string) => ipcRenderer.invoke('fs:restore-from-backup', { backupPath, targetPath }),
+  deleteBackup: (backupPath: string) => ipcRenderer.invoke('fs:delete-backup', { backupPath }),
+  saveZipBuffer: (filePath: string, buffer: ArrayBuffer) => ipcRenderer.invoke('fs:save-zip-buffer', { filePath, buffer }),
+  getDesktopPath: () => ipcRenderer.invoke('fs:get-desktop-path'),
   onUpdateStatus: (callback: (status: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...args)
     ipcRenderer.on('update:status', handler)

@@ -22,5 +22,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteBackup: (backupPath) => ipcRenderer.invoke('fs:delete-backup', { backupPath }),
   saveZipBuffer: (filePath, buffer) => ipcRenderer.invoke('fs:save-zip-buffer', { filePath, buffer }),
   getDesktopPath: () => ipcRenderer.invoke('fs:get-desktop-path'),
+  onUpdateStatus: (callback) => {
+    const handler = (_event, ...args) => callback(...args)
+    ipcRenderer.on('update:status', handler)
+    return () => ipcRenderer.removeListener('update:status', handler)
+  },
+  checkForUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
   isElectron: true,
 })
