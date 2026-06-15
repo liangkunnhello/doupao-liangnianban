@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "0.6.3",
+  "version": "0.6.4",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -75,20 +75,20 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "public/pwa-icon.png",
+      "icon": "public/app-icon.png",
       "signAndEditExecutable": false
     },
     "mac": {
       "target": [
         "dmg"
       ],
-      "icon": "public/pwa-icon.png"
+      "icon": "public/app-icon.png"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "icon": "public/pwa-icon.png"
+      "icon": "public/app-icon.png"
     },
     "nsis": {
       "oneClick": false,
