@@ -1,759 +1,725 @@
-# GPT Image Playground（豆泡）— Code Wiki
+# GPT Image Playground Code Wiki
 
-> 结构化项目文档，基于源码分析生成，涵盖架构、模块、类型、关键函数与运行方式。
-> 反映截至 **v0.6.8** 的代码结构。
-
----
+> 基于仓库源码生成的结构化项目说明。当前分析版本：`package.json` 中的 `0.6.12`。  
+> 目标读者：准备维护、二次开发、排查问题或接入新图像服务商的开发者。
 
 ## 目录
 
-1. [项目整体架构](#1-项目整体架构)
-2. [主要模块职责](#2-主要模块职责)
-3. [关键类型定义](#3-关键类型定义)
-4. [关键函数与业务逻辑](#4-关键函数与业务逻辑)
-5. [依赖关系](#5-依赖关系)
-6. [项目运行方式](#6-项目运行方式)
-7. [关键设计决策与约束](#7-关键设计决策与约束)
-8. [文件索引](#8-文件索引)
+1. [项目定位](#1-项目定位)
+2. [整体架构](#2-整体架构)
+3. [目录结构](#3-目录结构)
+4. [主要模块职责](#4-主要模块职责)
+5. [关键类型](#5-关键类型)
+6. [关键函数与业务流程](#6-关键函数与业务流程)
+7. [依赖关系](#7-依赖关系)
+8. [数据存储与持久化](#8-数据存储与持久化)
+9. [项目运行方式](#9-项目运行方式)
+10. [测试与质量保障](#10-测试与质量保障)
+11. [优缺点评述](#11-优缺点评述)
+12. [维护建议](#12-维护建议)
 
 ---
 
-## 1. 项目整体架构
+## 1. 项目定位
 
-### 1.1 项目定位
+GPT Image Playground 是一个面向 AI 图像生成与编辑的 React + TypeScript 应用，同时支持浏览器/PWA 运行和 Electron 桌面端运行。项目核心能力包括：
 
-GPT Image Playground（应用名 **DOUPAO Image** / **豆泡**）是一个 **AI 图像生成桌面客户端**，同时也可作为 PWA 在浏览器中运行。它提供两种工作模式：
+- 文本生图、参考图生图、遮罩编辑。
+- OpenAI 兼容接口、Responses API、fal.ai 以及声明式自定义 HTTP 图像服务商。
+- 画廊式任务管理、收藏夹、工作区标签页、批量下载。
+- Agent 多轮对话生图，支持图片引用、批量图像工具、继续生成和可选 Web Search。
+- 浏览器 IndexedDB 本地存储，Electron 下补充本地文件保存、备份、自动更新。
 
-- **画廊模式（gallery）**：经典任务式生图，输入提示词 + 参考图 + 参数，并发生成、查看、收藏、编辑。
-- **Agent 模式（agent）**：多轮对话式生图，模型可自主调用图像工具（单图 / 批量 / 续轮 / 联网搜索）。
-
-支持多种图像服务商：**OpenAI 兼容接口**（`images` / `responses` 两种 API 模式）、**fal.ai**、以及用户自定义的 **HTTP 图像服务商**（支持同步与异步轮询）。
-
-### 1.2 技术栈
-
-| 层级 | 技术 | 版本 |
-|------|------|------|
-| 桌面壳 | Electron（ESM 主进程 + CJS preload） | ^33 |
-| 自动更新 | electron-updater（GitHub Releases） | ^6.8 |
-| 前端框架 | React + TypeScript | 19.1 / 5.8 |
-| 构建工具 | Vite + vite-plugin-electron | 6.3 / 0.28 |
-| 状态管理 | Zustand（持久化到 Electron `userData` / localStorage） | ^5.0 |
-| 样式方案 | Tailwind CSS（经 PostCSS 引入） | ^3.4 |
-| 数据存储 | 原生 IndexedDB（前端）+ Electron 文件系统（本地） | — |
-| 压缩/解压 | fflate（ZIP 导入/导出、备份） | ^0.8 |
-| Markdown | react-markdown + remark-gfm + streamdown | 10.1 / 4 / 2.5 |
-| 图像服务商 SDK | @fal-ai/client | ^1.10 |
-| 测试 | Vitest | ^4.1 |
-| 桌面打包 | electron-builder | ^25 |
-
-> 注：图标使用项目内自绘 SVG（`src/components/icons.tsx`），**不依赖** lucide-react；IndexedDB 使用**原生 API**（`src/lib/db.ts`），**不依赖** Dexie。
-
-### 1.3 目录结构
-
-```
-gpt_image_playground-main/
-├── electron/
-│   ├── main.ts              # Electron 主进程入口（窗口、自动更新）
-│   ├── preload.ts           # 预加载脚本源（构建为 CJS preload.cjs）
-│   ├── preload.cjs          # 构建产物（被 preload.ts 覆盖）
-│   ├── ipc-handlers.ts      # IPC 处理器（文件系统、本地保存、备份）
-│   └── tsconfig.json
-├── public/                  # 静态资源（app-icon、PWA manifest、sw.js）
-├── prompts/                 # 提示词样本文本（运行时生成的缓存文件）
-├── scripts/
-│   └── mock-image-api.mjs   # 本地 mock 图像 API（开发调试）
-├── src/
-│   ├── main.tsx             # React 渲染入口（含 SW 注册、移动端视口修正）
-│   ├── App.tsx              # 根组件（模式路由、初始化、备份策略）
-│   ├── store.ts             # Zustand store（≈6000 行，核心状态与业务逻辑）
-│   ├── types.ts             # 全局 TypeScript 类型定义
-│   ├── index.css            # 全局样式 + Tailwind 指令
-│   ├── components/          # React 组件（≈30 个）
-│   ├── hooks/               # 自定义 Hooks（7 个）
-│   └── lib/                 # 工具库与业务逻辑（≈30 个模块）
-├── index.html               # HTML 入口
-├── package.json
-├── vite.config.ts           # Vite 配置（Electron 插件 + dev proxy）
-├── tsconfig.json
-├── tailwind.config.js
-├── postcss.config.js
-└── start.bat                # Windows 一键启动脚本
-```
-
-### 1.4 构建配置要点
-
-`vite.config.ts` 的关键设计：
-
-- **双入口 Electron 构建**：`electron/main.ts`（主进程）与 `electron/preload.ts`（preload，强制 CJS 输出 `dist-electron/electron/preload.cjs`）分别构建。
-- **dev proxy**：开发时读取 `dev-proxy.config.json`（可选），通过 `normalizeDevProxyConfig` 规范化后注入 `server.proxy`，并以 `__DEV_PROXY_CONFIG__` 全局常量传给前端，用于运行时 `buildApiUrl` 的 `api-proxy` 前缀拼接。
-- **版本注入**：`__APP_VERSION__` 来自 `package.json`，供「关于」页展示。
-- **base: './'**：相对路径，便于 Electron `loadFile` 与 PWA 部署。
-
-`package.json` 的 `build` 段（electron-builder）：
-
-- 发布到 GitHub（`owner: nideyilian / repo: doupao`）。
-- Windows：`nsis`（可选安装目录）+ `portable`，x64。
-- macOS：`dmg`；Linux：`AppImage`。
+项目实际是一个“前端重状态应用”：业务状态、任务生命周期、缓存、导入导出、Agent 流程大多集中在 `src/store.ts`，底层服务商调用和数据存储被拆到 `src/lib/`。
 
 ---
 
-## 2. 主要模块职责
+## 2. 整体架构
 
-### 2.1 Electron 主进程（`electron/main.ts`）
+### 2.1 分层视图
 
-- 创建 `BrowserWindow`：`1400×900`、`minWidth 800 / minHeight 600`、`autoHideMenuBar`、`webSecurity: false`、`contextIsolation: true`、`nodeIntegration: false`、`sandbox: false`、`devTools: false`。
-- 配置 **electron-updater**：`autoDownload: true`、`autoInstallOnAppQuit: true`、`allowPrerelease: true`（规避 GitHub `latest.yml` 的 406），FeedURL 指向 `nideyilian/doupao`。
-- 将 updater 的全部生命周期事件（checking / available / downloading / downloaded / error）转发为渲染进程的 `update:status` IPC 消息，并把技术错误**翻译为中文友好提示**。
-- 在 `app.whenReady` 中调用 `initLocalSavePath()` 与 `registerIpcHandlers()`，注册 `update:check / update:download / update:install / app:get-version` 四个 `ipcMain.handle`，生产环境下延迟 5s 自动检查更新。
+```text
+用户界面
+  App.tsx
+  components/*
+  hooks/*
 
-### 2.2 Preload 脚本（`electron/preload.ts`）
+全局状态与业务编排
+  store.ts
 
-通过 `contextBridge.exposeInMainWorld('electronAPI', {...})` 向渲染进程暴露**安全、受限**的 IPC 接口（不暴露 `require` / `fs`）。暴露的接口包括：
+业务能力库
+  lib/api.ts
+  lib/openaiCompatibleImageApi.ts
+  lib/falAiImageApi.ts
+  lib/agentApi.ts
+  lib/apiProfiles.ts
+  lib/db.ts
+  lib/localSave.ts
+  lib/size.ts
+  lib/mask*.ts
+  lib/prompt*.ts
 
-| 分组 | 方法 |
-|------|------|
-| 文件系统 | `saveImage`、`saveJson`、`saveText`、`ensureDir`、`pathJoin`、`checkExists`、`readDir`、`readFileBuffer`、`openInExplorer`、`selectDirectory`、`getDefaultPath`、`getDesktopPath` |
-| 本地保存 | `getLocalSavePath`、`setLocalSavePath` |
-| 数据/备份 | `readJsonText`、`writeJsonText`、`listBackups`、`checkBackupHasData`、`restoreFromBackup`、`deleteBackup`、`saveZipBuffer` |
-| 自动更新 | `onUpdateStatus`（监听）、`checkForUpdate`、`downloadUpdate`、`installUpdate`、`getAppVersion` |
-| 标志 | `isElectron: true` |
+运行平台
+  Browser / PWA
+  Electron main + preload + IPC
 
-### 2.3 IPC 处理器（`electron/ipc-handlers.ts`）
+外部服务
+  OpenAI-compatible Images API
+  OpenAI-compatible Responses API
+  fal.ai
+  custom HTTP image providers
+```
 
-`registerIpcHandlers()` 注册约 20 个 `ipcMain.handle`：
+### 2.2 典型数据流
 
-- **文件读写**：`fs:save-image`（data URL → Buffer）、`fs:save-json`、`fs:save-text`、`fs:read-file-buffer`、`fs:read-dir`、`fs:check-exists`、`fs:ensure-dir`、`fs:path-join`、`fs:open-in-explorer`（`shell.showItemInFolder`）、`fs:select-directory`（系统对话框）。
-- **本地保存路径**：`store:get-local-save-path` / `store:set-local-save-path`，持久化在 `userData/local-settings.json`，默认 `userData/local-saves`。
-- **带备份的 JSON 写入** `fs:write-json-text`：
-  - 写入前先 `.bak` 快照，再写 `.tmp` 后 `rename`（原子写）。
-  - 按 `backupInterval`（分钟）节流地把旧文件复制到 `backups/` 目录，文件名带时间戳。
-  - 仅保留最近 **30** 个备份（旧的清空内容）。
-- **备份管理**：`fs:list-backups`、`fs:check-backup-has-data`（解析 JSON 判断 `tasks` / `agentConversations` 是否非空）、`fs:restore-from-backup`、`fs:delete-backup`。
-- **ZIP 导出**：`fs:save-zip-buffer`（ArrayBuffer → 文件）。
+```text
+用户输入 prompt / 参数 / 参考图
+  -> InputBar / AgentWorkspace
+  -> store action: submitTask 或 submitAgentMessage
+  -> lib/api.ts 或 lib/agentApi.ts
+  -> openaiCompatibleImageApi / falAiImageApi / custom provider
+  -> API 返回图片、实际参数、修订提示词或队列任务 ID
+  -> store 写入 TaskRecord / AgentConversation
+  -> lib/db.ts 写 IndexedDB
+  -> Electron 环境下 localSave.ts -> preload -> IPC -> 文件系统
+  -> TaskGrid / DetailModal / Lightbox 等组件刷新展示
+```
 
-### 2.4 状态管理（`src/store.ts`）
+### 2.3 双运行时
 
-Zustand store（`create<AppState>()`）是应用的**核心**，约 **5966 行**，职责：
+- 浏览器端：Vite 构建静态前端，IndexedDB 存储任务、图片、缩略图和 Agent 对话，生产环境注册 PWA service worker。
+- Electron 端：`electron/main.ts` 创建窗口、配置自动更新；`electron/preload.ts` 通过 `contextBridge` 暴露有限 IPC；`electron/ipc-handlers.ts` 负责本地文件读写、备份和目录选择。
 
-- **生命周期**：`initStore()` 从 IndexedDB 加载 tasks / agentConversations，合并旧版数据，标记中断任务，调度 fal/custom 任务恢复，分配画廊任务到默认标签页。
-- **任务执行**：画廊生图（含并发、重试、文件夹批量、流式中间图）、任务重试/删除、本地保存（图片/元数据/提示词）。
-- **图片缓存**：内存 LRU 缓存（`MAX_IMAGE_CACHE_ENTRIES=8`、`MAX_THUMBNAIL_CACHE_ENTRIES=80`）、缩略图回填（并发上限 4）、IndexedDB 持久化。
-- **Agent 对话**：多轮对话、流式响应、工具调用循环（`agentRoundControllers` 用 `AbortController` 支持停止）、标题自动生成。
-- **配置/设置**：`AppSettings` 规范化与持久化、多 API Profile、Provider 草稿（`providerDrafts`）。
-- **收藏夹 / 词库 / 工作区标签**：多对多收藏关系、词条分组与随机渲染、可分组的多标签页。
-- **导入/导出**：ZIP 备份与恢复（`exportData` / `importData` / `exportDataToPath`）。
-- **UI 状态**：详情弹窗、灯箱、设置弹窗、Toast、确认对话框、各种侧栏开关。
+---
 
-### 2.5 渲染入口与根组件
+## 3. 目录结构
 
-**`src/main.tsx`**：
+```text
+.
+|-- electron/
+|   |-- main.ts              # Electron 主进程：窗口、自动更新、主 IPC 注册
+|   |-- preload.ts           # 安全暴露 window.electronAPI
+|   |-- preload.cjs          # 构建/运行使用的 CJS preload 产物
+|   `-- ipc-handlers.ts      # 文件系统、本地保存、备份 IPC
+|-- public/
+|   |-- manifest.webmanifest # PWA manifest
+|   |-- sw.js                # service worker
+|   `-- app-icon.png
+|-- scripts/
+|   `-- mock-image-api.mjs   # 本地 mock 图像 API
+|-- src/
+|   |-- main.tsx             # React 入口，注册/注销 service worker
+|   |-- App.tsx              # 根组件，初始化设置和 store，挂载主要区域和弹窗
+|   |-- store.ts             # Zustand store，核心业务逻辑
+|   |-- types.ts             # 全局类型定义
+|   |-- index.css            # Tailwind 和全局样式
+|   |-- components/          # UI 组件
+|   |-- hooks/               # 自定义 React Hooks
+|   `-- lib/                 # API、存储、图片处理、参数处理等工具模块
+|-- docs/                    # 辅助文档
+|-- images/                  # 本地保存/示例生成图片
+|-- prompts/                 # 本地保存的提示词
+|-- tasks/                   # 本地保存的任务 JSON
+|-- package.json
+|-- vite.config.ts
+|-- tsconfig.json
+|-- tailwind.config.js
+`-- start.bat
+```
 
-- 引入 `core-js/actual/array/at`（兼容旧环境）、`streamdown/styles.css`、`index.css`。
-- 调用 `installMobileViewportGuards()`（移动端视口修正）。
-- 生产环境注册 `sw.js`（PWA 离线缓存），开发环境主动注销已注册的 SW。
-- `createRoot(...).render(<StrictMode><App /></StrictMode>)`。
+---
 
-**`src/App.tsx`**：
+## 4. 主要模块职责
 
-- 初始化序列（`useEffect`，含 StrictMode 重复执行保护）：
-  1. 从 URL query 读取并应用设置（`buildSettingsFromUrlParams`），处理后清除 query。
-  2. 若存在自定义服务商配置 URL，异步拉取并合并（`loadCustomProviderSettingsFromUrl` + `mergeImportedSettings`）。
-  3. 调用 `initStore()`（仅一次，用 `window.__storeInitialized` 守卫）。
-  4. **备份策略**：Electron 环境下，若数据为空且未提醒过，扫描备份列表；发现可用备份则提示恢复，否则提示「备份到桌面」。
-  5. **每周自动备份**：距上次自动备份 ≥ 7 天时，把 ZIP 备份到桌面。
-- 全局阻止页面图片被拖拽。
-- 布局：`WorkspaceTabBar`（顶/侧标签）+ `Header` + 模式区（`AgentWorkspace` 或 `SearchBar`+`TaskGrid`/`FavoriteCollectionsView`）+ `InputBar` + 一组 **懒加载** 的弹窗/侧栏（`DetailModal`、`Lightbox`、`SettingsModal`、`MaskEditorModal` 等，用 `React.lazy` 包裹）。
+### 4.1 入口与应用壳
 
-### 2.6 核心组件（`src/components/`）
+| 文件 | 职责 |
+| --- | --- |
+| `src/main.tsx` | 安装移动端 viewport 修正；生产环境注册 `sw.js`；开发环境注销旧 service worker；挂载 React 根组件。 |
+| `src/App.tsx` | 应用初始化、URL 参数导入、远程自定义服务商配置导入、store 初始化、防 StrictMode 重复初始化、Electron 首次备份提醒和每周备份；按 `appMode` 切换画廊/Agent 视图。 |
+| `vite.config.ts` | 配置 React、Electron 主进程和 preload 构建；注入 `__APP_VERSION__` 和 `__DEV_PROXY_CONFIG__`；开发期按 `dev-proxy.config.json` 启用代理。 |
 
-| 组件 | 行数 | 职责 |
-|------|------|------|
-| `InputBar.tsx` | 2595 | 输入区：提示词编辑、参考图管理、参数（尺寸/质量/格式/并发/重试）、遮罩编辑入口、提交；支持文件夹批量、词条变量 |
-| `SettingsModal.tsx` | 2843 | 设置弹窗（多 Tab：通用 / Agent / API 配置 / 数据 / 备份 / 关于） |
-| `FavoriteCollections.tsx` | 1303 | 收藏夹视图、收藏选择器、收藏夹管理弹窗（3 个导出组件） |
-| `AgentWorkspace.tsx` | 1192 | Agent 模式工作区：对话流、轮次编辑、工具调用结果、引用/输出资源面板 |
-| `DetailModal.tsx` | 1067 | 任务详情：大图、实际参数、错误、批量状态、重新生成 |
-| `MaskEditorModal.tsx` | 919 | Canvas 手绘遮罩编辑器（笔刷大小、橡皮、覆盖率校验） |
-| `TaskCard.tsx` | 763 | 单个任务卡片：缩略图、状态徽标、选择、收藏、流式预览 |
-| `WordLibrarySidebar.tsx` | 731 | 右侧词库侧栏（分组、词条增删、变量编辑、随机预览） |
-| `WorkspaceTabBar.tsx` | 620 | 工作区标签栏（新建/重命名/分组/折叠/拖拽） |
-| `Lightbox.tsx` | 599 | 全屏图片预览（键盘导航、对比、下载） |
-| `Select.tsx` | 388 | 自定义下拉选择组件 |
-| `SizePickerModal.tsx` | 365 | 尺寸选择（推荐集 + 自定义 + 比例计算） |
-| `WorkspaceTabManagerModal.tsx` | 359 | 标签管理弹窗 |
-| `TaskGrid.tsx` | 313 | 任务网格（虚拟滚动、筛选、多选、拖选） |
-| `HistoryModal.tsx` | 300 | 历史记录弹窗 |
-| `RandomPromptModal.tsx` | 284 | 随机提示词生成器（基于词库） |
-| `Header.tsx` | 254 | 顶部栏（模式切换、设置、更新状态） |
-| `ImageContextMenu.tsx` | 223 | 图片右键菜单（下载、复制、收藏、设为参考图） |
-| `MarkdownRenderer.tsx` | 184 | Markdown 渲染（react-markdown + GFM + 安全清洗） |
-| `icons.tsx` | 185 | 自绘 SVG 图标库 |
-| `HelpModal.tsx` | 180 | 帮助弹窗 |
-| `ConfirmDialog.tsx` | 156 | 通用确认对话框（支持多按钮、复选框、危险/警告色调） |
-| `VarEntryEditor.tsx` | 126 | 词条变量编辑器 |
-| `ViewportTooltip.tsx` | 111 | 悬浮提示 |
-| `SearchBar.tsx` | 96 | 搜索栏（关键词、状态筛选、收藏筛选） |
-| `PromptInputDialog.tsx` | 83 | 提示输入弹窗 |
-| `SupportPromptModal.tsx` | 85 | 支持/赞助弹窗（任务量达阈值时提示） |
-| `Toast.tsx` | 41 | 全局 Toast |
-| `ErrorBoundary.tsx` | 47 | React 错误边界 |
-| `Checkbox.tsx` | 29 | 复选框 |
-| `WordLibrarySidebarToggle.tsx` | 28 | 词库侧栏开关按钮 |
+### 4.2 状态中心
 
-### 2.7 自定义 Hooks（`src/hooks/`）
+`src/store.ts` 是项目中最大的文件，也是业务核心。它使用 Zustand + persist 管理：
+
+- 应用设置、API profiles、自定义服务商。
+- 工作区标签页、输入草稿、参数、遮罩草稿。
+- 画廊任务 `TaskRecord` 的创建、执行、重试、删除、收藏、清理。
+- 图片内存 LRU 缓存和缩略图回填。
+- IndexedDB 读写和迁移。
+- fal.ai / 自定义异步任务恢复。
+- Agent 对话、分支、轮次、工具调用和停止控制。
+- ZIP 导入导出、Electron 本地保存。
+- UI 弹窗、Toast、上下文菜单、收藏夹、词库等状态。
+
+重要导出包括：
+
+| 导出 | 说明 |
+| --- | --- |
+| `useStore` | 全局 Zustand store。 |
+| `initStore()` | 启动时从 IndexedDB 加载任务和 Agent 对话，恢复可恢复任务，执行状态迁移。 |
+| `submitTask()` / `submitTaskWithData()` | 画廊模式提交图像任务。 |
+| `submitAgentMessage()` | Agent 模式提交多轮对话请求。 |
+| `retryTask()` / `reuseConfig()` / `editOutputs()` | 任务重试、复用配置、输出图编辑。 |
+| `removeTask()` / `removeMultipleTasks()` / `clearData()` | 删除和清理数据。 |
+| `exportData()` / `exportDataToPath()` / `importData()` | ZIP 备份导出与导入。 |
+| `ensureImageCached()` / `ensureImageThumbnailCached()` | 图片和缩略图缓存读取。 |
+| `markInterruptedOpenAIRunningTasks()` | 启动时把遗留的 OpenAI running 任务标记为中断错误。 |
+
+### 4.3 API 与服务商适配
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/lib/api.ts` | 统一分发入口 `callImageApi`：按 active profile 分派到 fal.ai 或 OpenAI 兼容适配器。 |
+| `src/lib/openaiCompatibleImageApi.ts` | OpenAI 兼容 Images/Responses API 调用；自定义 HTTP provider submit/edit/poll 映射；流式部分图处理；自定义异步任务恢复。 |
+| `src/lib/falAiImageApi.ts` | fal.ai 队列提交、结果读取、错误解析和恢复查询。 |
+| `src/lib/imageApiShared.ts` | API 公共类型、图片 URL 转 data URL、错误解析、实际参数提取、并发与重试工具。 |
+| `src/lib/apiProfiles.ts` | API profile 默认值、规范化、校验、provider 切换、导入合并、自定义服务商 manifest 兼容。 |
+| `src/lib/devProxy.ts` | 同源 `/api-proxy/` 代理配置规范化与请求 URL 构造。 |
+
+核心分发逻辑：
+
+```ts
+export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
+  const profile = getActiveApiProfile(opts.settings)
+  if (profile.provider === 'fal') return callFalAiImageApi(opts, profile)
+  return callOpenAICompatibleImageApi(
+    opts,
+    profile,
+    getCustomProviderDefinition(opts.settings, profile.provider),
+  )
+}
+```
+
+### 4.4 Agent 模式
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/components/AgentWorkspace.tsx` | Agent 对话界面、轮次编辑、工具结果展示、引用图片和输出资源面板。 |
+| `src/lib/agentApi.ts` | 构造 Responses API 消息和工具；解析流式输出；实现 `generate_image_batch` 等自定义工具调用。 |
+| `src/lib/agentImageReferences.ts` | Agent 轮次图片引用 ID、`<ref>` 标签、引用解析和替换。 |
+| `src/lib/agentWebSearch.ts` | 从 Responses 输出中收集 Web Search 调用状态。 |
+| `src/store.ts` | Agent 对话树、分支、重发、重新生成、停止、任务同步到画廊。 |
+
+Agent 的关键设计是“对话轮次 + 画廊任务”双写：模型生成出的图片会作为 `TaskRecord` 进入画廊，同时也挂到对应 `AgentRound.outputTaskIds` 上。这样 Agent 输出既能保留对话上下文，也能复用画廊的预览、下载、收藏和本地保存能力。
+
+### 4.5 数据存储
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/lib/db.ts` | 原生 IndexedDB 封装；object stores 包括 `tasks`、`images`、`thumbnails`、`agentConversations`。 |
+| `src/lib/localSave.ts` | 渲染进程侧 Electron 文件能力封装，调用 `window.electronAPI`。 |
+| `electron/ipc-handlers.ts` | 主进程实际文件读写、备份、ZIP 保存、目录选择。 |
+
+图片存储使用 SHA-256 data URL hash 作为 ID，减少重复图片占用。缩略图单独存储，并带 `thumbnailVersion`，用于后续缩略图策略升级。
+
+### 4.6 图片、遮罩与尺寸
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/lib/canvasImage.ts` | 加载图片、读取尺寸、data URL 转 Blob、遮罩预览合成、遮罩与目标图尺寸校验。 |
+| `src/lib/mask.ts` | 遮罩目标校验、遮罩 alpha 覆盖率分类、空/全遮罩防护。 |
+| `src/lib/maskPreprocess.ts` | 遮罩编辑目标图预处理，限制工作区尺寸并规整到 16 的倍数。 |
+| `src/lib/size.ts` | 预设尺寸、比例解析、尺寸规范化、1K/2K/4K 目标尺寸计算。 |
+
+### 4.7 提示词与词库
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/lib/promptGenerator.ts` | 词库变量渲染、随机抽取、可复现随机种子、词条规范化。 |
+| `src/lib/promptImageMentions.ts` | 输入框中的 `@选中图片n` 等图片引用插入、识别、重排和 API 替换。 |
+| `src/components/WordLibrarySidebar.tsx` | 词库分组、词条编辑、变量预览和随机提示词辅助。 |
+| `src/components/RandomPromptModal.tsx` | 基于词库的随机提示词生成。 |
+
+### 4.8 UI 组件
+
+组件按功能划分较清晰，但部分组件体量很大：
+
+| 组件 | 行数约 | 职责 |
+| --- | ---: | --- |
+| `InputBar.tsx` | 2818 | 主输入区：prompt、参考图、文件夹批量、参数、遮罩入口、提交。 |
+| `SettingsModal.tsx` | 3019 | 多页设置：通用、Agent、API 配置、数据、备份、关于。 |
+| `FavoriteCollections.tsx` | 1421 | 收藏夹视图、选择器、管理弹窗。 |
+| `AgentWorkspace.tsx` | 1306 | Agent 模式主工作区。 |
+| `DetailModal.tsx` | 1101 | 任务详情、实际参数、错误、重试与输出操作。 |
+| `MaskEditorModal.tsx` | 1033 | Canvas 遮罩编辑器。 |
+| `TaskCard.tsx` | 798 | 任务卡片、状态、缩略图、收藏和选择。 |
+| `TaskGrid.tsx` | 347 | 任务瀑布流/网格、筛选、多选和拖选。 |
+| `Lightbox.tsx` | 675 | 大图预览、切换、下载。 |
+| `WorkspaceTabBar.tsx` | 664 | 多工作区标签与分组。 |
+
+### 4.9 Hooks
 
 | Hook | 职责 |
-|------|------|
-| `useAutoUpdate.ts` | 封装 `electronAPI.onUpdateStatus`，返回更新状态机（idle/checking/available/downloading/downloaded/error）与 check/download/install/reset |
-| `useVersionCheck.ts` | 版本检查（非 Electron 环境下的 Web 版本检测） |
-| `useCloseOnEscape.ts` | 按 ESC 关闭弹窗 |
-| `useDragSelect.ts` | 任务网格拖拽多选 |
-| `useTooltip.ts` / `useHintTooltip.ts` | 悬浮提示与首次使用引导提示 |
-| `usePreventBackgroundScroll.ts` | 弹窗打开时禁止背景滚动 |
+| --- | --- |
+| `useAutoUpdate` | 封装 Electron 自动更新状态、检查、下载、安装。 |
+| `useVersionCheck` | Web 环境版本检查。 |
+| `useDragSelect` | 任务网格拖拽框选。 |
+| `useTooltip` / `useHintTooltip` | 悬浮提示和引导提示。 |
+| `useCloseOnEscape` | ESC 关闭弹窗。 |
+| `usePreventBackgroundScroll` | 弹窗打开时阻止背景滚动。 |
 
-### 2.8 工具库概览（`src/lib/`）
+### 4.10 Electron 层
 
-| 模块 | 行数 | 职责 |
-|------|------|------|
-| `api.ts` | 11 | **API 统一分发入口** `callImageApi` |
-| `apiProfiles.ts` | 782 | 设置/Profile 规范化、自定义服务商定义、导入合并、默认值 |
-| `openaiCompatibleImageApi.ts` | 865 | OpenAI 兼容（images/responses）+ 自定义 HTTP 服务商调用 |
-| `falAiImageApi.ts` | 201 | fal.ai 调用（队列模式 + 恢复） |
-| `imageApiShared.ts` | 213 | API 共享：类型、MIME、尺寸、错误、并发重试、URL→dataURL |
-| `agentApi.ts` | 812 | Agent 工具定义、流式解析、批量图像工具 |
-| `agentImageReferences.ts` | 70 | Agent 对话中的 `<ref>` 图片引用解析与替换 |
-| `agentWebSearch.ts` | 61 | Agent 联网搜索工具 |
-| `db.ts` | 329 | IndexedDB 封装（tasks/images/thumbnails/agentConversations） |
-| `localSave.ts` | 288 | 本地文件系统保存（封装 `electronAPI`） |
-| `promptGenerator.ts` | 135 | 词库渲染、带种子的随机变量抽取 |
-| `promptImageMentions.ts` | 158 | 提示词中 `@选中图片n` 等引用的解析与替换 |
-| `mask.ts` / `maskPreprocess.ts` | 28 / 104 | 遮罩覆盖率校验、遮罩预处理 |
-| `canvasImage.ts` | 97 | Canvas 图片/遮罩合成、Blob 转换 |
-| `size.ts` | 229 | 尺寸规范化、比例计算、推荐尺寸集 |
-| `devProxy.ts` | 86 | dev proxy 配置与 `buildApiUrl` |
-| `downloadImages.ts` | 118 | 批量打包下载（ZIP） |
-| `urlSettings.ts` | 111 | URL query 参数化的设置导入 |
-| `customProviderConfigUrl.ts` | 46 | 从 URL 导入自定义服务商配置 |
-| `paramCompatibility.ts` | 41 | 参数兼容性（codexCli 等历史模式） |
-| `paramDisplay.tsx` | 107 | 参数展示格式化 |
-| `browserNotification.ts` | 55 | 任务完成浏览器通知 |
-| `clipboard.ts` | 113 | 复制到剪贴板 |
-| `viewport.ts` / `viewportTransform.ts` | 17 / 95 | 移动端视口修正与变换 |
-| `dropdown.ts` / `domRect.ts` / `tooltipDismiss.ts` / `clickSuppression.ts` | 小 | UI 交互辅助 |
-| `runtimeEnv.ts` | 3 | 运行时环境变量读取（`VITE_*`） |
-| `taskPromptDisplay.ts` | 5 | 任务提示词展示辅助 |
+| 文件 | 职责 |
+| --- | --- |
+| `electron/main.ts` | 创建 `BrowserWindow`；设置 `contextIsolation: true`、`nodeIntegration: false`、`webSecurity: false`；注册自动更新事件；生产环境 5 秒后自动检查更新。 |
+| `electron/preload.ts` | 暴露 `window.electronAPI`，包括文件保存、目录选择、备份、自动更新和版本读取。 |
+| `electron/ipc-handlers.ts` | 注册 `fs:*`、`store:*` IPC handler，执行主进程文件系统操作。 |
+
+preload 暴露的主要能力：
+
+- 文件系统：`saveImage`、`saveJson`、`saveText`、`ensureDir`、`pathJoin`、`readDir`、`readFileBuffer`、`openInExplorer`。
+- 本地路径：`getLocalSavePath`、`setLocalSavePath`、`getDefaultPath`、`getDesktopPath`。
+- 备份：`readJsonText`、`writeJsonText`、`listBackups`、`checkBackupHasData`、`restoreFromBackup`、`deleteBackup`、`saveZipBuffer`。
+- 更新：`onUpdateStatus`、`checkForUpdate`、`downloadUpdate`、`installUpdate`、`getAppVersion`。
 
 ---
 
-## 3. 关键类型定义
+## 5. 关键类型
 
-所有核心类型集中在 `src/types.ts`。
+关键类型集中在 `src/types.ts`。
 
-### 3.1 模式与枚举
+### 5.1 配置类型
 
-```typescript
-export type ApiMode = 'images' | 'responses'        // 两种 OpenAI 兼容 API 形态
-export type AppMode = 'gallery' | 'agent'           // 应用两种工作模式
-export type BuiltInApiProvider = 'openai' | 'fal'
-export type ApiProvider = BuiltInApiProvider | string // string = 自定义服务商 id
-export type TaskStatus = 'running' | 'done' | 'error'
-export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
+| 类型 | 说明 |
+| --- | --- |
+| `ApiMode` | `'images' | 'responses'`，区分经典 Images API 和 Responses API。 |
+| `AppMode` | `'gallery' | 'agent'`，区分画廊模式和 Agent 模式。 |
+| `ApiProfile` | 单个 API 配置，包括 provider、baseUrl、apiKey、model、timeout、apiMode、代理、流式、并发和重试参数。 |
+| `AppSettings` | 应用全局设置，包括旧版单配置字段、多 profile、自定义 providers、偏好设置、Agent 设置、备份设置。 |
+| `CustomProviderDefinition` | 声明式自定义 HTTP 图像服务商 manifest。 |
 
-export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
-export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
-export const DEFAULT_ZIP_DOWNLOAD_ROUTES = ['task-selection', 'favorite-collection-selection']
-```
+### 5.2 任务类型
 
-### 3.2 任务参数 `TaskParams`
+| 类型 | 说明 |
+| --- | --- |
+| `TaskParams` | 图像参数：`size`、`quality`、`output_format`、`output_compression`、`moderation`、`n`。 |
+| `TaskRecord` | 画廊任务记录，包含请求参数、实际参数、输入图、遮罩、输出图、状态、错误、耗时、收藏、Agent 关联等。 |
+| `InputImage` | UI 层输入图，保存 IndexedDB 图片 ID 和预览 data URL。 |
+| `MaskDraft` | 遮罩编辑草稿，记录目标图和遮罩 data URL。 |
+| `FavoriteCollection` | 收藏夹。 |
 
-```typescript
-export interface TaskParams {
-  size: string                     // 如 '1024x1024' 或 'auto'
-  quality: 'auto' | 'low' | 'medium' | 'high'
-  output_format: 'png' | 'jpeg' | 'webp'
-  output_compression: number | null
-  moderation: 'auto' | 'low'
-  n: number                        // 生成数量
-}
-```
+### 5.3 Agent 类型
 
-### 3.3 API 配置 `ApiProfile`
+| 类型 | 说明 |
+| --- | --- |
+| `AgentConversation` | 一段 Agent 对话，包含轮次、消息、当前活动轮次。 |
+| `AgentRound` | 一轮用户输入到助手输出的生成流程，可形成分支树。 |
+| `AgentMessage` | 用户或助手消息，可关联输入图和输出任务。 |
+| `ResponsesOutputItem` | Responses API 输出项，兼容文本、函数调用、函数输出、图像结果和注释。 |
 
-```typescript
-export interface ApiProfile {
-  id: string
-  name: string
-  provider: ApiProvider            // 'openai' | 'fal' | custom id
-  baseUrl: string
-  apiKey: string
-  model: string
-  timeout: number                  // 秒
-  apiMode: ApiMode                 // 'images' | 'responses'
-  codexCli: boolean                // codex CLI 兼容模式（注入 prompt 守卫）
-  apiProxy: boolean                // 是否走 api-proxy
-  responseFormatB64Json?: boolean
-  streamImages?: boolean
-  streamPartialImages?: number
-  maxConcurrent?: number           // 1-999
-  maxRetries?: number              // 0-10
-  providerDrafts?: Partial<Record<ApiProvider, ...>> // 切换 provider 时保留各 provider 的草稿
-}
-```
+### 5.4 存储与导出类型
 
-### 3.4 自定义服务商 `CustomProviderDefinition`
-
-```typescript
-export type CustomProviderTemplate = 'http-image'
-
-export interface CustomProviderDefinition {
-  id: string
-  name: string
-  template?: 'http-image'
-  submit: CustomProviderSubmitMapping      // 生成/提交映射
-  editSubmit?: CustomProviderSubmitMapping // 编辑映射（multipart）
-  poll?: CustomProviderPollMapping         // 异步轮询映射（可选）
-}
-```
-
-- `CustomProviderSubmitMapping`：`path` / `method` / `contentType`(`json`|`multipart`) / `query` / `body`（支持 `$profile.model`、`$prompt`、`$params.size` 等模板变量）/ `files`（`inputImages`|`mask` 映射）/ `taskIdPath`（异步任务 id 路径）/ `result`（`imageUrlPaths` + `b64JsonPaths`）。
-- `CustomProviderPollMapping`：`path`（支持 `{task_id}`）/ `statusPath` / `successValues` / `failureValues` / `errorPath` / `intervalSeconds` / `result`。
-
-### 3.5 应用设置 `AppSettings`
-
-```typescript
-export interface AppSettings {
-  // 旧版单配置字段（向后兼容，实际以 active profile 为准）
-  baseUrl, apiKey, model, timeout, apiMode, codexCli, apiProxy, streamImages, streamPartialImages
-  customProviders: CustomProviderDefinition[]
-  providerOrder?: string[]
-  clearInputAfterSubmit: boolean
-  persistInputOnRestart: boolean
-  reuseTaskApiProfileTemporarily: boolean
-  alwaysShowRetryButton: boolean
-  taskCompletionNotification: boolean
-  enterSubmit: boolean
-  referenceImageEditAction: ReferenceImageEditAction
-  zipDownloadRoutes: ZipDownloadRoute[]
-  agentScrollToBottomAfterSubmit: boolean
-  agentMaxToolRounds: number
-  agentWebSearch: boolean
-  profiles: ApiProfile[]                  // 多 API 配置
-  activeProfileId: string
-  agentProfileId: string | null
-  agentUseCustomProfile: boolean
-  agentProfile: ApiProfile                // Agent 独立配置
-  backupInterval: number
-  customBackupPath: string
-}
-```
-
-### 3.6 任务记录 `TaskRecord`（关键字段）
-
-```typescript
-export interface TaskRecord {
-  id, prompt, params: TaskParams
-  apiProvider?, apiProfileId?, apiProfileName?, apiMode?, apiModel?
-  // 异步恢复
-  falRequestId?, falEndpoint?, falRecoverable?
-  customTaskId?, customRecoverable?
-  // 实际生效参数与改写提示词
-  actualParams?, actualParamsByImage?, revisedPromptByImage?
-  inputImageIds, inputImageFolderPath?, maskTargetImageId?, maskImageId?
-  outputImages, batchItemStatuses?, batchItemErrors?, streamPartialImageIds?
-  rawImageUrls?, rawResponsePayload?
-  status: TaskStatus, error, createdAt, finishedAt?, elapsed?
-  isFavorite?, favoriteCollectionIds?
-  // Agent 关联
-  sourceMode?, agentConversationId?, agentRoundId?, agentMessageId?, agentToolCallId?, agentBatchCallId?, agentToolAction?
-}
-```
-
-### 3.7 Agent 对话模型
-
-```typescript
-export interface AgentMessage { id, role: 'user'|'assistant', content, roundId, inputImageIds?, maskTargetImageId?, maskImageId?, outputTaskIds?, createdAt }
-export interface AgentRound { id, index, parentRoundId?, userMessageId, assistantMessageId?, prompt, inputImageIds, maskTargetImageId?, maskImageId?, outputTaskIds, responseId?, responseOutput?, status, error, createdAt, finishedAt? }
-export interface AgentConversation { id, title, activeRoundId?, createdAt, updatedAt, rounds: AgentRound[], messages: AgentMessage[] }
-```
-
-### 3.8 IndexedDB 存储类型
-
-```typescript
-export interface StoredImage { id, dataUrl, createdAt?, source?: 'upload'|'generated'|'mask', width?, height? }
-export interface StoredImageThumbnail { id, thumbnailDataUrl, width?, height?, thumbnailVersion? }
-```
-
-### 3.9 工作区与导出
-
-```typescript
-export interface WorkspaceTabGroup { id, name, order, collapsed }
-export interface WorkspaceTab { id, name, groupId, prompt, inputImages, inputImageFolder, params, maskDraft, maskEditorImageId, tasks, createdAt, updatedAt, order }
-export interface ExportData { version, exportedAt, settings?, tasks?, favoriteCollections?, ..., agentConversations?, wordLibraryGroups?, wordLibraryEntries?, imageFiles?, thumbnailFiles? }
-```
+| 类型 | 说明 |
+| --- | --- |
+| `StoredImage` | IndexedDB 中的原图记录。 |
+| `StoredImageThumbnail` | IndexedDB 中的缩略图记录。 |
+| `ExportData` | ZIP 备份里的 `manifest.json` 结构。 |
+| `WorkspaceTab` / `WorkspaceTabGroup` | 多工作区标签页和分组。 |
+| `WordLibraryGroup` / `WordLibraryEntry` | 词库分组与词条。 |
 
 ---
 
-## 4. 关键函数与业务逻辑
+## 6. 关键函数与业务流程
 
-### 4.1 API 调用层（`src/lib/api.ts` + 实现）
+### 6.1 应用初始化
 
-#### `callImageApi(opts)` — 统一入口
+入口：`src/App.tsx`
 
-```typescript
-const profile = getActiveApiProfile(opts.settings)
-if (profile.provider === 'fal') return callFalAiImageApi(opts, profile)
-return callOpenAICompatibleImageApi(opts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
-```
+1. 读取 URL query，通过 `buildSettingsFromUrlParams` 生成设置补丁。
+2. 如果 URL 中包含设置参数，调用 `clearUrlSettingParams` 清理地址栏。
+3. 如果默认 API URL 指向可导入配置，调用 `loadCustomProviderSettingsFromUrl` 并 `mergeImportedSettings`。
+4. 使用 `window.__storeInitialized` 防止 React StrictMode 下重复调用 `initStore()`。
+5. Electron 下检查是否需要提示恢复备份或创建首次备份。
+6. Electron 下每 7 天自动导出一次 ZIP 备份到桌面。
 
-#### `callOpenAICompatibleImageApi()`（`openaiCompatibleImageApi.ts`）
+### 6.2 画廊任务提交
 
-三态分发：
+入口：`submitTask()` / `submitTaskWithData()`。
 
-1. **自定义 HTTP 服务商**（`customProvider` 非空）→ `callCustomHttpImageApi`：
-   - 用 `resolveTemplateValue` 解析 `body` 中的 `$` 模板变量（上下文含 `profile/prompt/params/inputImages/mask`）。
-   - `multipart` 时用 `createCustomMultipartBody` 组 FormData；`json` 时直接 `JSON.stringify`。
-   - 若 `taskIdPath` 存在：提取异步任务 id，回调 `onCustomTaskEnqueued`，进入 `pollCustomTaskResult` 轮询（状态判定 + 可恢复错误重试 + 可重试 HTTP 状态码重试）。
-   - 结果用 `getAllByPath` 按 `imageUrlPaths` / `b64JsonPaths` 路径提取（支持 `*` 通配与数组下标）。
-2. **`apiMode: 'images'`** → `callImagesApiSingle`：
-   - 无输入图：`POST {baseUrl}/images/generations`，JSON body。
-   - 有输入图：`POST {baseUrl}/images/edits`，FormData（`image[]` + 可选 `mask`）。
-   - 支持 `stream`（SSE 解析 `image_generation.partial_image` / `completed` 等事件）。
-3. **`apiMode: 'responses'`** → `callResponsesImageApiSingle`：
-   - `POST {baseUrl}/responses`，body 含 `input`（文本 + `input_image` 数组）与 `tools`（`image_generation` 工具）。
-   - 同样支持流式 `response.image_generation_call.partial_image`。
+核心步骤：
 
-所有请求统一：`Authorization: Bearer`、`AbortController` 超时（`profile.timeout * 1000`）、`api-proxy` 前缀（当 `useApiProxy`）。
+1. 从当前工作区标签页读取 prompt、参数、输入图、遮罩草稿。
+2. 通过 `validateApiProfile` 校验 API 配置。
+3. 处理图片引用、遮罩顺序和参数兼容。
+4. 创建 `TaskRecord`，状态为 `running`。
+5. 调用 `callImageApi`。
+6. 成功后将返回图片写入 IndexedDB，更新 `outputImages`、`actualParams`、`revisedPromptByImage`。
+7. 失败时记录错误；如果部分成功则保留成功项和单项错误。
+8. Electron 环境下异步保存图片、任务 JSON、prompt 文本。
 
-#### `callFalAiImageApi()`（`falAiImageApi.ts`）
+### 6.3 API 调用与并发重试
 
-- 用 `@fal-ai/client` 的 `fal.config` 配置 credentials（可选 `proxyUrl`）。
-- 编辑模式自动追加 `/edit` endpoint；`image_size` 由 `size` 解析，`auto` 直传。
-- 队列模式：`falRequestId` / `falEndpoint` 回传给上层，连接断开后由 store 的 `scheduleFalRecovery` 重试（`FAL_RECOVERY_POLL_MS = 10s`）。
+入口：`callImageApi()`。
 
-### 4.2 并发与重试（`imageApiShared.ts`）
+分派规则：
 
-#### `runWithConcurrencyAndRetry(items, concurrency, maxRetries, handler)`
+- `profile.provider === 'fal'`：调用 `callFalAiImageApi`。
+- 其他情况：调用 `callOpenAICompatibleImageApi`，其中 `provider === 'openai'` 走内置 OpenAI 兼容逻辑，自定义 provider 走 manifest 映射。
 
-- **worker 池模型**：`workerCount = min(concurrency, items.length)`，共享 `nextIndex` 指针循环领取任务。
-- **指数退避重试**：仅对 `isRetryableError`（429 / 5xx / rate limit / network / ECONN*）重试，退避 `min(30s, 1000 * 2^(attempt-1))`。
-- 返回 `PromiseSettledResult<CallApiResult>[]`，部分失败可定位到具体索引。
+`runWithConcurrencyAndRetry()` 提供通用并发 worker 池：
 
-### 4.3 状态核心（`src/store.ts`）
+- 并发数来自 `profile.maxConcurrent`，默认 5，最大 999。
+- 重试次数来自 `profile.maxRetries`，默认 3，最大 10。
+- 仅对 429、5xx、rate limit、timeout、network、常见 ECONN 错误重试。
+- 指数退避上限 30 秒。
 
-#### `initStore()`（2808 行起）
+### 6.4 Agent 对话提交
 
-1. 合并 IndexedDB 中的 agentConversations 与内存中的旧版数据（`mergeAgentConversationsForStorage`）。
-2. 标记中断的 OpenAI running 任务（`markInterruptedOpenAIRunningTasks`，把断电遗留的 running 改写为 error 并保存）。
-3. 规范化收藏夹状态（`normalizeLoadedFavoriteState`）。
-4. 把画廊任务分配到默认标签页（首加载）或同步任务状态变更（已有标签）。
-5. 为所有 `running`/`*Recoverable` 的 fal/custom 任务调度恢复（`scheduleFalRecovery` / `scheduleCustomRecovery`）。
-6. 收集所有被引用的图片 id（待 GC 用）。
+入口：`submitAgentMessage()`。
 
-#### 图片缓存与缩略图
+核心步骤：
 
-- `imageCache`（LRU，8 条）/ `thumbnailCache`（LRU，80 条）。
-- `ensureImageCached(id)` / `ensureImageThumbnailCached(id)`：缓存未命中则回源 IndexedDB。
-- 缩略图回填：`thumbnailBackfillIds` 记录待补图，`MAX_THUMBNAIL_BACKFILL_CONCURRENT=4` 并发生成，通过 `thumbnailSubscribers` 订阅式通知组件更新。
+1. 创建用户消息和新 `AgentRound`。
+2. 根据当前活动轮次构造对话路径，保证分支上下文正确。
+3. 解析 prompt 中的图片引用，替换为 `<ref id="...">` 或 `<removed_ref>`。
+4. 调用 `callAgentResponsesApi`，传入 Responses API tools。
+5. 流式解析文本、图像、function_call 和 function_call_output。
+6. 遇到 `generate_image_batch` 时调用 `callBatchImageSingle` 并把结果转为画廊任务。
+7. 写回 `AgentConversation`，同步 output task ids。
+8. 使用 `AbortController` 支持 `stopAgentResponse()`。
 
-#### 本地保存（Electron）
+### 6.5 Agent 分支
 
-- `saveTaskImagesToLocalFS` / `saveTaskMetaToLocalFS` / `saveTaskToLocalFS` / `saveAgentConversationToLocalFS`：任务完成后异步把图片/元数据/Agent 对话落到 `local-saves/` 目录。
+关键函数：
 
-#### 任务恢复
+| 函数 | 说明 |
+| --- | --- |
+| `getAgentRoundPath()` | 从根到指定轮次生成一条活动路径。 |
+| `getActiveAgentRounds()` | 获取当前对话 active round 对应路径。 |
+| `deleteAgentRoundFromConversation()` | 删除某一轮及其子分支，并修复 active round。 |
+| `getAgentSiblingRounds()` | 获取同父轮次分支。 |
+| `getAgentBranchLeafId()` | 从任一轮次找到其分支叶子节点。 |
+| `remapAgentRoundMentionsForPathChange()` | 分支切换时修正文本中的轮次图片引用。 |
 
-- `recoverFalTask`（2773 行）/ `recoverCustomTask`（6002 行）：用 `getFalQueuedImageResult` / `getCustomQueuedImageResult` 恢复断连任务，成功则更新任务，失败则重试或标记不可恢复。
+### 6.6 IndexedDB 存储
 
-#### 导入/导出
+关键函数：
 
-- `generateExportZipBuffer` / `exportData` / `exportDataToPath`（6128 / 6234）：收集 settings/tasks/conversations/wordLibrary + 图片 + 缩略图，用 fflate 打包 ZIP。
-- `importData`（6332）：解压 ZIP，解析 `manifest.json`，调用 `mergeImportedSettings` 合并配置，写回 IndexedDB。
+| 函数 | 说明 |
+| --- | --- |
+| `storeImage(dataUrl, source)` | 计算 hash，去重写入原图，并尝试生成缩略图。 |
+| `getImage()` / `putImage()` / `deleteImage()` | 原图 CRUD。 |
+| `getImageThumbnail()` / `putImageThumbnail()` | 缩略图读写。 |
+| `getAllTasks()` / `putTask()` / `batchPutTasks()` | 任务读写。 |
+| `getAllAgentConversations()` / `replaceAgentConversations()` | Agent 对话读写。 |
+| `batchDeleteImages()` / `batchGetImages()` | 批量图片操作。 |
 
-### 4.4 Agent 模式（`src/lib/agentApi.ts` + `store.ts`）
+### 6.7 导入导出
 
-#### 工具定义 `createAgentTools`
+导出：
 
-- **`image_generation`**（内置工具，`action: 'auto'`）：单图/基础图生成。
-- **`generate_image_batch`**（自定义 function tool）：并发生成多张**相互独立**的图；每个 item 的 prompt 可内嵌 `<ref id="round-N-image-M" />` 引用前序图。
-- **`continue_generation`**：当已生成前置图、还需下一轮生成依赖图时调用。
-- **`web_search`**（当 `settings.agentWebSearch` 开启）。
+1. 从 IndexedDB 读取任务和图片。
+2. 从 store 读取 settings、Agent 对话、收藏夹、词库。
+3. 将图片转为 `images/{id}.{ext}`，缩略图转为 `thumbnails/{id}.{ext}`。
+4. 生成 `manifest.json`，当前 manifest 版本为 3。
+5. 使用 `fflate.zipSync` 生成 ZIP。
+6. 浏览器端触发下载；Electron 端可保存到指定路径。
 
-系统提示（`AGENT_IMAGE_INSTRUCTIONS`）规定了「渐进式批量生成」策略：先建基准 → 批量并发生成剩余 → 独立图一次性生成。
+导入：
 
-#### `callAgentResponsesApi`
-
-- 构造 messages（用户图以 `input_image` 注入 + `<ref>` 标签）+ tools + `tool_choice: 'required'`。
-- 流式解析 SSE：`response.image_generation_call.partial_image`（中间图）、`response.output_item.done`（完成项）、`function_call`（工具调用）、`function_call_output`（工具结果回填）。
-- 用 `agentRoundControllers`（`Map<roundId, AbortController>`）支持用户随时停止生成。
-
-#### 引用解析（`agentImageReferences.ts`）
-
-- `getAgentGeneratedImageReferenceId(round, i)` → `round-{index}-image-{i+1}`。
-- `resolveAgentPromptImageReferences`：把 `@第N轮图M` 文本引用解析为真实 image id。
-- `replaceAgentPromptImageReferencesForApi`：把引用替换为 `<ref>` / `<removed_ref>` 标签供 API 使用。
-
-### 4.5 图片与遮罩处理
-
-| 函数 | 文件 | 职责 |
-|------|------|------|
-| `hashDataUrl(dataUrl)` | `db.ts` | SHA-256 去重 id（降级 FNV 双 hash） |
-| `storeImage(dataUrl, source)` | `db.ts` | 去重存储 + 自动生成缩略图（720px / webp 0.9） |
-| `createImageThumbnail` / `safeCreateImageThumbnail` | `db.ts` | Canvas 生成缩略图，失败降级返回空对象 |
-| `getImageDimensions` | `canvasImage.ts` | 读取图片真实宽高 |
-| `imageDataUrlToPngBlob` / `maskDataUrlToPngBlob` | `canvasImage.ts` | 转 PNG Blob（遮罩需重新光栅化） |
-| `classifyMaskAlpha` | `mask.ts` | 判定遮罩覆盖：`empty`/`partial`/`full` |
-| `assertUsableMaskCoverage` | `mask.ts` | 空遮罩抛错 |
-
-### 4.6 提示词处理
-
-| 函数 | 文件 | 职责 |
-|------|------|------|
-| `render_prompt`（含 `createRng`） | `promptGenerator.ts` | 词库变量替换，支持 `{var}` 随机抽取（种子化 Fisher-Yates 洗牌，可复现） |
-| `slugify` / `normalize_entries` / `normalize_draw_count` | `promptGenerator.ts` | 词条规范化 |
-| `replaceImageMentionsForApi` / `getPromptMentionParts` | `promptImageMentions.ts` | `@选中图片n` 等引用解析与替换 |
-| `replaceAgentPromptImageReferencesForApi` | `agentImageReferences.ts` | Agent 对话 `<ref>` 引用替换 |
-
-### 4.7 尺寸处理（`src/lib/size.ts`）
-
-| 函数 | 职责 |
-|------|------|
-| `normalizeImageSize` | 规范化尺寸字符串为 `WxH` |
-| `formatImageRatio` | 计算并格式化比例（如 `16:9`、`≈1:1`） |
-| `resolveImageSizeParamsList` | 从生成图片中读取实际尺寸 |
-| `RECOMMENDED_SIZE_SET` | 推荐尺寸集合（常用比例） |
-
-### 4.8 设置与 Profile 管理（`src/lib/apiProfiles.ts`）
-
-| 函数 | 职责 |
-|------|------|
-| `normalizeSettings` | 把任意输入规范为合法 `AppSettings`，向后兼容旧版单配置字段 |
-| `normalizeApiProfile` | 规范化单个 Profile |
-| `createDefaultOpenAIProfile` / `createDefaultFalProfile` | 构造默认 Profile |
-| `switchApiProfileProvider` | 切换 provider，用 `providerDrafts` 保留各 provider 草稿 |
-| `getActiveApiProfile` / `getAgentApiProfile` | 取当前生效 / Agent 专用 Profile |
-| `mergeImportedSettings` | 合并导入的设置（按 dedup key 去重 Profile 与自定义服务商） |
-| `importCustomProviderSettingsFromJson` | 从 JSON 文本导入自定义服务商（支持 markdown 围栏） |
-| `validateApiProfile` | 校验必填项 |
-| `DEFAULT_SETTINGS` | 应用默认设置 |
-
-### 4.9 本地保存（`src/lib/localSave.ts`）
-
-| 函数 | 职责 |
-|------|------|
-| `getLocalSavePath` / `setLocalSavePath` | 读写 `local-saves` 根目录 |
-| `saveImageToLocal` | 保存单图到 `images/[标签名?]/{taskId}_{i}.{ext}` |
-| `saveTaskMetaToLocal` | 保存任务元数据到 `tasks/{taskId}.json` |
-| `savePromptToLocal` | 保存提示词到 `prompts/{taskId}.txt` |
-| `saveAgentConversationToLocal` | Agent 对话转 Markdown 存到 `agent/{id}.md` |
-| `getBackupList` / `restoreFromBackupFile` / `deleteBackupFile` | 备份列表/恢复/删除 |
-| `saveZipToPath` / `getDesktopPath` | ZIP 备份到桌面 |
+1. 使用 `fflate.unzipSync` 解压 ZIP。
+2. 解析 `manifest.json`。
+3. 恢复图片、缩略图、任务、Agent 对话。
+4. 通过 `mergeImportedSettings` 合并配置，避免重复 profile 和 provider。
+5. 合并词库和收藏夹。
 
 ---
 
-## 5. 依赖关系
+## 7. 依赖关系
 
-### 5.1 生产依赖（`dependencies`）
+### 7.1 生产依赖
 
-| 包 | 用途 |
-|------|------|
-| `react` / `react-dom` | UI 框架 |
-| `zustand` | 全局状态管理 |
-| `@fal-ai/client` | fal.ai 图像 SDK |
-| `electron-updater` | 自动更新（GitHub Releases） |
-| `fflate` | ZIP 压缩/解压（导入导出、备份） |
-| `react-markdown` / `remark-gfm` / `streamdown` | Markdown 渲染（Agent 回复、帮助） |
-| `core-js` | 旧环境 polyfill（`Array.at` 等） |
+| 依赖 | 用途 |
+| --- | --- |
+| `react` / `react-dom` | UI 框架。 |
+| `zustand` | 全局状态管理与持久化。 |
+| `@fal-ai/client` | fal.ai 图像服务调用。 |
+| `electron-updater` | Electron 自动更新。 |
+| `fflate` | ZIP 导入、导出、备份。 |
+| `react-markdown` / `remark-gfm` / `streamdown` | Markdown 和流式文本渲染。 |
+| `core-js` | `Array.at` 等旧环境 polyfill。 |
 
-> Electron 本身（`electron`）在 `devDependencies`（^33），构建产物 `dist-electron/main.js` 作为 `package.json` 的 `"main"`。
+### 7.2 开发依赖
 
-### 5.2 开发依赖（`devDependencies`）
+| 依赖 | 用途 |
+| --- | --- |
+| `vite` / `@vitejs/plugin-react` | 前端构建与开发服务器。 |
+| `vite-plugin-electron` / `vite-plugin-electron-renderer` | Electron 主进程和 preload 构建。 |
+| `typescript` | 类型检查。 |
+| `tailwindcss` / `postcss` / `autoprefixer` | 样式构建。 |
+| `vitest` | 单元测试。 |
+| `electron` / `electron-builder` | 桌面端运行与打包。 |
 
-| 包 | 用途 |
-|------|------|
-| `vite` / `@vitejs/plugin-react` / `vite-plugin-electron` / `vite-plugin-electron-renderer` | 构建链 |
-| `typescript` | 类型系统 |
-| `tailwindcss` / `postcss` / `autoprefixer` | 原子化 CSS（**v3.4**，经 PostCSS） |
-| `vitest` | 单元测试（`*.test.ts`） |
-| `electron-builder` | 应用打包与发布 |
-| `@types/react` / `@types/react-dom` | 类型定义 |
+### 7.3 内部依赖图
 
-### 5.3 `overrides`
-
-```json
-"mdast-util-gfm-autolink-literal": "2.0.0",
-"dompurify": "^3.4.7"
-```
-
-### 5.4 模块依赖图
-
-```
+```text
 App.tsx
-├── store.ts (核心状态 ≈6000 行)
-│   ├── lib/api.ts (统一分发)
-│   │   ├── lib/openaiCompatibleImageApi.ts (OpenAI/自定义)
-│   │   ├── lib/falAiImageApi.ts (fal.ai)
-│   │   └── lib/imageApiShared.ts (共享：并发重试/错误/尺寸)
-│   ├── lib/agentApi.ts (Agent 流式 + 工具)
-│   │   └── lib/agentImageReferences.ts
-│   ├── lib/apiProfiles.ts (设置/Profile/自定义服务商)
-│   ├── lib/db.ts (IndexedDB)
-│   ├── lib/localSave.ts (→ electronAPI → IPC)
-│   ├── lib/devProxy.ts (buildApiUrl)
-│   ├── lib/canvasImage.ts / mask.ts / maskPreprocess.ts
-│   ├── lib/promptGenerator.ts / promptImageMentions.ts
-│   ├── lib/size.ts / downloadImages.ts
-│   └── types.ts
-├── components/* (UI)
-│   └── hooks/* (useAutoUpdate / useDragSelect / ...)
-└── lib/urlSettings.ts / customProviderConfigUrl.ts (启动时导入)
-```
+  -> store.ts
+    -> lib/api.ts
+      -> lib/openaiCompatibleImageApi.ts
+      -> lib/falAiImageApi.ts
+      -> lib/imageApiShared.ts
+    -> lib/agentApi.ts
+      -> lib/agentImageReferences.ts
+      -> lib/agentWebSearch.ts
+    -> lib/apiProfiles.ts
+    -> lib/db.ts
+    -> lib/localSave.ts
+      -> window.electronAPI
+        -> electron/preload.ts
+          -> electron/ipc-handlers.ts
+    -> lib/promptImageMentions.ts
+    -> lib/mask.ts
+    -> lib/canvasImage.ts
+    -> lib/paramCompatibility.ts
 
-数据流：**组件 → store actions → lib/api → 服务商 → 回调更新 store → 持久化 IndexedDB / Electron 文件**。
+components/*
+  -> useStore selectors/actions
+  -> lib/* small helpers
+
+hooks/*
+  -> browser APIs or electronAPI wrappers
+```
 
 ---
 
-## 6. 项目运行方式
+## 8. 数据存储与持久化
 
-### 6.1 环境要求
+### 8.1 浏览器 IndexedDB
 
-- Node.js（建议 18+，含原生 ESM 支持）。
-- Windows / macOS / Linux。
-- 首次运行需 `npm install`。
+`src/lib/db.ts` 使用原生 IndexedDB，主要 store：
 
-### 6.2 npm scripts
+- `tasks`：画廊任务。
+- `images`：原始图片 data URL 及元数据。
+- `thumbnails`：列表缩略图。
+- `agentConversations`：Agent 对话。
 
-| 命令 | 作用 |
-|------|------|
-| `npm run dev` / `npm run electron:dev` | 启动 Vite 开发服务器（Electron 自动加载 dev URL） |
-| `npm run build` | `tsc -b && vite build`（类型检查 + 前端生产构建） |
-| `npm run electron:build` | `vite build && electron-builder`（打包桌面应用） |
-| `npm run electron:preview` | `vite build && electron .`（构建后直接本地预览） |
-| `npm run release` | 打包并**发布**到 GitHub Releases（`--publish always`） |
-| `npm run release:dry` | 打包但**不发布**（`--publish never`，本地验证） |
-| `npm test` / `npm run test:watch` | 运行 Vitest 单测 |
-| `npm run mock:api` | 启动本地 mock 图像 API（`scripts/mock-image-api.mjs`） |
-| `npm run preview` | `vite preview`（预览构建产物） |
+图片 ID 使用 data URL 的 SHA-256 hash。若浏览器 crypto 不可用，代码包含降级 hash。
 
-Windows 下亦可双击 `start.bat` 一键启动开发环境。
+### 8.2 Zustand persist
 
-### 6.3 开发模式说明
+`src/store.ts` 中的 store 使用 Zustand persist 存储设置、UI 状态、工作区、词库等。大型图片和任务主体主要放 IndexedDB，避免 localStorage 过大。
 
-- Vite dev server 默认 `http://localhost:5173/`，`server.host: true` 允许外部访问。
-- 可选 `dev-proxy.config.json`（参考 `dev-proxy.config.example.json`）启用 dev proxy：前端请求 `/api-proxy/*` 被代理到 `target`，用于规避浏览器 CORS 调试中转接口。
-- Preload 通过 `vite-plugin-electron` 的 `onstart({ reload })` 在改动时自动重载窗口。
+### 8.3 Electron 文件系统
 
-### 6.4 测试与类型检查
+Electron 环境下额外保存：
+
+- `images/[工作区名]/{taskId}_{index}.{ext}`
+- `tasks/{taskId}.json`
+- `prompts/{taskId}.txt`
+- `agent/{conversationId}.md`
+- 自动备份 JSON / ZIP
+
+`fs:write-json-text` 采用 `.tmp` 写入后 rename，并在写入前保留 `.bak`。它还会按 `backupInterval` 节流创建 `backups/` 快照，最多保留最近 30 个备份槽位。
+
+---
+
+## 9. 项目运行方式
+
+### 9.1 环境要求
+
+- Node.js 建议 18+。
+- npm。
+- 桌面端打包需要对应平台的 Electron builder 环境。
+
+### 9.2 安装依赖
 
 ```bash
-npx tsc --noEmit      # 类型检查
-npx vitest run        # 单元测试
+npm install
 ```
 
-测试覆盖关键纯逻辑模块：`apiProfiles`、`agentApi`、`agentImageReferences`、`api`、`falAiImageApi`、`mask`、`maskPreprocess`、`paramCompatibility`、`promptGenerator`、`promptImageMentions`、`size`、`urlSettings`、`customProviderConfigUrl`、`devProxy`、`viewportTransform`、`store.test.ts`。
+### 9.3 Web 开发
 
-### 6.5 发布流程
+```bash
+npm run dev
+```
 
-1. 更新 `package.json` 的 `version`。
-2. 本地校验：`npx tsc --noEmit && npx vitest run && npm run release:dry`。
-3. 提交并打 tag：
-   ```bash
-   git commit -m "release: v<VERSION>"
-   git tag v<VERSION>
-   git push origin main --tags
-   ```
-4. GitHub Actions 自动 `electron-builder` 构建并上传到 Releases。
-5. 已安装客户端启动后由 `electron-updater` 自动检查、下载、退出时安装。
+Vite 默认端口通常为 `5173`。开发服务器配置了 `host: true`，允许局域网访问。
 
-### 6.6 自动更新机制
+### 9.4 本地 CORS 代理
 
-- `main.ts` 配置 FeedURL → `nideyilian/doupao`，`autoDownload: true`。
-- 生产环境启动 5s 后自动 `checkForUpdates`。
-- 所有事件经 `sendToWindow('update:status', ...)` 转发，渲染进程 `useAutoUpdate` Hook 暴露 `check/download/install/reset`。
-- 错误信息做了**中文友好映射**（404/406/429/网络/证书 等场景）。
+复制示例配置：
 
-### 6.7 PWA
+```bash
+cp dev-proxy.config.example.json dev-proxy.config.json
+```
 
-- `index.html` 引入 `manifest.webmanifest`、`app-icon.png`，meta 配置 apple-mobile-web-app。
-- `public/sw.js`：缓存 APP_SHELL，导航请求 network-first（失败回退缓存），其余 GET 缓存优先。
-- 仅在生产环境注册（开发环境主动注销）。
+编辑 `dev-proxy.config.json` 后重启 `npm run dev`。前端开启 API 代理后，请求会通过 `/api-proxy/*` 转发到目标 API。
 
----
+### 9.5 Mock 图像 API
 
-## 7. 关键设计决策与约束
+```bash
+npm run mock:api
+```
 
-| 决策 | 说明 |
-|------|------|
-| `webSecurity: false` | 绕过 CORS，允许渲染进程直连各 AI 服务商；`contextIsolation: true` + `nodeIntegration: false` 仍保证安全边界 |
-| Preload 为 CJS | 输出 `preload.cjs`，规避 Electron 中 ESM/CommonJS 混用导致的加载问题 |
-| 双 API 模式 | OpenAI 兼容支持 `images`（经典）与 `responses`（工具调用）两种形态 |
-| 自定义服务商 Manifest | 通过 `http-image` 模板 + submit/editSubmit/poll 映射，声明式适配任意 HTTP 图像接口（含异步轮询） |
-| 图片 SHA-256 去重 | data URL 做 hash 作为 id，相同图复用，节省存储 |
-| 缩略图体系 | 720px webp 缩略图 + 版本号（`THUMBNAIL_VERSION=2`）+ 并发回填，避免列表页解码 4K 原图 |
-| 三级缓存 | 内存 LRU（图 8 / 缩略图 80）→ IndexedDB → Electron 文件系统 |
-| 中断任务恢复 | OpenAI running 任务断电后改写为 error；fal/custom 异步任务用定时器轮询恢复 |
-| 原子写入 + 备份 | `write-json-text` 用 `.tmp`+`rename` 原子写，写前 `.bak` + 节流备份，保留最近 30 份 |
-| 并发与重试 | `maxConcurrent`（1-999）worker 池 + 仅对可重试错误做指数退避（上限 30s） |
-| Provider 草稿 | `providerDrafts` 在同一 Profile 内切换 provider 时保留各 provider 的参数草稿 |
-| Agent 引用标签 | `<ref id="round-N-image-M" />` / `<removed_ref>` 标签在用户消息中注入，模型据此引用/识别已删图 |
-| 懒加载重组件 | `SettingsModal`/`DetailModal`/`Lightbox`/`AgentWorkspace` 等用 `React.lazy` + `Suspense` 延迟加载 |
-| 启动备份策略 | 空数据时扫描备份提示恢复；每周自动备份到桌面 |
+对应说明在 `docs/mock-image-api.md`。
 
----
+### 9.6 生产构建
 
-## 8. 文件索引
+```bash
+npm run build
+```
 
-### 8.1 Electron
+构建命令实际执行：
 
-| 路径 | 职责 |
-|------|------|
-| `electron/main.ts` | 主进程入口、窗口管理、自动更新、IPC（update/app:version） |
-| `electron/preload.ts` | 安全暴露 `window.electronAPI`（CJS 产物 `preload.cjs`） |
-| `electron/ipc-handlers.ts` | 文件系统 / 本地保存 / 备份 IPC 处理器 |
-| `electron/tsconfig.json` | 主进程 TS 配置 |
+```bash
+tsc -b && vite build
+```
 
-### 8.2 渲染进程入口
+产物输出到 `dist/`。
 
-| 路径 | 职责 |
-|------|------|
-| `src/main.tsx` | React 渲染入口、SW 注册、移动端视口修正 |
-| `src/App.tsx` | 根组件、初始化序列、模式路由、备份策略 |
-| `src/store.ts` | Zustand store（核心状态与全部业务逻辑） |
-| `src/types.ts` | 全局类型定义 |
-| `src/index.css` | 全局样式 + Tailwind 指令 |
+### 9.7 Electron 开发与打包
 
-### 8.3 业务库（`src/lib/`）
+```bash
+npm run electron:dev
+npm run electron:preview
+npm run electron:build
+```
 
-| 路径 | 职责 |
-|------|------|
-| `api.ts` | API 统一分发入口 `callImageApi` |
-| `openaiCompatibleImageApi.ts` | OpenAI 兼容（images/responses）+ 自定义 HTTP 服务商 |
-| `falAiImageApi.ts` | fal.ai 调用（队列 + 恢复） |
-| `imageApiShared.ts` | 共享类型 / 并发重试 / 错误 / 尺寸 / URL→dataURL |
-| `agentApi.ts` | Agent 工具定义、流式解析、批量图像工具 |
-| `agentImageReferences.ts` | Agent `<ref>` 引用解析与替换 |
-| `agentWebSearch.ts` | Agent 联网搜索工具 |
-| `apiProfiles.ts` | 设置/Profile/自定义服务商规范化与合并 |
-| `db.ts` | IndexedDB 封装（4 个 store） |
-| `localSave.ts` | 本地文件系统保存（封装 IPC） |
-| `canvasImage.ts` | Canvas 图片/遮罩合成、Blob 转换 |
-| `mask.ts` / `maskPreprocess.ts` | 遮罩覆盖率校验与预处理 |
-| `promptGenerator.ts` | 词库渲染、种子化随机变量 |
-| `promptImageMentions.ts` | 提示词图片引用解析 |
-| `size.ts` | 尺寸规范化与比例计算 |
-| `devProxy.ts` | dev proxy 配置与 `buildApiUrl` |
-| `downloadImages.ts` | 批量打包下载（ZIP） |
-| `urlSettings.ts` | URL query 设置导入 |
-| `customProviderConfigUrl.ts` | 从 URL 导入自定义服务商配置 |
-| `paramCompatibility.ts` | 历史参数兼容 |
-| `paramDisplay.tsx` | 参数展示格式化 |
-| `browserNotification.ts` | 任务完成通知 |
-| `clipboard.ts` | 剪贴板 |
-| `viewport.ts` / `viewportTransform.ts` | 移动端视口 |
-| `runtimeEnv.ts` | `VITE_*` 环境变量读取 |
+`package.json` 中的 Electron builder 配置：
 
-### 8.4 组件与 Hooks
+- Windows：`nsis` 和 `portable`，x64。
+- macOS：`dmg`。
+- Linux：`AppImage`。
+- 发布目标：GitHub Releases，`owner: nideyilian`，`repo: doupao`。
 
-详见 [2.6 核心组件](#26-核心组件srccomponents) 与 [2.7 自定义 Hooks](#27-自定义-hookssrchooks)。
+### 9.8 发布脚本
+
+```bash
+npm run release
+npm run release:dry
+```
+
+`release` 会执行 Electron 打包并尝试发布；`release:dry` 只打包不发布。
 
 ---
 
-*本文档基于项目源码逐文件分析生成，已校正旧版文档中的多处事实性错误（API 模式、依赖清单、TaskParams 字段、Tailwind 版本、IPC 处理器清单等）。反映截至 v0.6.8 的代码结构。*
+## 10. 测试与质量保障
+
+### 10.1 测试命令
+
+```bash
+npm test
+```
+
+或：
+
+```bash
+npm run test:watch
+```
+
+### 10.2 类型检查
+
+```bash
+npx tsc -b
+```
+
+### 10.3 已覆盖的测试文件
+
+当前仓库包含以下 Vitest 测试：
+
+- `src/store.test.ts`
+- `src/lib/agentApi.test.ts`
+- `src/lib/agentImageReferences.test.ts`
+- `src/lib/api.test.ts`
+- `src/lib/apiProfiles.test.ts`
+- `src/lib/customProviderConfigUrl.test.ts`
+- `src/lib/devProxy.test.ts`
+- `src/lib/falAiImageApi.test.ts`
+- `src/lib/mask.test.ts`
+- `src/lib/maskPreprocess.test.ts`
+- `src/lib/paramCompatibility.test.ts`
+- `src/lib/promptGenerator.test.ts`
+- `src/lib/promptImageMentions.test.ts`
+- `src/lib/size.test.ts`
+- `src/lib/urlSettings.test.ts`
+- `src/lib/viewportTransform.test.ts`
+
+测试重点集中在纯逻辑模块、API 参数兼容、提示词解析、遮罩、尺寸、dev proxy、Agent API 和 store 迁移/辅助逻辑。UI 组件和 Electron IPC 目前缺少自动化测试。
+
+---
+
+## 11. 优缺点评述
+
+### 11.1 优点
+
+1. 功能完整度高  
+   项目不仅是一个简单生图表单，而是覆盖了配置管理、画廊、收藏、批量、遮罩、Agent、导入导出、桌面端本地保存和自动更新。
+
+2. API 适配能力强  
+   内置 OpenAI 兼容和 fal.ai，同时用 `CustomProviderDefinition` 支持声明式 HTTP provider，适合接入不同图像服务。
+
+3. 本地优先的数据设计  
+   图片和任务默认保存在 IndexedDB，Electron 下还会落盘，隐私和离线可用性较好。
+
+4. 性能意识明确  
+   原图和缩略图分离、内存 LRU 缓存、缩略图回填、懒加载重组件、并发限制和重试策略都说明项目已经考虑真实使用场景。
+
+5. 类型系统覆盖核心领域  
+   `types.ts` 定义了任务、配置、Agent、导出格式、自定义 provider 等关键结构，方便维护者理解数据边界。
+
+6. 测试覆盖了不少关键纯逻辑  
+   API profile、prompt、mask、Agent 引用、dev proxy、store 辅助逻辑都有测试，比很多同类前端工具更稳。
+
+### 11.2 缺点与风险
+
+1. `store.ts` 过大  
+   `store.ts` 超过 6500 行，承担了状态、业务编排、数据迁移、Agent、导入导出、本地保存等大量职责。维护成本高，局部修改容易影响远处逻辑。
+
+2. 大组件偏多  
+   `SettingsModal.tsx`、`InputBar.tsx`、`FavoriteCollections.tsx`、`AgentWorkspace.tsx` 都超过千行。UI 状态、表单逻辑和展示逻辑耦合较强，后续功能扩展会变慢。
+
+3. Electron 安全取舍需要注意  
+   主窗口配置了 `webSecurity: false`，这能缓解跨域和图片加载问题，但扩大了桌面端攻击面。虽然 `contextIsolation: true` 和 `nodeIntegration: false` 保留了基础隔离，仍建议审视远程内容和外链处理。
+
+4. 错误与用户文案混杂在业务逻辑里  
+   许多中文提示、错误转换、toast 文案直接散落在 store 和 API 模块中，不利于统一维护、国际化或文案审校。
+
+5. Electron IPC 缺少路径约束  
+   IPC 层提供通用读写能力，主要依赖渲染层传入路径。对个人本地工具可接受，但如果未来开放更多远程内容或插件能力，需要增加路径白名单/作用域校验。
+
+6. UI 自动化测试不足  
+   当前测试主要是纯逻辑。对遮罩编辑器、任务流、设置导入、Agent 分支等复杂交互缺少端到端验证。
+
+7. 编码显示问题影响阅读体验  
+   当前终端读取 README 和旧版 Code Wiki 时出现中文 mojibake。文件可能是 UTF-8，但 Windows 控制台或历史写入方式导致显示混乱。维护文档时应统一 UTF-8 并避免错误转码。
+
+---
+
+## 12. 维护建议
+
+1. 拆分 `store.ts`  
+   优先按领域拆出任务、Agent、图片缓存、导入导出、收藏夹、工作区标签、词库等 slice 或 action 模块。先移动纯函数和独立 action，不急着重构状态结构。
+
+2. 拆分超大组件  
+   `InputBar` 可拆为 prompt 输入、参考图管理、参数面板、文件夹批量、遮罩入口；`SettingsModal` 可按 tab 拆分。
+
+3. 强化 Electron IPC 边界  
+   对保存、备份、恢复路径做 workspace/userData/customSavePath 范围校验；避免未来引入远程页面或插件后出现任意文件写入风险。
+
+4. 给关键用户流程补 E2E 测试  
+   建议覆盖：创建任务、导入导出、设置 profile、自定义 provider 导入、遮罩编辑、Agent 图片引用、删除任务清理引用。
+
+5. 建立文档维护规则  
+   当修改 `types.ts`、`store.ts`、`lib/apiProfiles.ts`、`lib/openaiCompatibleImageApi.ts`、`lib/agentApi.ts` 或 Electron IPC 时，同步更新本 Code Wiki。
+
+6. 抽离文案与错误映射  
+   将 toast、错误标题、自动更新友好提示集中到独立模块，减少业务逻辑噪声。
+
+---
+
+## 快速导航
+
+| 需求 | 优先阅读 |
+| --- | --- |
+| 了解应用启动 | `src/main.tsx`、`src/App.tsx` |
+| 修改画廊任务流程 | `src/store.ts` 的 `submitTask*`、`src/lib/api.ts` |
+| 接入新图像服务商 | `src/lib/apiProfiles.ts`、`src/lib/openaiCompatibleImageApi.ts`、`docs/custom-provider-llm-prompt.md` |
+| 修改 Agent 行为 | `src/lib/agentApi.ts`、`src/lib/agentImageReferences.ts`、`src/store.ts` 的 Agent 区域 |
+| 修改本地存储 | `src/lib/db.ts`、`src/lib/localSave.ts`、`electron/ipc-handlers.ts` |
+| 修改桌面端 | `electron/main.ts`、`electron/preload.ts`、`package.json` 的 `build` 字段 |
+| 修改 UI | `src/components/*`，尤其 `InputBar`、`TaskGrid`、`TaskCard`、`SettingsModal` |
+| 排查配置问题 | `src/lib/apiProfiles.ts`、`src/lib/urlSettings.ts`、`src/lib/devProxy.ts` |

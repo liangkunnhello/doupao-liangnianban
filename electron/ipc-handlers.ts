@@ -3,9 +3,48 @@ import path from 'path'
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync } from 'fs'
 
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
+const sessionAllowedRoots = new Set<string>()
 
 function getLocalSettingsPath(): string {
   return path.join(app.getPath('userData'), LOCAL_SETTINGS_FILE)
+}
+
+function normalizeFsPath(value: string): string {
+  return path.resolve(value)
+}
+
+function addAllowedRoot(value: string | null | undefined): void {
+  if (!value) return
+  sessionAllowedRoots.add(normalizeFsPath(value))
+}
+
+function getAllowedRoots(): string[] {
+  const roots = [
+    app.getPath('userData'),
+    app.getPath('desktop'),
+    app.getPath('documents'),
+    app.getPath('downloads'),
+    app.getPath('pictures'),
+    ...sessionAllowedRoots,
+  ]
+  const settings = readLocalSettings()
+  if (typeof settings.localSavePath === 'string') roots.push(settings.localSavePath)
+  return roots.map(normalizeFsPath)
+}
+
+function isPathInside(targetPath: string, rootPath: string): boolean {
+  const target = normalizeFsPath(targetPath).toLowerCase()
+  const root = normalizeFsPath(rootPath).toLowerCase()
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function assertAllowedPath(targetPath: string): string {
+  const normalized = normalizeFsPath(targetPath)
+  if (!getAllowedRoots().some((root) => isPathInside(normalized, root))) {
+    throw new Error('Path is outside allowed application directories')
+  }
+  return normalized
 }
 
 export function initLocalSavePath(): void {
@@ -15,6 +54,7 @@ export function initLocalSavePath(): void {
       settings.localSavePath = path.join(app.getPath('userData'), 'local-saves')
       writeLocalSettings(settings)
     }
+    if (typeof settings.localSavePath === 'string') addAllowedRoot(settings.localSavePath)
   } catch (err) {
     console.error('初始化本地保存路径失败:', err)
   }
@@ -52,15 +92,17 @@ export function registerIpcHandlers(): void {
       title: '选择本地保存目录',
     })
     if (result.canceled || result.filePaths.length === 0) return null
+    addAllowedRoot(result.filePaths[0])
     return result.filePaths[0]
   })
 
   ipcMain.handle('fs:save-image', async (_event, { filePath, dataUrl }: { filePath: string; dataUrl: string }) => {
     try {
+      const safeFilePath = assertAllowedPath(filePath)
       const { buffer } = dataUrlToBuffer(dataUrl)
-      const dir = path.join(filePath, '..')
+      const dir = path.dirname(safeFilePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(filePath, buffer)
+      writeFileSync(safeFilePath, buffer)
       return true
     } catch (err) {
       console.error('保存图片失败:', err)
@@ -70,9 +112,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:save-json', async (_event, { filePath, data }: { filePath: string; data: unknown }) => {
     try {
-      const dir = path.join(filePath, '..')
+      const safeFilePath = assertAllowedPath(filePath)
+      const dir = path.dirname(safeFilePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+      writeFileSync(safeFilePath, JSON.stringify(data, null, 2), 'utf-8')
       return true
     } catch (err) {
       console.error('保存 JSON 失败:', err)
@@ -82,9 +125,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:save-text', async (_event, { filePath, content }: { filePath: string; content: string }) => {
     try {
-      const dir = path.join(filePath, '..')
+      const safeFilePath = assertAllowedPath(filePath)
+      const dir = path.dirname(safeFilePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(filePath, content, 'utf-8')
+      writeFileSync(safeFilePath, content, 'utf-8')
       return true
     } catch (err) {
       console.error('保存文本失败:', err)
@@ -94,7 +138,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:ensure-dir', async (_event, { dirPath }: { dirPath: string }) => {
     try {
-      if (!existsSync(dirPath)) mkdirSync(dirPath, { recursive: true })
+      const safeDirPath = assertAllowedPath(dirPath)
+      if (!existsSync(safeDirPath)) mkdirSync(safeDirPath, { recursive: true })
       return true
     } catch (err) {
       console.error('创建目录失败:', err)
@@ -107,13 +152,18 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('fs:check-exists', async (_event, { filePath }: { filePath: string }) => {
-    return existsSync(filePath)
+    try {
+      return existsSync(assertAllowedPath(filePath))
+    } catch {
+      return false
+    }
   })
 
   ipcMain.handle('fs:read-dir', async (_event, { dirPath }: { dirPath: string }) => {
     try {
-      if (!existsSync(dirPath)) return []
-      return readdirSync(dirPath)
+      const safeDirPath = assertAllowedPath(dirPath)
+      if (!existsSync(safeDirPath)) return []
+      return readdirSync(safeDirPath)
     } catch {
       return []
     }
@@ -121,10 +171,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
     try {
-      if (!existsSync(filePath)) return null
-      const buffer = readFileSync(filePath)
+      const safeFilePath = assertAllowedPath(filePath)
+      if (!existsSync(safeFilePath)) return null
+      const buffer = readFileSync(safeFilePath)
       const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-      return { data: arrayBuffer, name: path.basename(filePath) }
+      return { data: arrayBuffer, name: path.basename(safeFilePath) }
     } catch (err) {
       console.error('读取文件失败:', err)
       return null
@@ -140,7 +191,7 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('fs:open-in-explorer', async (_event, { filePath }: { filePath: string }) => {
-    shell.showItemInFolder(filePath)
+    shell.showItemInFolder(assertAllowedPath(filePath))
   })
 
   ipcMain.handle('store:get-local-save-path', async () => {
@@ -150,16 +201,18 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('store:set-local-save-path', async (_event, { path: savePath }: { path: string }) => {
     const settings = readLocalSettings()
+    addAllowedRoot(savePath)
     settings.localSavePath = savePath
     writeLocalSettings(settings)
   })
 
   ipcMain.handle('fs:read-json-text', async (_event, { filePath }: { filePath: string }) => {
     try {
-      if (!existsSync(filePath)) return null
-      const content = readFileSync(filePath, 'utf-8')
+      const safeFilePath = assertAllowedPath(filePath)
+      if (!existsSync(safeFilePath)) return null
+      const content = readFileSync(safeFilePath, 'utf-8')
       if (content && content.trim()) return content
-      const bakPath = filePath + '.bak'
+      const bakPath = safeFilePath + '.bak'
       if (existsSync(bakPath)) {
         const bakContent = readFileSync(bakPath, 'utf-8')
         if (bakContent && bakContent.trim()) return bakContent
@@ -167,8 +220,8 @@ export function registerIpcHandlers(): void {
       return null
     } catch (err) {
       console.error('读取 JSON 文本失败:', err)
-      const bakPath = filePath + '.bak'
       try {
+        const bakPath = assertAllowedPath(filePath) + '.bak'
         if (existsSync(bakPath)) {
           const bakContent = readFileSync(bakPath, 'utf-8')
           if (bakContent && bakContent.trim()) return bakContent
@@ -180,15 +233,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:write-json-text', async (_event, { filePath, content, skipBackup, backupInterval }: { filePath: string; content: string; skipBackup?: boolean; backupInterval?: number }) => {
     try {
-      const dir = path.join(filePath, '..')
+      const safeFilePath = assertAllowedPath(filePath)
+      const dir = path.dirname(safeFilePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       // 写入前自动备份旧文件
-      if (!skipBackup && existsSync(filePath)) {
+      if (!skipBackup && existsSync(safeFilePath)) {
         try {
           const backupDir = path.join(dir, 'backups')
           if (!existsSync(backupDir)) mkdirSync(backupDir, { recursive: true })
           const intervalMs = (backupInterval ?? 0) * 60 * 1000
-          const baseName = path.basename(filePath).replace(/\.[^.]+$/, '')
+          const baseName = path.basename(safeFilePath).replace(/\.[^.]+$/, '')
           let shouldBackup = true
           if (intervalMs > 0) {
             const backups = readdirSync(backupDir)
@@ -203,7 +257,7 @@ export function registerIpcHandlers(): void {
           if (shouldBackup) {
             const ts = new Date().toISOString().replace(/[:.]/g, '-')
             const backupName = baseName + '-' + ts + '.json'
-            copyFileSync(filePath, path.join(backupDir, backupName))
+            copyFileSync(safeFilePath, path.join(backupDir, backupName))
           }
           // 只保留最近 30 个备份
           const backups = readdirSync(backupDir)
@@ -217,16 +271,16 @@ export function registerIpcHandlers(): void {
           console.error('自动备份失败（不影响写入）:', backupErr)
         }
       }
-      const bakPath = filePath + '.bak'
-      if (existsSync(filePath)) {
-        try { copyFileSync(filePath, bakPath) } catch {}
+      const bakPath = safeFilePath + '.bak'
+      if (existsSync(safeFilePath)) {
+        try { copyFileSync(safeFilePath, bakPath) } catch {}
       }
-      const tmpPath = filePath + '.tmp'
+      const tmpPath = safeFilePath + '.tmp'
       writeFileSync(tmpPath, content, 'utf-8')
       try {
-        renameSync(tmpPath, filePath)
+        renameSync(tmpPath, safeFilePath)
       } catch {
-        try { copyFileSync(tmpPath, filePath) } catch {}
+        try { copyFileSync(tmpPath, safeFilePath) } catch {}
         try { unlinkSync(tmpPath) } catch {}
       }
       return true
@@ -238,11 +292,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:list-backups', async (_event, { filePath }: { filePath: string }) => {
     try {
-      const dir = path.join(path.join(filePath, '..'), 'backups')
+      const safeFilePath = assertAllowedPath(filePath)
+      const dir = path.join(path.dirname(safeFilePath), 'backups')
       if (!existsSync(dir)) return []
       return readdirSync(dir)
         .map((name) => ({ name, fullPath: path.join(dir, name) }))
-        .filter((f) => f.name.startsWith(path.basename(filePath).replace(/\.[^.]+$/, '') + '-'))
+        .filter((f) => f.name.startsWith(path.basename(safeFilePath).replace(/\.[^.]+$/, '') + '-'))
         .sort((a, b) => statSync(b.fullPath).mtimeMs - statSync(a.fullPath).mtimeMs)
         .map((f) => f.fullPath)
     } catch (err) {
@@ -253,8 +308,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:check-backup-has-data', async (_event, { backupPath }: { backupPath: string }) => {
     try {
-      if (!existsSync(backupPath)) return false
-      const content = readFileSync(backupPath, 'utf-8')
+      const safeBackupPath = assertAllowedPath(backupPath)
+      if (!existsSync(safeBackupPath)) return false
+      const content = readFileSync(safeBackupPath, 'utf-8')
       const data = JSON.parse(content)
       const state = data?.state ?? data
       const hasTasks = Array.isArray(state?.tasks) && state.tasks.length > 0
@@ -267,10 +323,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:restore-from-backup', async (_event, { backupPath, targetPath }: { backupPath: string; targetPath: string }) => {
     try {
-      if (!existsSync(backupPath)) return false
-      const dir = path.join(targetPath, '..')
+      const safeBackupPath = assertAllowedPath(backupPath)
+      const safeTargetPath = assertAllowedPath(targetPath)
+      if (!existsSync(safeBackupPath)) return false
+      const dir = path.dirname(safeTargetPath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      copyFileSync(backupPath, targetPath)
+      copyFileSync(safeBackupPath, safeTargetPath)
       return true
     } catch (err) {
       console.error('从备份恢复失败:', err)
@@ -280,8 +338,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:delete-backup', async (_event, { backupPath }: { backupPath: string }) => {
     try {
-      if (!existsSync(backupPath)) return false
-      unlinkSync(backupPath)
+      const safeBackupPath = assertAllowedPath(backupPath)
+      if (!existsSync(safeBackupPath)) return false
+      unlinkSync(safeBackupPath)
       return true
     } catch (err) {
       console.error('删除备份失败:', err)
@@ -291,9 +350,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:save-zip-buffer', async (_event, { filePath, buffer }: { filePath: string; buffer: ArrayBuffer }) => {
     try {
-      const dir = path.join(filePath, '..')
+      const safeFilePath = assertAllowedPath(filePath)
+      const dir = path.dirname(safeFilePath)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(filePath, Buffer.from(buffer))
+      writeFileSync(safeFilePath, Buffer.from(buffer))
       return true
     } catch (err) {
       console.error('保存 ZIP 文件失败:', err)

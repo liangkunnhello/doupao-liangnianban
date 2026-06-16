@@ -1296,6 +1296,34 @@ function normalizeMaskDraft(value: unknown): MaskDraft | null {
   }
 }
 
+function createDefaultWorkspaceTab(options: {
+  prompt?: unknown
+  inputImages?: unknown
+  inputImageFolder?: InputImageFolder | null
+  params?: unknown
+  maskDraft?: unknown
+  maskEditorImageId?: unknown
+  tasks?: TaskRecord[]
+  now?: number
+} = {}): WorkspaceTab {
+  const now = options.now ?? Date.now()
+  return {
+    id: Math.random().toString(36).slice(2, 9),
+    name: '标签 1',
+    groupId: null,
+    prompt: typeof options.prompt === 'string' ? options.prompt : '',
+    inputImages: normalizeInputImages(options.inputImages),
+    inputImageFolder: options.inputImageFolder ?? null,
+    params: { ...DEFAULT_PARAMS, ...(isRecord(options.params) ? options.params : {}) },
+    maskDraft: normalizeMaskDraft(options.maskDraft),
+    maskEditorImageId: typeof options.maskEditorImageId === 'string' ? options.maskEditorImageId : null,
+    tasks: options.tasks ?? [],
+    createdAt: now,
+    updatedAt: now,
+    order: 0,
+  }
+}
+
 function normalizeAgentInputDraft(value: unknown, fallbackUpdatedAt = Date.now()): AgentInputDraft {
   const draft = isRecord(value) ? value : {}
   const updatedAt = typeof draft.updatedAt === 'number' && Number.isFinite(draft.updatedAt) ? draft.updatedAt : fallbackUpdatedAt
@@ -1562,20 +1590,7 @@ export const useStore = create<AppState>()(
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
-          // Restore from active workspace tab instead of galleryInputDraft
-          const activeTab = state.activeWorkspaceTabId
-            ? state.workspaceTabs.find((t) => t.id === state.activeWorkspaceTabId)
-            : null
-          const restored = activeTab
-            ? {
-                prompt: activeTab.prompt,
-                inputImages: activeTab.inputImages.map((img) => ({ ...img })),
-                inputImageFolder: activeTab.inputImageFolder,
-                params: { ...activeTab.params },
-                maskDraft: activeTab.maskDraft,
-                maskEditorImageId: activeTab.maskEditorImageId,
-              }
-            : restoreGalleryInputDraftState(galleryInputDraft)
+          const restored = restoreGalleryInputDraftState(galleryInputDraft)
           set((state) => ({
             appMode,
             agentInputDrafts,
@@ -2894,7 +2909,25 @@ export async function initStore() {
   // Assign gallery tasks to the default workspace tab on first load
   // and sync task state (e.g. running -> error) across all workspace tabs
   const galleryTasks = tasks.filter(isGalleryTask)
-  const currentTabs = useStore.getState().workspaceTabs
+  let currentTabs = useStore.getState().workspaceTabs
+  if (currentTabs.length === 0) {
+    const state = useStore.getState()
+    const defaultTab = createDefaultWorkspaceTab({
+      prompt: state.prompt,
+      inputImages: state.inputImages.map((img) => ({ ...img })),
+      inputImageFolder: state.inputImageFolder,
+      params: state.params,
+      maskDraft: state.maskDraft,
+      maskEditorImageId: state.maskEditorImageId,
+      tasks: galleryTasks,
+    })
+    useStore.setState({
+      workspaceTabs: [defaultTab],
+      activeWorkspaceTabId: defaultTab.id,
+      selectedWorkspaceTabIds: [],
+    })
+    currentTabs = [defaultTab]
+  }
   if (currentTabs.length > 0 && galleryTasks.length > 0) {
     const firstTab = currentTabs[0]
     if (firstTab.tasks.length === 0) {

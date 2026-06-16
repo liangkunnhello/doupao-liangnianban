@@ -178,7 +178,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <WorkspaceTabBar />
-      <div>
+      <div className="app-shell-with-docked-panels">
         <Header />
         {appMode === 'agent' ? (
           <React.Suspense fallback={null}><AgentWorkspace /></React.Suspense>

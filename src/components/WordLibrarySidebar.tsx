@@ -444,6 +444,18 @@ export default function WordLibrarySidebar() {
     setPromptSelectedVarName(null) // 消费后清空，避免重复触发
   }, [promptSelectedVarName, entries, setPromptSelectedVarName])
 
+  useEffect(() => {
+    const root = document.documentElement
+    const leftVar = '--word-library-left-width'
+    const rightVar = '--word-library-right-width'
+    root.style.setProperty(leftVar, open && docked === 'left' ? `${sz.w}px` : '0px')
+    root.style.setProperty(rightVar, open && docked === 'right' ? `${sz.w}px` : '0px')
+    return () => {
+      root.style.setProperty(leftVar, '0px')
+      root.style.setProperty(rightVar, '0px')
+    }
+  }, [open, docked, sz.w])
+
   if (!open) return null
 
   const isDocked = Boolean(docked)
@@ -451,8 +463,8 @@ export default function WordLibrarySidebar() {
     ? {
         left: docked === 'left' ? 0 : undefined,
         right: docked === 'right' ? 0 : undefined,
-        top: 0,
-        height: '100vh',
+        top: 'var(--app-header-offset)',
+        height: 'calc(100vh - var(--app-header-offset))',
         borderRadius: 0,
         boxShadow: 'none',
         borderTop: 'none',

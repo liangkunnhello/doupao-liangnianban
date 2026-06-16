@@ -25,8 +25,8 @@ export default function SearchBar() {
   }
 
   return (
-    <div data-no-drag-select className="mt-6 mb-4 flex gap-3">
-      <div className="flex gap-2 flex-shrink-0 z-20">
+    <div data-no-drag-select className="mt-6 mb-4 flex flex-col gap-3 sm:flex-row">
+      <div className="flex flex-wrap gap-2 flex-shrink-0 z-20">
         <button
           onClick={handleFavoriteClick}
           className={`p-2.5 rounded-xl border transition-all ${
@@ -72,7 +72,7 @@ export default function SearchBar() {
           </button>
         )}
       </div>
-      <div className="relative flex-1 z-10">
+      <div className="relative flex-1 min-w-0 z-10">
         <svg
           className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500"
           fill="none"

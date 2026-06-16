@@ -69,8 +69,10 @@ export default function DetailModal() {
           .filter(([, src]) => Boolean(src))
           .sort(([a], [b]) => Number(a) - Number(b))
       : []
+    const outputLen = task?.outputImages?.length || 0
+    const remainingSlots = task?.status === 'running' ? Math.max(0, task.params.n - outputLen) : 0
     const count = Math.max(
-      task?.status === 'running' ? task.params.n : 0,
+      remainingSlots,
       slotEntries.length ? Math.max(...slotEntries.map(([key]) => Number(key) + 1)) : 0,
       streamPreviewSrc ? 1 : 0,
     )
@@ -80,7 +82,7 @@ export default function DetailModal() {
       key: String(index),
       src: byIndex.get(index) ?? (index === 0 ? streamPreviewSrc : ''),
     }))
-  }, [task?.params.n, task?.status, streamPreviewSlots, streamPreviewSrc])
+  }, [task?.params.n, task?.status, task?.outputImages?.length, streamPreviewSlots, streamPreviewSrc])
   const activeStreamPreviewSrc = streamPreviewItems[imageIndex]?.src || ''
 
   useEffect(() => {

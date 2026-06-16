@@ -22,6 +22,13 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  --workspace-tabbar-left-width: 0px;
+  --workspace-tabbar-right-width: 0px;
+  --word-library-left-width: 0px;
+  --word-library-right-width: 0px;
+  --app-docked-left-width: calc(var(--workspace-tabbar-left-width) + var(--word-library-left-width));
+  --app-docked-right-width: calc(var(--workspace-tabbar-right-width) + var(--word-library-right-width));
+  --app-header-offset: calc(3.5rem + var(--safe-area-top) + 1px);
   scrollbar-gutter: stable;
 }
 
@@ -33,6 +40,38 @@ body {
   padding: 0;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.app-shell-with-docked-panels {
+  padding-left: var(--app-docked-left-width);
+  padding-right: var(--app-docked-right-width);
+  transition: padding 180ms ease;
+}
+
+[data-input-bar] {
+  left: var(--app-docked-left-width);
+  right: var(--app-docked-right-width);
+  width: auto;
+  max-width: none;
+  transform: none;
+}
+
+[data-input-bar] > * {
+  max-width: 56rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 767px) {
+  .app-shell-with-docked-panels {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  [data-input-bar] {
+    left: 0;
+    right: 0;
+  }
 }
 
 input,
@@ -405,6 +444,10 @@ input[type="number"] {
   html.agent-no-pull-refresh,
   html.agent-no-pull-refresh body {
     overscroll-behavior-y: contain;
+  }
+
+  :root {
+    --app-header-offset: calc(3.5rem + max(0.5rem, var(--safe-area-top)) + 1px);
   }
 
   .safe-area-top {

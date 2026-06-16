@@ -218,6 +218,55 @@ describe('favorite collection deletion', () => {
   })
 })
 
+describe('workspace tab defaults', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    useStore.setState({
+      tasks: [],
+      workspaceTabs: [],
+      activeWorkspaceTabId: null,
+      selectedWorkspaceTabIds: [],
+      prompt: 'initial prompt',
+      inputImages: [],
+      inputImageFolder: null,
+      params: { ...DEFAULT_PARAMS },
+      maskDraft: null,
+      maskEditorImageId: null,
+      galleryInputDraft: null,
+      agentConversations: [],
+      agentConversationsLoaded: false,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('creates a default workspace tab on first initialization', async () => {
+    await initStore()
+
+    const state = useStore.getState()
+    expect(state.workspaceTabs).toHaveLength(1)
+    expect(state.activeWorkspaceTabId).toBe(state.workspaceTabs[0].id)
+    expect(state.workspaceTabs[0]).toMatchObject({
+      name: '标签 1',
+      prompt: 'initial prompt',
+      tasks: [],
+      order: 0,
+    })
+  })
+
+  it('keeps existing gallery tasks in the default tab when no tabs were persisted', async () => {
+    const existingTask = task({ id: 'orphan-gallery-task' })
+    await putDbTask(existingTask)
+
+    await initStore()
+
+    const state = useStore.getState()
+    expect(state.tasks.map((item) => item.id)).toEqual(['orphan-gallery-task'])
+    expect(state.workspaceTabs).toHaveLength(1)
+    expect(state.workspaceTabs[0].tasks.map((item) => item.id)).toEqual(['orphan-gallery-task'])
+  })
+})
+
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
     useStore.setState({

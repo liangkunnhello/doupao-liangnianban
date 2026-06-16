@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type ReactNode } from 'react'
+import { memo, useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
@@ -57,7 +57,7 @@ function TaskActionButton({
   )
 }
 
-export default function TaskCard({
+function TaskCard({
   task,
   onReuse,
   onEditOutputs,
@@ -801,3 +801,9 @@ export default function TaskCard({
     </div>
   )
 }
+
+export default memo(TaskCard, (prev, next) => (
+  prev.task === next.task &&
+  prev.isSelected === next.isSelected &&
+  prev.disableSwipe === next.disableSwipe
+))

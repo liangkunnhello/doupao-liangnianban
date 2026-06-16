@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask } from '../store'
 import TaskCard from './TaskCard'
 
@@ -12,12 +12,14 @@ export default function TaskGrid() {
   }, [activeTabId, workspaceTabs])
   const tasks = activeTabId ? tabTasks : allTasks
   const searchQuery = useStore((s) => s.searchQuery)
+  const deferredSearchQuery = useDeferredValue(searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
+  const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds])
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -38,7 +40,7 @@ export default function TaskGrid() {
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
+    const q = deferredSearchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
       if (filterFavorite) {
@@ -60,7 +62,7 @@ export default function TaskGrid() {
       const batchErrorStr = t.batchItemErrors?.map((e) => e.error.toLowerCase()).join(' ') ?? ''
       return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q) || batchErrorStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  }, [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -326,7 +328,7 @@ export default function TaskGrid() {
               onReuse={() => reuseConfig(task)}
               onEditOutputs={() => editOutputs(task)}
               onDelete={() => handleDelete(task)}
-              isSelected={selectedTaskIds.includes(task.id)}
+              isSelected={selectedTaskIdSet.has(task.id)}
             />
           </div>
         ))}

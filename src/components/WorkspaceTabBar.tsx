@@ -390,6 +390,18 @@ export default function WorkspaceTabBar() {
     })
   }, [selectedWorkspaceTabIds, workspaceTabs, setConfirmDialog, showToast, clearWorkspaceTabSelection])
 
+  useEffect(() => {
+    const root = document.documentElement
+    const leftVar = '--workspace-tabbar-left-width'
+    const rightVar = '--workspace-tabbar-right-width'
+    root.style.setProperty(leftVar, appMode === 'gallery' && docked === 'left' ? `${sz.w}px` : '0px')
+    root.style.setProperty(rightVar, appMode === 'gallery' && docked === 'right' ? `${sz.w}px` : '0px')
+    return () => {
+      root.style.setProperty(leftVar, '0px')
+      root.style.setProperty(rightVar, '0px')
+    }
+  }, [appMode, docked, sz.w])
+
   if (appMode !== 'gallery') return null
 
   const isDocked = Boolean(docked)
@@ -397,8 +409,8 @@ export default function WorkspaceTabBar() {
     ? {
         left: docked === 'left' ? 0 : undefined,
         right: docked === 'right' ? 0 : undefined,
-        top: 0,
-        height: '100vh',
+        top: 'var(--app-header-offset)',
+        height: 'calc(100vh - var(--app-header-offset))',
         borderRadius: 0,
         boxShadow: 'none',
         borderTop: 'none',
