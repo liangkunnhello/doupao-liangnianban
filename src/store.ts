@@ -66,7 +66,7 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal } from './lib/localSave'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -187,7 +187,7 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
     const imageId = imageIds[i]
     const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
     if (dataUrl) {
-      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, task.params.output_format, subFolder)
+      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder)
     }
   }
 }
@@ -227,7 +227,7 @@ async function saveTaskToLocalFS(taskId: string) {
       const imageId = task.outputImages[i]
       const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
       if (dataUrl) {
-        const saved = await saveImageToLocal(taskId, i, dataUrl, task.params.output_format, subFolder)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder)
         if (!saved) imageFailCount++
       } else {
         imageFailCount++

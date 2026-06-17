@@ -104,7 +104,16 @@ export async function joinPath(...paths: string[]): Promise<string> {
 const EXT_MAP: Record<string, string> = {
   png: 'png',
   jpeg: 'jpg',
+  jpg: 'jpg',
   webp: 'webp',
+}
+
+export function getImageExtensionFromDataUrl(dataUrl: string, fallbackExt: string = 'png'): string {
+  const mime = dataUrl.match(/^data:([^;,]+)/i)?.[1]?.toLowerCase()
+  if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg'
+  if (mime === 'image/webp') return 'webp'
+  if (mime === 'image/png') return 'png'
+  return EXT_MAP[fallbackExt] || fallbackExt || 'png'
 }
 
 async function ensureSubDir(basePath: string, subDir: string): Promise<string> {
