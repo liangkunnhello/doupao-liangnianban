@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS, type TaskParams } from '../types'
-import { getImagePostprocessPlan } from './imagePostprocess'
+import { getImagePostprocessPlan, mergePostprocessedActualParams } from './imagePostprocess'
 
 function params(overrides: Partial<TaskParams> = {}): TaskParams {
   return { ...DEFAULT_PARAMS, ...overrides }
@@ -75,5 +75,20 @@ describe('image postprocess plan', () => {
     expect(plan.enabled).toBe(true)
     expect(plan.resize).toEqual({ width: 1536, height: 1024 })
     expect(plan.encode).toEqual({ format: 'webp', mime: 'image/webp', quality: 0.9 })
+  })
+
+  it('merges postprocessed actual params over original values', () => {
+    expect(mergePostprocessedActualParams(
+      { size: '2048x2048', output_format: 'png', quality: 'high' },
+      { size: '1024x1024', output_format: 'webp' },
+    )).toEqual({
+      size: '1024x1024',
+      output_format: 'webp',
+      quality: 'high',
+    })
+  })
+
+  it('returns undefined when both actual param inputs are empty', () => {
+    expect(mergePostprocessedActualParams(undefined, {})).toBeUndefined()
   })
 })
