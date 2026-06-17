@@ -62,6 +62,7 @@ import { IMAGE_FETCH_CORS_HINT, isRetryableError } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
+import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib/imagePostprocess'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
@@ -2783,6 +2784,18 @@ function mapActualParamsByImage(outputIds: string[], paramsList: Array<Partial<T
   return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
 }
 
+async function processAndStoreGeneratedImage(
+  dataUrl: string,
+  params: TaskParams,
+  originalActualParams?: Partial<TaskParams>,
+): Promise<{ id: string; dataUrl: string; actualParams?: Partial<TaskParams> }> {
+  const processed = await postprocessGeneratedImage(dataUrl, params)
+  const actualParams = mergePostprocessedActualParams(originalActualParams, processed.actualParams)
+  const imgId = await storeImage(processed.dataUrl, 'generated')
+  cacheImage(imgId, processed.dataUrl)
+  return { id: imgId, dataUrl: processed.dataUrl, actualParams }
+}
+
 async function readImageSizeParam(dataUrl: string): Promise<Partial<TaskParams> | undefined> {
   if (typeof Image === 'undefined') return undefined
 
@@ -2828,12 +2841,13 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
   const latest = useStore.getState().tasks.find((item) => item.id === task.id)
   if (!latest || latest.status === 'done') return
 
-  const actualParamsList = await resolveImageSizeParamsList(result.images, result.actualParamsList)
+  const originalActualParamsList = await resolveImageSizeParamsList(result.images, result.actualParamsList)
   const outputIds: string[] = []
-  for (const dataUrl of result.images) {
-    const imgId = await storeImage(dataUrl, 'generated')
-    cacheImage(imgId, dataUrl)
-    outputIds.push(imgId)
+  const actualParamsList: Array<Partial<TaskParams> | undefined> = []
+  for (let i = 0; i < result.images.length; i++) {
+    const stored = await processAndStoreGeneratedImage(result.images[i], task.params, originalActualParamsList[i])
+    outputIds.push(stored.id)
+    actualParamsList.push(stored.actualParams)
   }
 
   updateTaskInStore(task.id, {
@@ -4430,10 +4444,10 @@ async function executeAgentRound(
       const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
       if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
 
-      const imgId = await storeImage(image.dataUrl, 'generated')
-      cacheImage(imgId, image.dataUrl)
+      const stored = await processAndStoreGeneratedImage(image.dataUrl, params, image.actualParams)
+      const imgId = stored.id
       const actualParams: Partial<TaskParams> = {
-        ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
+        ...(Object.keys(stored.actualParams ?? {}).length ? stored.actualParams : {}),
         n: 1,
       }
       updateTaskInStore(taskId, {
@@ -4768,10 +4782,10 @@ async function executeAgentRound(
         }
         const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
         const promptRefs = await resolveReferenceImages(promptRefIds)
-        const imgId = await storeImage(image.dataUrl, 'generated')
-        cacheImage(imgId, image.dataUrl)
+        const stored = await processAndStoreGeneratedImage(image.dataUrl, params, image.actualParams)
+        const imgId = stored.id
         const actualParams: Partial<TaskParams> = {
-          ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
+          ...(Object.keys(stored.actualParams ?? {}).length ? stored.actualParams : {}),
           n: 1,
         }
         const task: TaskRecord = {
@@ -5022,6 +5036,7 @@ async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
+  const taskParams = task.params
   const taskProfile = getTaskApiProfile(settings, task)
   if (!taskProfile && task.apiProfileId) {
     updateTaskInStore(taskId, {
@@ -5138,7 +5153,6 @@ async function executeTask(taskId: string) {
 
       async function storeBatchResult(result: CallApiResult, index: number) {
         const imageBaseIndex = index * imagesPerItem
-        successBatchCount++
 
         const itemImages = result.images
         const itemActualParamsList = result.actualParamsList?.length
@@ -5149,21 +5163,22 @@ async function executeTask(taskId: string) {
           : result.images.map(() => undefined)
         const itemRawImageUrls = result.rawImageUrls ?? []
 
+        const newOutputIds: string[] = []
+        const processedActualParamsList: Array<Partial<TaskParams> | undefined> = []
+        for (let i = 0; i < itemImages.length; i++) {
+          const stored = await processAndStoreGeneratedImage(itemImages[i], taskParams, itemActualParamsList[i])
+          newOutputIds.push(stored.id)
+          processedActualParamsList.push(stored.actualParams)
+        }
+
         allImages = allImages.concat(itemImages)
-        allActualParamsList = allActualParamsList.concat(itemActualParamsList)
+        allActualParamsList = allActualParamsList.concat(processedActualParamsList)
         allRevisedPrompts = allRevisedPrompts.concat(itemRevisedPrompts)
         allRawImageUrls = allRawImageUrls.concat(itemRawImageUrls)
         if (!firstActualParamsValue) {
-          firstActualParamsValue = result.actualParams
+          firstActualParamsValue = firstActualParams(processedActualParamsList) ?? result.actualParams
         }
-
-        const newOutputIds = await Promise.all(
-          itemImages.map(async (dataUrl) => {
-            const imgId = await storeImage(dataUrl, 'generated')
-            cacheImage(imgId, dataUrl)
-            return imgId
-          }),
-        )
+        successBatchCount++
         const currentTask = useStore.getState().tasks.find((t) => t.id === taskId)
         if (currentTask && currentTask.status === 'running') {
           const existingOutputIds = currentTask.outputImages || []
@@ -5425,20 +5440,23 @@ async function executeTask(taskId: string) {
 
     // 存储输出图片（n>1 分批模式已在每轮追加，这里只需补充单张模式）
     const outputIds: string[] = latestBeforeSuccess.outputImages || []
+    let storedSingleActualParamsList: Array<Partial<TaskParams> | undefined> | undefined
     if (n === 1) {
-      for (const dataUrl of result.images) {
-        const imgId = await storeImage(dataUrl, 'generated')
-        cacheImage(imgId, dataUrl)
-        outputIds.push(imgId)
+      storedSingleActualParamsList = []
+      for (let i = 0; i < result.images.length; i++) {
+        const stored = await processAndStoreGeneratedImage(result.images[i], taskParams, result.actualParamsList?.[i] ?? result.actualParams)
+        outputIds.push(stored.id)
+        storedSingleActualParamsList.push(stored.actualParams)
       }
     }
     const isAsyncCustomTask = taskProvider !== 'fal' && taskProvider !== 'openai' && Boolean(customTaskInfo)
-    const actualParamsList = taskProvider === 'fal'
+    const actualParamsList = storedSingleActualParamsList ?? (taskProvider === 'fal'
       ? await resolveImageSizeParamsList(result.images, result.actualParamsList)
       : isAsyncCustomTask
       ? await readImageSizeParamsList(result.images)
-      : result.actualParamsList
+      : result.actualParamsList)
     const actualParams = (() => {
+      if (storedSingleActualParamsList) return { ...firstActualParams(actualParamsList), n: outputIds.length }
       if (taskProvider === 'fal') return firstActualParams(actualParamsList)
       if (isAsyncCustomTask) return firstActualParams(actualParamsList)
       return { ...result.actualParams, n: outputIds.length }
@@ -6158,12 +6176,13 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   const latest = useStore.getState().tasks.find((item) => item.id === task.id)
   if (!latest || latest.status === 'done') return
 
-  const actualParamsList = await readImageSizeParamsList(result.images)
+  const originalActualParamsList = await readImageSizeParamsList(result.images)
   const outputIds: string[] = []
-  for (const dataUrl of result.images) {
-    const imgId = await storeImage(dataUrl, 'generated')
-    cacheImage(imgId, dataUrl)
-    outputIds.push(imgId)
+  const actualParamsList: Array<Partial<TaskParams> | undefined> = []
+  for (let i = 0; i < result.images.length; i++) {
+    const stored = await processAndStoreGeneratedImage(result.images[i], task.params, originalActualParamsList[i])
+    outputIds.push(stored.id)
+    actualParamsList.push(stored.actualParams)
   }
 
   updateTaskInStore(task.id, {
