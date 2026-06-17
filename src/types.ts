@@ -143,6 +143,11 @@ export interface TaskParams {
   quality: 'auto' | 'low' | 'medium' | 'high'
   output_format: 'png' | 'jpeg' | 'webp'
   output_compression: number | null
+  postprocess_resize_enabled: boolean
+  postprocess_size: string
+  postprocess_compress_enabled: boolean
+  postprocess_format: 'png' | 'jpeg' | 'webp'
+  postprocess_quality: number | null
   moderation: 'auto' | 'low'
   n: number
 }
@@ -152,6 +157,11 @@ export const DEFAULT_PARAMS: TaskParams = {
   quality: 'auto',
   output_format: 'png',
   output_compression: null,
+  postprocess_resize_enabled: false,
+  postprocess_size: 'auto',
+  postprocess_compress_enabled: false,
+  postprocess_format: 'webp',
+  postprocess_quality: 90,
   moderation: 'auto',
   n: 1,
 }
