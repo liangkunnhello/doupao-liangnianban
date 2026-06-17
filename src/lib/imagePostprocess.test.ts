@@ -1,10 +1,65 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS, type TaskParams } from '../types'
-import { getImagePostprocessPlan, mergePostprocessedActualParams } from './imagePostprocess'
+import { getImagePostprocessPlan, mergePostprocessedActualParams, postprocessGeneratedImage } from './imagePostprocess'
+
+const canvasImageMocks = vi.hoisted(() => ({
+  loadImage: vi.fn(),
+  canvasToBlob: vi.fn(),
+}))
+
+vi.mock('./canvasImage', () => ({
+  loadImage: canvasImageMocks.loadImage,
+  canvasToBlob: canvasImageMocks.canvasToBlob,
+}))
 
 function params(overrides: Partial<TaskParams> = {}): TaskParams {
   return { ...DEFAULT_PARAMS, ...overrides }
 }
+
+const originalDocument = globalThis.document
+const originalFileReader = globalThis.FileReader
+
+beforeEach(() => {
+  canvasImageMocks.loadImage.mockReset()
+  canvasImageMocks.canvasToBlob.mockReset()
+
+  const canvasContext = {
+    fillStyle: '',
+    fillRect: vi.fn(),
+    drawImage: vi.fn(),
+  }
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: vi.fn(() => canvasContext),
+  }
+
+  globalThis.document = {
+    createElement: vi.fn((tag: string) => {
+      if (tag === 'canvas') return canvas
+      return null
+    }),
+  } as any
+
+  class MockFileReader {
+    result: string | ArrayBuffer | null = null
+    onload: ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null = null
+    onerror: ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown) | null = null
+
+    readAsDataURL(blob: Blob) {
+      this.result = `data:${blob.type};base64,encoded`
+      this.onload?.call(this as any, {} as ProgressEvent<FileReader>)
+    }
+  }
+
+  globalThis.FileReader = MockFileReader as any
+})
+
+afterEach(() => {
+  globalThis.document = originalDocument
+  globalThis.FileReader = originalFileReader
+  vi.restoreAllMocks()
+})
 
 describe('image postprocess plan', () => {
   it('keeps postprocessing disabled by default', () => {
@@ -90,5 +145,46 @@ describe('image postprocess plan', () => {
 
   it('returns undefined when both actual param inputs are empty', () => {
     expect(mergePostprocessedActualParams(undefined, {})).toBeUndefined()
+  })
+
+  it('returns the original image when postprocessing is disabled', async () => {
+    const dataUrl = 'data:image/png;base64,original'
+
+    await expect(postprocessGeneratedImage(dataUrl, DEFAULT_PARAMS)).resolves.toEqual({
+      dataUrl,
+      actualParams: {},
+    })
+    expect(canvasImageMocks.loadImage).not.toHaveBeenCalled()
+    expect(canvasImageMocks.canvasToBlob).not.toHaveBeenCalled()
+  })
+
+  it('accepts image/jpg as jpeg during resize-only postprocessing', async () => {
+    canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
+    canvasImageMocks.canvasToBlob.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
+
+    const result = await postprocessGeneratedImage('data:image/jpg;base64,source', params({
+      postprocess_resize_enabled: true,
+      postprocess_size: '320x240',
+    }))
+
+    expect(canvasImageMocks.loadImage).toHaveBeenCalledWith('data:image/jpg;base64,source')
+    expect(canvasImageMocks.canvasToBlob).toHaveBeenCalledWith(expect.any(Object), 'image/jpeg', undefined)
+    expect(result).toEqual({
+      dataUrl: 'data:image/jpeg;base64,encoded',
+      actualParams: {
+        size: '320x240',
+        output_format: 'jpeg',
+      },
+    })
+  })
+
+  it('rejects unsupported browser MIME fallback for explicit compression', async () => {
+    canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
+    canvasImageMocks.canvasToBlob.mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+
+    await expect(postprocessGeneratedImage('data:image/png;base64,source', params({
+      postprocess_compress_enabled: true,
+      postprocess_format: 'webp',
+    }))).rejects.toThrow('Local image postprocessing failed: image/webp output is not supported')
   })
 })

@@ -56,7 +56,8 @@ export async function postprocessGeneratedImage(dataUrl: string, params: TaskPar
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('褰撳墠娴忚鍣ㄤ笉鏀寔 Canvas')
 
-  const requestedMime = plan.encode.mime ?? getDataUrlMime(dataUrl) ?? 'image/png'
+  const requestedExplicitMime = canonicalizeImageMime(plan.encode.mime)
+  const requestedMime = requestedExplicitMime ?? canonicalizeImageMime(getDataUrlMime(dataUrl)) ?? 'image/png'
   if (requestedMime === 'image/jpeg') {
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, width, height)
@@ -64,11 +65,11 @@ export async function postprocessGeneratedImage(dataUrl: string, params: TaskPar
   ctx.drawImage(image, 0, 0, width, height)
 
   const blob = await canvasToBlob(canvas, requestedMime, plan.encode.quality)
-  if (blob.type && blob.type !== requestedMime) {
+  const finalMime = canonicalizeImageMime(blob.type || requestedMime) ?? requestedMime
+  if (requestedExplicitMime && finalMime !== requestedExplicitMime) {
     throw new Error(`Local image postprocessing failed: ${requestedMime} output is not supported`)
   }
 
-  const finalMime = blob.type || requestedMime
   const outputFormat = getOutputFormatFromMime(finalMime)
   return {
     dataUrl: await blobToDataUrl(blob, finalMime),
@@ -128,16 +129,25 @@ function normalizeCanvasQuality(value: number | null): number {
   return Math.min(1, Math.max(0, value / 100))
 }
 
+function canonicalizeImageMime(value: string | null | undefined): string | null {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return 'image/jpeg'
+  if (normalized === 'image/png') return 'image/png'
+  if (normalized === 'image/webp') return 'image/webp'
+  return null
+}
+
 function getDataUrlMime(dataUrl: string): string | null {
   const match = /^data:([^;,]+)(?:;[^,]*)?,/i.exec(dataUrl)
   return match ? match[1].toLowerCase() : null
 }
 
-function getOutputFormatFromMime(mime: string): TaskParams['output_format'] | undefined {
-  if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpeg'
+function getOutputFormatFromMime(mime: string | null): TaskParams['output_format'] | undefined {
+  if (mime === 'image/jpeg') return 'jpeg'
   if (mime === 'image/webp') return 'webp'
   if (mime === 'image/png') return 'png'
-  return 'png'
+  return undefined
 }
 
 async function blobToDataUrl(blob: Blob, fallbackMime: string): Promise<string> {
