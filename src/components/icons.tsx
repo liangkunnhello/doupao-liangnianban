@@ -89,6 +89,14 @@ export function DownloadIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function FolderOpenIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v1M3 7v10a2 2 0 002 2h12.5a2 2 0 001.9-1.37l1.45-4.35A2 2 0 0018.95 10H6a2 2 0 00-1.9 1.37L3 14.67" />
+    </svg>
+  )
+}
+
 export function EditIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>

@@ -12,9 +12,13 @@ import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from 
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import { getHoverPreviewPosition, getHoverPreviewSize } from '../lib/hoverPreviewPosition'
+import { getLocalImageSaveDirectory, isElectron as isElectronEnv, openInExplorer } from '../lib/localSave'
+import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, FolderOpenIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
+
+const HOVER_PREVIEW_MAX_LONG_EDGE = 1024
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -25,6 +29,7 @@ export default function DetailModal() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
+  const workspaceTabs = useStore((s) => s.workspaceTabs)
   const settings = useStore((s) => s.settings)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
@@ -40,6 +45,14 @@ export default function DetailModal() {
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
+  const [hoverPreview, setHoverPreview] = useState<{
+    imageId: string
+    src: string
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -54,15 +67,43 @@ export default function DetailModal() {
   const retryTooltip = useTooltip()
   const downloadImageTooltip = useTooltip()
   const downloadAllTooltip = useTooltip()
+  const openImageDirectoryTooltip = useTooltip()
 
   const clearTextSelection = () => {
     const selection = window.getSelection()
     if (selection && !selection.isCollapsed) selection.removeAllRanges()
   }
 
+  const updateHoverPreviewPosition = (imageId: string, src: string, e: React.PointerEvent) => {
+    if (e.pointerType !== 'mouse' || !src) return
+    const [widthText, heightText] = (imageSizes[imageId] || '').split('×')
+    const imageWidth = Number(widthText) || HOVER_PREVIEW_MAX_LONG_EDGE
+    const imageHeight = Number(heightText) || HOVER_PREVIEW_MAX_LONG_EDGE
+    const size = getHoverPreviewSize({
+      imageWidth,
+      imageHeight,
+      maxLongEdge: HOVER_PREVIEW_MAX_LONG_EDGE,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    })
+    const position = getHoverPreviewPosition({
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      previewWidth: size.width,
+      previewHeight: size.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    })
+    setHoverPreview({ imageId, src, ...position, ...size })
+  }
+
   const task = useMemo(
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
+  )
+  const containingTab = useMemo(
+    () => detailTaskId ? workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === detailTaskId)) : undefined,
+    [detailTaskId, workspaceTabs],
   )
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
@@ -341,6 +382,43 @@ export default function DetailModal() {
     }
   }
 
+  const handleDownloadOutputImage = async (imageId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!imageId || !task) return
+
+    try {
+      const result = await downloadImageIds([imageId], `task-${task.id}`)
+      if (result.successCount === 0) {
+        showToast('下载失败', 'error')
+      } else {
+        showToast('下载成功', 'success')
+      }
+    } catch (err) {
+      console.error(err)
+      showToast('下载失败', 'error')
+    }
+  }
+
+  const handleOpenImageDirectory = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!isElectronEnv()) {
+      showToast('仅桌面端支持打开图片目录', 'error')
+      return
+    }
+
+    try {
+      const dirPath = await getLocalImageSaveDirectory(containingTab?.name)
+      if (!dirPath) {
+        showToast('未设置本地保存目录', 'error')
+        return
+      }
+      await openInExplorer(dirPath)
+    } catch (err) {
+      console.error(err)
+      showToast('打开图片目录失败', 'error')
+    }
+  }
+
   const handleDownloadAllOutputs = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!task?.outputImages?.length) return
@@ -412,345 +490,113 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {((task.status === 'done' || hasPartialSuccess || (task.status === 'running' && outputLen > 0)) && outputLen > 0) && (
-            <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
-              <div className="relative group flex">
-                <button
-                  type="button"
-                  {...downloadImageTooltip.handlers}
-                  onClick={(e) => {
-                    downloadImageTooltip.handlers.onClick()
-                    handleDownloadCurrentOutput(e)
-                  }}
-                    className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
-                  aria-label="下载图片"
-                >
-                  <DownloadIcon className="h-4 w-4" />
-                </button>
-                <ViewportTooltip visible={downloadImageTooltip.visible} className="whitespace-nowrap">
-                  下载图片
-                </ViewportTooltip>
+        <div className="md:w-1/2 w-full h-72 md:h-auto bg-gray-100 dark:bg-black/20 relative flex flex-col flex-shrink-0 min-h-[18rem]">
+          {outputLen > 0 && (
+            <div className="flex items-center justify-between gap-3 border-b border-black/5 px-4 py-3 dark:border-white/[0.06]">
+              <div data-selectable-text className="min-w-0 flex items-center gap-1.5">
+                {currentImageRatio && currentImageSize ? (
+                  <>
+                    <span className="rounded bg-black/60 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">{currentImageRatio}</span>
+                    <span className="rounded bg-black/60 px-2 py-0.5 text-xs font-medium text-white/90 backdrop-blur-sm">{currentImageSize}</span>
+                  </>
+                ) : formatDuration() ? (
+                  <span className="rounded bg-black/60 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">{formatDuration()}</span>
+                ) : null}
+                <span className="rounded-full bg-black/45 px-2 py-0.5 text-xs text-white backdrop-blur-sm">
+                  {Math.min(imageIndex + 1, outputLen)} / {outputLen}
+                </span>
               </div>
-              {outputLen > 1 && (
+              <div className="flex shrink-0 items-center gap-1.5">
                 <div className="relative group flex">
                   <button
                     type="button"
-                    {...downloadAllTooltip.handlers}
+                    {...openImageDirectoryTooltip.handlers}
                     onClick={(e) => {
-                      downloadAllTooltip.handlers.onClick()
-                      handleDownloadAllOutputs(e)
+                      openImageDirectoryTooltip.handlers.onClick()
+                      handleOpenImageDirectory(e)
                     }}
-                    className="flex items-center justify-center pl-1.5 pr-2 py-0.5 gap-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
-                    aria-label="下载全部"
+                    className="flex items-center justify-center rounded bg-black/60 p-1 text-white backdrop-blur-sm transition hover:bg-black/75 focus:outline-none focus:ring-1 focus:ring-white/50"
+                    aria-label="打开图片目录"
                   >
-                    <DownloadIcon className="h-4 w-4" />
-                    <span className="text-[9px] font-bold leading-none mt-[1px]">ALL</span>
+                    <FolderOpenIcon className="h-4 w-4" />
                   </button>
-                  <ViewportTooltip visible={downloadAllTooltip.visible} className="whitespace-nowrap">
-                    下载全部
-                  </ViewportTooltip>
+                  <ViewportTooltip visible={openImageDirectoryTooltip.visible} className="whitespace-nowrap">打开图片目录</ViewportTooltip>
                 </div>
-              )}
-            </div>
-          )}
-          {((task.status === 'done' || hasPartialSuccess) || (task.status === 'running' && outputLen > 0)) && outputLen > 0 && currentOutputPreviewSrc && (
-            <>
-              <img
-                src={currentOutputPreviewSrc}
-                data-image-id={currentOutputImageId}
-                className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
-                onLoad={(e) => {
-                  const image = e.currentTarget
-                  if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
-                    setImageRatios((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
-                    }))
-                    setImageSizes((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: `${image.naturalWidth}×${image.naturalHeight}`,
-                    }))
-                  }
-                }}
-                onClick={() =>
-                  setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
-                }
-                alt=""
-              />
-              {task.status === 'running' && (
-                <span className="absolute left-4 bottom-3 z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  {progressDisplay.cardLabel}
-                </span>
-              )}
-              {hasPartialSuccess && (
-                <span className="absolute left-4 bottom-3 z-10 flex items-center gap-1 rounded bg-yellow-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  {progressDisplay.cardLabel}
-                </span>
-              )}
-              <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
-                {currentImageRatio && currentImageSize ? (
-                  <>
-                    <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
-                      {currentImageRatio}
-                    </span>
-                    <span className="bg-black/50 text-white/90 text-xs px-2 py-0.5 rounded backdrop-blur-sm font-medium">
-                      {currentImageSize}
-                    </span>
-                  </>
-                ) : (
-                  formatDuration() && (
-                    <span className="flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      {formatDuration()}
-                    </span>
-                  )
-                )}
-              </div>
-              {(outputLen > 1 || (task.status === 'running' && outputLen + streamPreviewLen > 1)) && (
-                <>
-                  <button
-                    onClick={() => {
-                      const total = task.status === 'running' ? outputLen + streamPreviewLen : outputLen
-                      setImageIndex((imageIndex - 1 + total) % total)
-                    }}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => {
-                      const total = task.status === 'running' ? outputLen + streamPreviewLen : outputLen
-                      setImageIndex((imageIndex + 1) % total)
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                  <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
-                    {task.status === 'running'
-                      ? `${imageIndex + 1} / ${outputLen + streamPreviewLen}${task.params.n > outputLen + streamPreviewLen ? ` (共需 ${task.params.n} 张)` : ''}`
-                      : task.batchItemStatuses
-                        ? `${imageIndex + 1} / ${task.batchItemStatuses.length}${task.batchItemStatuses.some((s) => s === 'error') ? ` (${task.batchItemStatuses.filter((s) => s === 'done').length} 成功)` : ''}`
-                        : `${imageIndex + 1} / ${outputLen}`}
-                  </span>
-                  {task.batchItemStatuses && (
-                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-1">
-                      {task.batchItemStatuses.map((s, i) => (
-                        <button
-                          key={i}
-                          onClick={() => setImageIndex(i)}
-                          className={`w-2 h-2 rounded-full transition ${
-                            i === imageIndex
-                              ? s === 'error' ? 'bg-red-400' : 'bg-white'
-                              : s === 'error' ? 'bg-red-400/40' : 'bg-white/40'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-              {task.batchItemStatuses && outputLen <= 1 && task.batchItemStatuses.length > 1 && (
-                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
-                  {task.batchItemStatuses.map((s, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setImageIndex(i)}
-                      className={`w-2 h-2 rounded-full transition ${
-                        i === imageIndex
-                          ? s === 'error' ? 'bg-red-400' : 'bg-white'
-                          : s === 'error' ? 'bg-red-400/40' : 'bg-white/40'
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-          {(task.status === 'running' || isFalReconnecting || isCustomReconnecting) && (
-            <>
-              <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                {formatDuration()}
-              </div>
-              {task.status === 'running' && streamPreviewLen > 0 && imageIndex >= outputLen && (
-                <>
-                  {currentStreamPreviewSrc ? (
-                    <img
-                      src={currentStreamPreviewSrc}
-                      className={`max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain ${streamPreviewLoaded ? '' : 'hidden'}`}
-                      alt=""
-                      onLoad={() => setStreamPreviewLoaded(true)}
-                      onError={() => setStreamPreviewLoaded(false)}
-                    />
-                  ) : null}
-                  {(!currentStreamPreviewSrc || !streamPreviewLoaded) && (
-                    <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                {task.status === 'running' && (
+                  <span className="flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                    <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                  )}
-                  {streamPreviewLoaded && (
-                    <span className="absolute top-4 right-3 z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
-                      流式预览
-                    </span>
-                  )}
-                </>
-              )}
-              {task.status === 'running' && outputLen === 0 && streamPreviewLen === 0 && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              )}
-            </>
-          )}
-          {task.status === 'error' && isFalReconnecting && (
-            <div className="w-full max-w-md px-4 text-center">
-              <svg className="w-10 h-10 text-yellow-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <p className="text-sm font-medium text-yellow-500">{progressDisplay.cardLabel}</p>
-            </div>
-          )}
-          {task.status === 'error' && !isFalReconnecting && !isCustomReconnecting && !hasPartialSuccess && (
-            <div className="w-full max-w-md px-4 text-center">
-              <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p
-                className="overflow-hidden whitespace-pre-line text-sm leading-6 text-red-500 break-words"
-                style={{
-                  display: '-webkit-box',
-                  WebkitBoxOrient: 'vertical',
-                  WebkitLineClamp: 10,
-                }}
-              >
-                {task.error || '生成失败'}
-              </p>
-              <div className="mt-3 flex items-center justify-center gap-2">
-                <div className="relative group">
-                  <button
-                    type="button"
-                    {...copyErrorTooltip.handlers}
-                    onClick={(e) => {
-                      copyErrorTooltip.handlers.onClick()
-                      handleCopyError()
-                    }}
-                    className="inline-flex items-center justify-center rounded-full border border-red-200/80 bg-white/80 px-3 py-1.5 text-red-500 transition hover:bg-red-50 dark:border-red-400/20 dark:bg-white/[0.04] dark:hover:bg-red-500/10"
-                    aria-label="复制完整报错"
-                  >
-                    <CopyIcon className="h-4 w-4" />
-                  </button>
-                  <ViewportTooltip visible={copyErrorTooltip.visible} className="whitespace-nowrap">
-                    复制完整报错
-                  </ViewportTooltip>
-                </div>
-                {task.rawResponsePayload && (
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      {...viewRawResponseTooltip.handlers}
-                      onClick={(e) => {
-                        dismissAllTooltips()
-                        setShowRawResponseModal(true)
-                      }}
-                      className="inline-flex items-center justify-center rounded-full border border-purple-200/80 bg-purple-50 px-3 py-1.5 text-purple-600 transition hover:bg-purple-100 dark:border-purple-500/20 dark:bg-purple-500/10 dark:text-purple-400 dark:hover:bg-purple-500/20"
-                      aria-label="查看原始响应"
-                    >
-                      <CodeIcon className="h-4 w-4" />
-                    </button>
-                    <ViewportTooltip visible={viewRawResponseTooltip.visible} className="whitespace-nowrap">
-                      查看原始响应
-                    </ViewportTooltip>
-                  </div>
+                    {progressDisplay.cardLabel}
+                  </span>
                 )}
-                {task.rawImageUrls && task.rawImageUrls.length > 0 && (
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      {...copyRawUrlsTooltip.handlers}
-                      onClick={async (e) => {
-                        if (task.rawImageUrls!.length === 1) {
-                          copyRawUrlsTooltip.handlers.onClick()
-                          try {
-                            await copyTextToClipboard(task.rawImageUrls![0])
-                            showToast('图片链接已复制', 'success')
-                          } catch (err) {
-                            showToast(getClipboardFailureMessage('复制链接失败', err), 'error')
-                          }
-                        } else {
-                          dismissAllTooltips()
-                          setShowRawUrlsModal(true)
-                        }
-                      }}
-                      className="inline-flex items-center justify-center rounded-full border border-green-200/80 bg-green-50 px-3 py-1.5 text-green-600 transition hover:bg-green-100 dark:border-green-500/20 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20"
-                      aria-label="复制图片链接"
-                    >
-                      <LinkIcon className="h-4 w-4" />
-                    </button>
-                    <ViewportTooltip visible={copyRawUrlsTooltip.visible} className="whitespace-nowrap">
-                      复制图片链接
-                    </ViewportTooltip>
-                  </div>
-                )}
-                {streamPartialImageIds.length > 0 && (
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      {...downloadPartialImagesTooltip.handlers}
-                      onClick={(e) => {
-                        downloadPartialImagesTooltip.handlers.onClick()
-                        void handleDownloadPartialImages()
-                      }}
-                      className="inline-flex items-center justify-center rounded-full border border-amber-200/80 bg-amber-50 px-3 py-1.5 text-amber-600 transition hover:bg-amber-100 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20"
-                      aria-label="下载中间步骤图"
-                    >
+                {hasPartialSuccess && <span className="rounded bg-yellow-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">{progressDisplay.cardLabel}</span>}
+                {outputLen > 1 && (
+                  <div className="relative group flex">
+                    <button type="button" {...downloadAllTooltip.handlers} onClick={(e) => { downloadAllTooltip.handlers.onClick(); handleDownloadAllOutputs(e) }} className="flex items-center justify-center gap-0.5 rounded bg-black/60 py-0.5 pl-1.5 pr-2 text-white backdrop-blur-sm transition hover:bg-black/75 focus:outline-none focus:ring-1 focus:ring-white/50" aria-label="下载全部">
                       <DownloadIcon className="h-4 w-4" />
+                      <span className="mt-[1px] text-[9px] font-bold leading-none">ALL</span>
                     </button>
-                    <ViewportTooltip visible={downloadPartialImagesTooltip.visible} className="whitespace-nowrap">
-                      下载中间步骤图
-                    </ViewportTooltip>
+                    <ViewportTooltip visible={downloadAllTooltip.visible} className="whitespace-nowrap">下载全部</ViewportTooltip>
                   </div>
                 )}
-                <div className="relative group">
-                  <button
-                    type="button"
-                    {...retryTooltip.handlers}
-                    onClick={(e) => {
-                      retryTooltip.handlers.onClick()
-                      handleRetry()
-                    }}
-                    className="inline-flex items-center justify-center rounded-full border border-blue-200/80 bg-white/80 px-3 py-1.5 text-blue-500 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
-                    aria-label="重试任务"
-                  >
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </button>
-                  <ViewportTooltip visible={retryTooltip.visible} className="whitespace-nowrap">
-                    重试任务
-                  </ViewportTooltip>
-                </div>
               </div>
             </div>
           )}
+
+          {outputLen > 0 ? (
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {task.outputImages.map((imageId, index) => {
+                  const src = outputPreviewSrcs[imageId] || ''
+                  const itemStatus = task.batchItemStatuses?.[index]
+                  const isSelected = imageId === currentOutputImageId
+                  return (
+                    <div key={imageId} className={['group relative aspect-video overflow-hidden rounded-lg border bg-black/20 transition', isSelected ? 'border-blue-400 shadow-[0_0_0_1px_rgba(96,165,250,0.75)]' : itemStatus === 'error' ? 'border-red-400/60' : 'border-white/10 hover:border-white/40'].join(' ')} onPointerEnter={(e) => { setImageIndex(index); updateHoverPreviewPosition(imageId, src, e) }} onPointerMove={(e) => updateHoverPreviewPosition(imageId, src, e)} onPointerLeave={() => setHoverPreview((preview) => preview?.imageId === imageId ? null : preview)}>
+                      {src ? (
+                        <img src={src} data-image-id={imageId} className="saveable-image h-full w-full cursor-pointer object-cover transition duration-150 group-hover:scale-[1.03]" onLoad={(e) => { const image = e.currentTarget; if (image.naturalWidth > 0 && image.naturalHeight > 0) { setImageRatios((prev) => ({ ...prev, [imageId]: formatImageRatio(image.naturalWidth, image.naturalHeight) })); setImageSizes((prev) => ({ ...prev, [imageId]: image.naturalWidth + '×' + image.naturalHeight })) } }} onClick={() => { setImageIndex(index); setLightboxImageId(imageId, task.outputImages) }} alt="" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center"><svg className="h-6 w-6 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg></div>
+                      )}
+                      <div className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">{index + 1}</div>
+                      {itemStatus === 'error' && <div className="pointer-events-none absolute bottom-1.5 left-1.5 rounded bg-red-500/90 px-1.5 py-0.5 text-[10px] font-medium text-white">失败</div>}
+                      {src && <button type="button" onClick={(e) => handleDownloadOutputImage(imageId, e)} className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white opacity-0 backdrop-blur-sm transition hover:bg-black/75 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-white/60" aria-label="下载图片"><DownloadIcon className="h-4 w-4" /></button>}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : task.status === 'running' ? (
+            <div className="m-auto flex flex-col items-center gap-3 text-blue-400"><svg className="h-10 w-10 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{formatDuration() && <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white">{formatDuration()}</span>}</div>
+          ) : task.status === 'error' ? (
+            <div className="m-auto w-full max-w-md px-4 text-center">
+              <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="overflow-hidden whitespace-pre-line text-sm leading-6 text-red-500 break-words">{task.error || '生成失败'}</p>
+              <div className="mt-3 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyError}
+                  className="inline-flex items-center justify-center rounded-full border border-red-200/80 bg-white/80 px-3 py-1.5 text-red-500 transition hover:bg-red-50 dark:border-red-400/20 dark:bg-white/[0.04] dark:hover:bg-red-500/10"
+                  aria-label="复制完整报错"
+                >
+                  <CopyIcon className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  className="inline-flex items-center justify-center rounded-full border border-blue-200/80 bg-white/80 px-3 py-1.5 text-blue-500 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:hover:bg-blue-500/10"
+                  aria-label="重试任务"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* 右侧：信息 */}
@@ -989,6 +835,25 @@ export default function DetailModal() {
           </div>
         </div>
       </div>
+
+      {hoverPreview && (
+        <div
+          className="pointer-events-none fixed z-[70] hidden overflow-hidden rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md md:block"
+          style={{
+            left: hoverPreview.left,
+            top: hoverPreview.top,
+            width: hoverPreview.width,
+            height: hoverPreview.height,
+          }}
+        >
+          <img
+            src={hoverPreview.src}
+            data-image-id={hoverPreview.imageId}
+            className="h-full w-full object-contain"
+            alt=""
+          />
+        </div>
+      )}
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
         <div

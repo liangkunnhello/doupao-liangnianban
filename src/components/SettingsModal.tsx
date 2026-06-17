@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
@@ -32,6 +32,8 @@ import { requestBrowserNotificationPermission, type BrowserNotificationPermissio
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
 import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getDesktopPath, getBackupPath, selectBackupDirectory, createBackupInPath } from '../lib/localSave'
 import { useAutoUpdate } from '../hooks/useAutoUpdate'
+import { useVersionCheck } from '../hooks/useVersionCheck'
+import { formatUpdateReleaseNotes } from '../lib/updateReleaseNotes'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
@@ -331,6 +333,7 @@ export default function SettingsModal() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const autoUpdate = useAutoUpdate()
+  const { latestRelease } = useVersionCheck()
   const importInputRef = useRef<HTMLInputElement>(null)
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null)
@@ -376,6 +379,12 @@ export default function SettingsModal() {
   const [isSelectingPath, setIsSelectingPath] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
+
+  const aboutReleaseVersion = autoUpdate.version || latestRelease?.tag || `v${__APP_VERSION__}`
+  const aboutReleaseNotes = useMemo(() => {
+    if (autoUpdate.releaseNotes) return formatUpdateReleaseNotes(autoUpdate.releaseNotes)
+    return formatUpdateReleaseNotes(latestRelease?.body)
+  }, [autoUpdate.releaseNotes, latestRelease?.body])
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
   const [dragDropPosition, setDragDropPosition] = useState<'before' | 'after' | null>(null)
@@ -2898,33 +2907,28 @@ export default function SettingsModal() {
                   </button>
                 )}
 
-                <p className="mt-8 mb-6 max-w-[360px] text-center text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                  本项目的成长离不开每一位用户的使用、反馈、贡献与支持，感谢一路有你。
-                </p>
-
-                <div className="flex flex-wrap items-center justify-center gap-3">
-                  <a
-                    href="https://github.com/nideyilian/doupao/issues"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                  >
-                    <svg className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    反馈问题
-                  </a>
-                  <a
-                    href="https://www.ifdian.net/a/cooksleep"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                  >
-                    <svg className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                    </svg>
-                    赞助作者
-                  </a>
+                <div className="mt-8 w-full max-w-[420px] rounded-2xl border border-gray-200/70 bg-gray-50/70 p-4 text-left dark:border-white/[0.06] dark:bg-white/[0.03]">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-blue-600 dark:text-blue-400">最新版更新</p>
+                      <h4 className="mt-1 text-sm font-bold text-gray-800 dark:text-gray-100">
+                        {aboutReleaseVersion.replace(/^v?/, 'v')} 更新内容
+                      </h4>
+                    </div>
+                    {latestRelease?.url && (
+                      <a
+                        href={latestRelease.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 shadow-sm ring-1 ring-black/5 transition hover:bg-gray-100 dark:bg-white/[0.06] dark:text-gray-300 dark:ring-white/10 dark:hover:bg-white/[0.1]"
+                      >
+                        查看发布页
+                      </a>
+                    )}
+                  </div>
+                  <div data-selectable-text className="max-h-44 overflow-y-auto whitespace-pre-wrap pr-1 text-sm leading-6 text-gray-600 custom-scrollbar dark:text-gray-300">
+                    {aboutReleaseNotes}
+                  </div>
                 </div>
               </div>
             )}

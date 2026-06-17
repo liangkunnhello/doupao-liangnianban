@@ -119,13 +119,7 @@ function sanitizeFolderName(name: string): string {
   return name.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').slice(0, 100) || '未命名'
 }
 
-export async function saveImageToLocal(
-  taskId: string,
-  imageIndex: number,
-  dataUrl: string,
-  ext: string = 'png',
-  subFolder?: string,
-): Promise<string | null> {
+export async function getLocalImageSaveDirectory(subFolder?: string): Promise<string | null> {
   const api = getAPI()
   const basePath = await getLocalSavePath()
   if (!api || !basePath) return null
@@ -134,6 +128,21 @@ export async function saveImageToLocal(
   if (subFolder) {
     imagesDir = await ensureSubDir(imagesDir, sanitizeFolderName(subFolder))
   }
+  return imagesDir
+}
+
+export async function saveImageToLocal(
+  taskId: string,
+  imageIndex: number,
+  dataUrl: string,
+  ext: string = 'png',
+  subFolder?: string,
+): Promise<string | null> {
+  const api = getAPI()
+  if (!api) return null
+
+  const imagesDir = await getLocalImageSaveDirectory(subFolder)
+  if (!imagesDir) return null
   const fileExt = EXT_MAP[ext] || 'png'
   const fileName = `${taskId}_${imageIndex + 1}.${fileExt}`
   const filePath = await api.pathJoin(imagesDir, fileName)

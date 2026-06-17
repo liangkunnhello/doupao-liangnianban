@@ -963,6 +963,70 @@ describe('data import', () => {
     expect(serializedPersisted).not.toContain('imported-legacy-base64')
   })
 
+  it('keeps imported word entries in the matching existing group by name', async () => {
+    useStore.setState({
+      wordLibraryGroups: [
+        { id: 'default', name: 'Default' },
+        { id: 'local-group', name: 'Shared' },
+      ],
+      wordLibraryEntries: [],
+      showToast: vi.fn(),
+    })
+
+    const imported = await importData(importFile({
+      version: 3,
+      exportedAt: new Date(0).toISOString(),
+      wordLibraryGroups: [{ id: 'imported-group', name: 'Shared' }],
+      wordLibraryEntries: [{
+        id: 'imported-entry',
+        groupId: 'imported-group',
+        key: 'animal',
+        label: 'animal',
+        entries: ['cat'],
+        draw_count: 1,
+      }],
+    }), { importConfig: false, importTasks: false, importWordLibrary: true })
+
+    expect(imported).toBe(true)
+    expect(useStore.getState().wordLibraryEntries).toEqual([expect.objectContaining({
+      id: 'imported-entry',
+      groupId: 'local-group',
+      key: 'animal',
+      entries: ['cat'],
+    })])
+  })
+
+  it('normalizes malformed imported word entries before storing them', async () => {
+    useStore.setState({
+      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryEntries: [],
+      showToast: vi.fn(),
+    })
+
+    const imported = await importData(importFile({
+      version: 3,
+      exportedAt: new Date(0).toISOString(),
+      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryEntries: [{
+        id: 'bad-entry',
+        groupId: 'default',
+        key: 'bad',
+        entries: 'cat',
+        draw_count: '2',
+      } as unknown as NonNullable<ExportData['wordLibraryEntries']>[number]],
+    }), { importConfig: false, importTasks: false, importWordLibrary: true })
+
+    expect(imported).toBe(true)
+    expect(useStore.getState().wordLibraryEntries).toEqual([{
+      id: 'bad-entry',
+      groupId: 'default',
+      key: 'bad',
+      label: 'bad',
+      entries: [],
+      draw_count: 1,
+    }])
+  })
+
 })
 
 describe('agent draft lifecycle', () => {

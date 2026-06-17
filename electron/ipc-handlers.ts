@@ -191,7 +191,12 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('fs:open-in-explorer', async (_event, { filePath }: { filePath: string }) => {
-    shell.showItemInFolder(assertAllowedPath(filePath))
+    const safePath = assertAllowedPath(filePath)
+    if (existsSync(safePath) && statSync(safePath).isDirectory()) {
+      await shell.openPath(safePath)
+      return
+    }
+    shell.showItemInFolder(safePath)
   })
 
   ipcMain.handle('store:get-local-save-path', async () => {

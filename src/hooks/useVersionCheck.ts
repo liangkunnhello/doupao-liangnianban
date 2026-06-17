@@ -19,6 +19,8 @@ function compareVersions(a: string, b: string) {
 export interface LatestRelease {
   tag: string
   url: string
+  body: string
+  isNewer: boolean
 }
 
 /**
@@ -45,12 +47,13 @@ export function useVersionCheck() {
         if (cancelled) return
         const tag: string = data.tag_name ?? ''
         const version = tag.replace(/^v/, '')
-        if (version && compareVersions(version, __APP_VERSION__) > 0) {
-          setLatestRelease({
-            tag,
-            url: data.html_url ?? `https://github.com/${REPO}/releases/latest`,
-          })
-        }
+        if (!version) return
+        setLatestRelease({
+          tag,
+          url: data.html_url ?? `https://github.com/${REPO}/releases/latest`,
+          body: typeof data.body === 'string' ? data.body : '',
+          isNewer: compareVersions(version, __APP_VERSION__) > 0,
+        })
       })
       .catch(() => {
         /* 静默失败，不影响正常使用 */
@@ -66,7 +69,7 @@ export function useVersionCheck() {
     sessionStorage.setItem('version-dismissed', 'true')
   }
 
-  const hasUpdate = latestRelease !== null && !dismissed
+  const hasUpdate = latestRelease?.isNewer === true && !dismissed
 
   return { hasUpdate, latestRelease, dismiss }
 }

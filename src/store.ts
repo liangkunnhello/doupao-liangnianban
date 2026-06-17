@@ -915,6 +915,8 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections(persisted.favoriteCollections))
     : currentState.favoriteCollections
   const defaultFavoriteCollectionId = resolveDefaultFavoriteCollectionId(favoriteCollections, persisted.defaultFavoriteCollectionId)
+  const wordLibraryGroups = normalizeWordLibraryGroups(persisted.wordLibraryGroups, currentState.wordLibraryGroups)
+  const persistedWordLibraryEntries = normalizeWordLibraryEntries(persisted.wordLibraryEntries, wordLibraryGroups)
   // Gallery 模式下顶层输入状态（params/inputImageFolder）应镜像活动 workspace 标签页，
   // 与 setAppMode 的恢复逻辑保持一致。
   const normalizedWorkspaceTabs = Array.isArray(persisted.workspaceTabs) && persisted.workspaceTabs.length > 0
@@ -958,11 +960,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
-    wordLibraryGroups: Array.isArray(persisted.wordLibraryGroups) && persisted.wordLibraryGroups.length > 0
-      ? persisted.wordLibraryGroups
-      : currentState.wordLibraryGroups,
-    wordLibraryEntries: Array.isArray(persisted.wordLibraryEntries) && persisted.wordLibraryEntries.length > 0
-      ? persisted.wordLibraryEntries
+    wordLibraryGroups,
+    wordLibraryEntries: Array.isArray(persisted.wordLibraryEntries) && persistedWordLibraryEntries.length > 0
+      ? persistedWordLibraryEntries
       : currentState.wordLibraryEntries,
     workspaceTabs: normalizedWorkspaceTabs,
     activeWorkspaceTabId: persistedActiveWorkspaceTabId,
@@ -1275,6 +1275,43 @@ export async function deleteImageIfUnreferenced(imageId: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function normalizeWordLibraryGroups(value: unknown, fallback: WordLibraryGroup[]): WordLibraryGroup[] {
+  if (!Array.isArray(value)) return fallback
+  const groups = value
+    .map((group): WordLibraryGroup | null => {
+      if (!isRecord(group) || typeof group.id !== 'string' || typeof group.name !== 'string') return null
+      return { id: group.id, name: group.name }
+    })
+    .filter((group): group is WordLibraryGroup => group != null)
+  return groups.length > 0 ? groups : fallback
+}
+
+function normalizeWordLibraryEntries(value: unknown, groups: WordLibraryGroup[]): WordLibraryEntry[] {
+  if (!Array.isArray(value)) return []
+  const fallbackGroupId = groups[0]?.id ?? 'default'
+  const groupIds = new Set(groups.map((group) => group.id))
+  return value
+    .map((entry): WordLibraryEntry | null => {
+      if (!isRecord(entry) || typeof entry.id !== 'string') return null
+      const key = typeof entry.key === 'string' ? entry.key : ''
+      const groupId = typeof entry.groupId === 'string' && groupIds.has(entry.groupId)
+        ? entry.groupId
+        : fallbackGroupId
+      const drawCount = typeof entry.draw_count === 'number' && Number.isFinite(entry.draw_count)
+        ? Math.max(1, Math.trunc(entry.draw_count))
+        : 1
+      return {
+        id: entry.id,
+        groupId,
+        key,
+        label: typeof entry.label === 'string' ? entry.label : key,
+        entries: normalizeStringArray(entry.entries),
+        draw_count: drawCount,
+      }
+    })
+    .filter((entry): entry is WordLibraryEntry => entry != null)
 }
 
 function normalizeInputImages(value: unknown): InputImage[] {
@@ -6564,18 +6601,28 @@ export async function importData(file: File, options: ImportOptions = { importCo
       const state = useStore.getState()
       // 合并分组：去重，以导入数据中的分组为准（同名覆盖）
       const existingGroupMap = new Map(state.wordLibraryGroups.map(g => [g.name, g]))
-      const importedGroupMap = new Map(data.wordLibraryGroups.map(g => [g.name, g]))
       const mergedGroups = [...existingGroupMap.values()]
+      const groupIdMap = new Map<string, string>()
       for (const importedGroup of data.wordLibraryGroups) {
+        if (!importedGroup || typeof importedGroup.id !== 'string' || typeof importedGroup.name !== 'string') continue
         const existing = existingGroupMap.get(importedGroup.name)
         if (!existing) {
           mergedGroups.push(importedGroup)
+          groupIdMap.set(importedGroup.id, importedGroup.id)
+        } else {
+          groupIdMap.set(importedGroup.id, existing.id)
         }
       }
+      const remappedImportedEntries = Array.isArray(data.wordLibraryEntries)
+        ? data.wordLibraryEntries.map((entry) => {
+            if (!isRecord(entry) || typeof entry.groupId !== 'string') return entry
+            return { ...entry, groupId: groupIdMap.get(entry.groupId) ?? entry.groupId }
+          })
+        : []
+      const normalizedImportedEntries = normalizeWordLibraryEntries(remappedImportedEntries, mergedGroups)
       // 合并词条：去重（按 key + groupId），以导入数据为准
-      const existingEntryKeys = new Set(state.wordLibraryEntries.map(e => `${e.key}:${e.groupId}`))
       const mergedEntries = [...state.wordLibraryEntries]
-      for (const importedEntry of data.wordLibraryEntries) {
+      for (const importedEntry of normalizedImportedEntries) {
         const entryKey = `${importedEntry.key}:${importedEntry.groupId}`
         const existingIndex = mergedEntries.findIndex(e => `${e.key}:${e.groupId}` === entryKey)
         if (existingIndex >= 0) {
