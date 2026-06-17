@@ -99,8 +99,8 @@ Postprocessing should be skipped when both local switches are off.
 
 When local resize is enabled:
 
-- Normalize `postprocess_size` with the existing size utilities.
-- If `postprocess_size` is invalid or `auto`, fail with a user-readable error.
+- Use the already selected `postprocess_size` as the local target size.
+- If `postprocess_size` is invalid or `auto`, fail with a user-readable error. The UI may reuse the existing size picker to produce a valid size, but the postprocessing helper should not silently apply generation-model constraints again.
 - Draw the image into a canvas with the normalized target dimensions.
 - For this version, scale directly to the exact target dimensions so the final stored image matches the selected postprocess size. Do not add crop, padding, or fit-mode controls until a later design asks for them.
 
