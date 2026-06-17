@@ -10,6 +10,7 @@ import type {
   AppMode,
   BatchItemError,
   BatchItemStatus,
+  TaskProgressStage,
   TaskParams,
   InputImage,
   InputImageFolder,
@@ -353,8 +354,8 @@ function scheduleThumbnailBackfillTick() {
     void processNextThumbnailBackfill()
   }
 
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 2_000 })
+  if ('requestIdleCallback' in globalThis) {
+    globalThis.requestIdleCallback(run, { timeout: 2_000 })
   } else {
     globalThis.setTimeout(run, 250)
   }
@@ -2483,6 +2484,8 @@ export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Dat
       ...task,
       status: 'error',
       error: OPENAI_INTERRUPTED_ERROR,
+      progressStage: 'stopped',
+      progressUpdatedAt: now,
       falRecoverable: false,
       finishedAt: now,
       elapsed: Math.max(0, now - task.createdAt),
@@ -3236,6 +3239,8 @@ export async function submitTaskWithData(
     outputImages: [],
     status: 'running',
     error: null,
+    progressStage: 'queued',
+    progressUpdatedAt: Date.now(),
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
@@ -4985,6 +4990,8 @@ async function executeTask(taskId: string) {
     updateTaskInStore(taskId, {
       status: 'error',
       error: '找不到此任务所使用的 API 配置。',
+      progressStage: 'failed',
+      progressUpdatedAt: Date.now(),
       falRecoverable: false,
       customRecoverable: false,
       finishedAt: Date.now(),
@@ -4995,6 +5002,7 @@ async function executeTask(taskId: string) {
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
   const taskProvider = task.apiProvider ?? activeProfile.provider
+  updateTaskProgress(taskId, 'requesting')
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
         ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
     : null
@@ -5122,6 +5130,7 @@ async function executeTask(taskId: string) {
         const currentTask = useStore.getState().tasks.find((t) => t.id === taskId)
         if (currentTask && currentTask.status === 'running') {
           const existingOutputIds = currentTask.outputImages || []
+          updateTaskProgress(taskId, 'generating')
           updateTaskInStore(taskId, {
             outputImages: [...existingOutputIds, ...newOutputIds],
           })
@@ -5189,6 +5198,7 @@ async function executeTask(taskId: string) {
           maskDataUrl,
           onFalRequestEnqueued: (request) => {
             falRequestInfo = request
+            updateTaskProgress(taskId, 'relay-received')
             updateTaskInStore(taskId, {
               falRequestId: request.requestId,
               falEndpoint: request.endpoint,
@@ -5197,12 +5207,14 @@ async function executeTask(taskId: string) {
           },
           onCustomTaskEnqueued: (request) => {
             customTaskInfo = request
+            updateTaskProgress(taskId, 'relay-received')
             updateTaskInStore(taskId, {
               customTaskId: request.taskId,
               customRecoverable: false,
             })
           },
           onPartialImage: (partial) => {
+            updateTaskProgress(taskId, 'previewing')
             useStore.getState().setTaskStreamPreview(taskId, partial.image, i)
             void persistTaskStreamPartialImage(taskId, partial.image)
           },
@@ -5257,6 +5269,7 @@ async function executeTask(taskId: string) {
       clearOpenAIWatchdogTimer(taskId)
       useStore.getState().setTaskStreamPreview(taskId)
       const hasPartialFailure = result.batchItemStatuses && result.batchItemErrors && result.batchItemErrors.length > 0
+      updateTaskProgress(taskId, 'saving')
       updateTaskInStore(taskId, {
         streamPartialImageIds: undefined,
         rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
@@ -5312,6 +5325,7 @@ async function executeTask(taskId: string) {
           maskDataUrl,
           onFalRequestEnqueued: (request) => {
             falRequestInfo = request
+            updateTaskProgress(taskId, 'relay-received')
             updateTaskInStore(taskId, {
               falRequestId: request.requestId,
               falEndpoint: request.endpoint,
@@ -5320,12 +5334,14 @@ async function executeTask(taskId: string) {
           },
           onCustomTaskEnqueued: (request) => {
             customTaskInfo = request
+            updateTaskProgress(taskId, 'relay-received')
             updateTaskInStore(taskId, {
               customTaskId: request.taskId,
               customRecoverable: false,
             })
           },
           onPartialImage: (partial) => {
+            updateTaskProgress(taskId, 'previewing')
             const baseIndex = batchIndex * requestN + (partial.requestIndex ?? 0)
             useStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
             void persistTaskStreamPartialImage(taskId, partial.image)
@@ -5341,6 +5357,7 @@ async function executeTask(taskId: string) {
         maskDataUrl,
         onFalRequestEnqueued: (request) => {
           falRequestInfo = request
+          updateTaskProgress(taskId, 'relay-received')
           updateTaskInStore(taskId, {
             falRequestId: request.requestId,
             falEndpoint: request.endpoint,
@@ -5349,12 +5366,14 @@ async function executeTask(taskId: string) {
         },
         onCustomTaskEnqueued: (request) => {
           customTaskInfo = request
+          updateTaskProgress(taskId, 'relay-received')
           updateTaskInStore(taskId, {
             customTaskId: request.taskId,
             customRecoverable: false,
           })
         },
         onPartialImage: (partial) => {
+          updateTaskProgress(taskId, 'previewing')
           useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
         },
@@ -5416,6 +5435,7 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
     const hasPartialFailure = (result as any).batchItemStatuses && (result as any).batchItemErrors && (result as any).batchItemErrors.length > 0
+    updateTaskProgress(taskId, 'saving')
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       streamPartialImageIds: undefined,
@@ -5465,6 +5485,8 @@ async function executeTask(taskId: string) {
       updateTaskInStore(taskId, {
         status: 'error',
         error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
+        progressStage: 'recovering',
+        progressUpdatedAt: Date.now(),
         falRequestId: latestFalRequestInfo.requestId,
         falEndpoint: latestFalRequestInfo.endpoint,
         falRecoverable: true,
@@ -5476,6 +5498,8 @@ async function executeTask(taskId: string) {
       updateTaskInStore(taskId, {
         status: 'error',
         error: '与自定义异步任务的连接已断开，之后会继续查询任务结果。',
+        progressStage: 'recovering',
+        progressUpdatedAt: Date.now(),
         customTaskId: latestCustomTaskInfo.taskId,
         customRecoverable: true,
         finishedAt: Date.now(),
@@ -5516,6 +5540,8 @@ async function executeTask(taskId: string) {
         updateTaskInStore(taskId, {
           status: 'done',
           error: undefined,
+          progressStage: 'partial-failure',
+          progressUpdatedAt: Date.now(),
           batchItemStatuses,
           batchItemErrors: batchItemErrors.length > 0 ? batchItemErrors : undefined,
           streamPartialImageIds: undefined,
@@ -5531,6 +5557,8 @@ async function executeTask(taskId: string) {
         updateTaskInStore(taskId, {
           status: 'error',
           error: errorMessage,
+          progressStage: 'failed',
+          progressUpdatedAt: Date.now(),
           ...getRawErrorPayload(err),
           falRecoverable: false,
           customRecoverable: false,
@@ -5580,6 +5608,14 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   useStore.setState({ workspaceTabs: updatedTabs })
   maybeOpenSupportPrompt(tasks, updated, taskId)
   if (task) putTask(task)
+}
+
+function updateTaskProgress(taskId: string, progressStage: TaskProgressStage, progressMessage?: string) {
+  updateTaskInStore(taskId, {
+    progressStage,
+    ...(progressMessage ? { progressMessage } : {}),
+    progressUpdatedAt: Date.now(),
+  })
 }
 
 function normalizeFavoriteCollectionIds(ids: unknown) {

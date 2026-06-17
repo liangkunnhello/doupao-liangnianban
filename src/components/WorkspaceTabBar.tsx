@@ -87,6 +87,8 @@ export default function WorkspaceTabBar() {
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null)
+  const [editingTabId, setEditingTabId] = useState<string | null>(null)
+  const [editingTabName, setEditingTabName] = useState('')
 
   // floating panel state
   const [pos, setPos] = useState(() => loadSavedPos() ?? { x: 0, y: 0 })
@@ -97,6 +99,7 @@ export default function WorkspaceTabBar() {
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
   const dragOff = useRef({ x: 0, y: 0 })
   const panelRef = useRef<HTMLDivElement>(null)
+  const skipInlineRenameBlurRef = useRef(false)
 
   // init position (fallback if no saved position)
   useEffect(() => {
@@ -242,6 +245,33 @@ export default function WorkspaceTabBar() {
     const newId = duplicateWorkspaceTab(id)
     if (newId) showToast('已复制标签页', 'success')
   }, [duplicateWorkspaceTab, showToast])
+
+  const startInlineRename = useCallback((id: string) => {
+    const tab = workspaceTabs.find((t) => t.id === id)
+    if (!tab) return
+    setEditingTabId(id)
+    setEditingTabName(tab.name)
+  }, [workspaceTabs])
+
+  const cancelInlineRename = useCallback(() => {
+    skipInlineRenameBlurRef.current = true
+    setEditingTabId(null)
+    setEditingTabName('')
+  }, [])
+
+  const commitInlineRename = useCallback(() => {
+    if (!editingTabId) return
+    const name = editingTabName.trim()
+    if (!name) {
+      showToast('鍚嶇О涓嶈兘涓虹┖', 'error')
+      return
+    }
+    renameWorkspaceTab(editingTabId, name)
+    skipInlineRenameBlurRef.current = true
+    setEditingTabId(null)
+    setEditingTabName('')
+    showToast('宸查噸鍛藉悕', 'success')
+  }, [editingTabId, editingTabName, renameWorkspaceTab, showToast])
 
   const handleRename = useCallback((id: string) => {
     const tab = workspaceTabs.find((t) => t.id === id)
@@ -520,10 +550,11 @@ export default function WorkspaceTabBar() {
               const isActive = tab.id === activeWorkspaceTabId
               const isSelected = selectedWorkspaceTabIds.includes(tab.id)
               const isDragOver = dragOverTabId === tab.id
+              const isEditing = editingTabId === tab.id
               return (
                 <div
                   key={tab.id}
-                  draggable
+                  draggable={!isEditing}
                   onDragStart={(e) => onTabDragStart(e, tab.id)}
                   onDragOver={(e) => onTabDragOver(e, tab.id)}
                   onDrop={(e) => onDropOnTab(e, tab.id)}
@@ -532,7 +563,7 @@ export default function WorkspaceTabBar() {
                   onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
-                    handleRename(tab.id)
+                    startInlineRename(tab.id)
                   }}
                   onClick={(e) => {
                     if (e.ctrlKey || e.metaKey) {
@@ -550,7 +581,35 @@ export default function WorkspaceTabBar() {
                   `}
                   title={tab.name}
                 >
-                  <span className="flex-1 text-xs truncate">{tab.name}</span>
+                  {isEditing ? (
+                    <input
+                      value={editingTabName}
+                      autoFocus
+                      onChange={(e) => setEditingTabName(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onBlur={() => {
+                        if (skipInlineRenameBlurRef.current) {
+                          skipInlineRenameBlurRef.current = false
+                          return
+                        }
+                        commitInlineRename()
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitInlineRename()
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault()
+                          cancelInlineRename()
+                        }
+                      }}
+                      className="min-w-0 flex-1 rounded-md border border-blue-500/40 bg-background/80 px-1.5 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500/40"
+                    />
+                  ) : (
+                    <span className="flex-1 text-xs truncate">{tab.name}</span>
+                  )}
                   <button
                     onClick={(e) => handleCloseTab(e, tab.id)}
                     className={`opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted transition-opacity ${isActive ? 'text-blue-300' : 'text-muted-foreground'}`}

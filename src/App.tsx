@@ -28,6 +28,7 @@ const FavoriteCollectionsView = React.lazy(() => import('./components/FavoriteCo
 const ManageCollectionsModal = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.ManageCollectionsModal })))
 const RandomPromptModal = React.lazy(() => import('./components/RandomPromptModal'))
 const WorkspaceTabManagerModal = React.lazy(() => import('./components/WorkspaceTabManagerModal'))
+const UpdateReleaseNotesModal = React.lazy(() => import('./components/UpdateReleaseNotesModal'))
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 let customProviderConfigUrlImportStarted = false
@@ -207,6 +208,7 @@ export default function App() {
       <VarEntryEditor />
       <RandomPromptModal />
       <WorkspaceTabManagerModal />
+      <UpdateReleaseNotesModal />
       </React.Suspense>
       </div>
     </ErrorBoundary>

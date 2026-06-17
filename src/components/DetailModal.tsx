@@ -10,6 +10,7 @@ import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
@@ -227,6 +228,8 @@ export default function DetailModal() {
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
+  const progressDisplay = getTaskProgressDisplay(task)
+  const showProgressDetails = task.status !== 'done' || progressDisplay.cardLabel === '数量不够'
   const rawImageUrls = task.rawImageUrls ?? []
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
@@ -481,7 +484,7 @@ export default function DetailModal() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  生成中
+                  {progressDisplay.cardLabel}
                 </span>
               )}
               {hasPartialSuccess && (
@@ -489,7 +492,7 @@ export default function DetailModal() {
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  部分成功
+                  {progressDisplay.cardLabel}
                 </span>
               )}
               <div data-selectable-text className="absolute left-4 top-[15px] flex items-center gap-1.5">
@@ -578,7 +581,7 @@ export default function DetailModal() {
               )}
             </>
           )}
-          {(task.status === 'running' || isFalReconnecting) && (
+          {(task.status === 'running' || isFalReconnecting || isCustomReconnecting) && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -623,10 +626,10 @@ export default function DetailModal() {
               <svg className="w-10 h-10 text-yellow-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              <p className="text-sm font-medium text-yellow-500">重连中</p>
+              <p className="text-sm font-medium text-yellow-500">{progressDisplay.cardLabel}</p>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && !hasPartialSuccess && (
+          {task.status === 'error' && !isFalReconnecting && !isCustomReconnecting && !hasPartialSuccess && (
             <div className="w-full max-w-md px-4 text-center">
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -919,6 +922,23 @@ export default function DetailModal() {
                 </div>
               )}
             </div>
+
+            {showProgressDetails && (
+              <div className="mb-4 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
+                <div className="mb-1 text-gray-400 dark:text-gray-500">进度情况</div>
+                <div className="font-medium text-gray-700 dark:text-gray-200">{progressDisplay.detailTitle}</div>
+                <div className="mt-1 whitespace-pre-line leading-5 text-gray-500 dark:text-gray-400">
+                  {progressDisplay.detailDescription}
+                </div>
+                {progressDisplay.reasons.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-gray-500 dark:text-gray-400">
+                    {progressDisplay.reasons.map((reason, index) => (
+                      <li key={index}>{reason}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             {/* 时间 */}
             <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">

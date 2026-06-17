@@ -35,6 +35,7 @@ import { useAutoUpdate } from '../hooks/useAutoUpdate'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
+import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
@@ -55,6 +56,26 @@ const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
 }
 
 type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+const MODEL_TYPE_LABELS: Record<ModelType, string> = {
+  multimodal: '多模态',
+  text: '文本模型',
+  image: '图像模型',
+  unknown: '未知',
+}
+
+function getModelTypeClass(type: ModelType): string {
+  switch (type) {
+    case 'multimodal':
+      return 'bg-blue-500/10 text-blue-600 dark:text-blue-300'
+    case 'text':
+      return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+    case 'image':
+      return 'bg-purple-500/10 text-purple-600 dark:text-purple-300'
+    default:
+      return 'bg-gray-500/10 text-gray-500 dark:text-gray-400'
+  }
+}
 
 const ZIP_DOWNLOAD_ROUTE_OPTIONS: Array<{ route: ZipDownloadRoute; label: string; description: string }> = [
   { route: 'task-selection', label: '任务列表 > 多选', description: '主页或收藏夹详情中框选、Ctrl/⌘ 点选或移动端滑动选中任务后的“下载选中”。' },
@@ -371,6 +392,10 @@ export default function SettingsModal() {
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
   const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
   const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
+  const [agentModels, setAgentModels] = useState<AvailableModel[]>([])
+  const [agentModelsLoading, setAgentModelsLoading] = useState(false)
+  const [agentModelsError, setAgentModelsError] = useState<string | null>(null)
+  const [agentModelMenuOpen, setAgentModelMenuOpen] = useState(false)
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
@@ -475,6 +500,43 @@ export default function SettingsModal() {
       getBackupPath().then(setBackupPath)
     }
   }, [activeTab])
+
+  useEffect(() => {
+    if (!showSettings || !draft.agentUseCustomProfile) {
+      setAgentModels([])
+      setAgentModelsError(null)
+      setAgentModelsLoading(false)
+      return
+    }
+    if (!draft.agentProfile.baseUrl.trim() || !draft.agentProfile.apiKey.trim()) {
+      setAgentModels([])
+      setAgentModelsError(null)
+      setAgentModelsLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setAgentModelsLoading(true)
+    setAgentModelsError(null)
+    fetchAvailableModels(draft.agentProfile, controller.signal)
+      .then((models) => setAgentModels(models))
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        setAgentModels([])
+        setAgentModelsError(err instanceof Error ? err.message : '模型列表拉取失败')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setAgentModelsLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [
+    showSettings,
+    draft.agentUseCustomProfile,
+    draft.agentProfile.baseUrl,
+    draft.agentProfile.apiKey,
+    draft.agentProfile.apiProxy,
+  ])
 
   const handleSelectDirectory = async () => {
     try {
@@ -1584,16 +1646,59 @@ export default function SettingsModal() {
 
                     <div>
                       <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型</span>
-                      <input
-                        value={draft.agentProfile.model}
-                        onChange={(e) => updateAgentProfile({ model: e.target.value })}
-                        onBlur={() => commitAgentProfilePatch({ model: draft.agentProfile.model.trim() })}
-                        type="text"
-                        placeholder="gpt-4o"
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                      />
+                      <div className="relative">
+                        <div className="flex gap-2">
+                          <input
+                            value={draft.agentProfile.model}
+                            onChange={(e) => updateAgentProfile({ model: e.target.value })}
+                            onFocus={() => setAgentModelMenuOpen(true)}
+                            onBlur={() => commitAgentProfilePatch({ model: draft.agentProfile.model.trim() })}
+                            type="text"
+                            placeholder="gpt-4o"
+                            className="min-w-0 flex-1 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setAgentModelMenuOpen((open) => !open)}
+                            disabled={agentModelsLoading || agentModels.length === 0}
+                            className="rounded-xl border border-gray-200/70 bg-white/60 px-3 text-sm text-gray-500 transition hover:bg-white disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+                            aria-label="选择模型"
+                          >
+                            <ChevronDownIcon className={`h-4 w-4 transition-transform ${agentModelMenuOpen ? 'rotate-180' : ''}`} />
+                          </button>
+                        </div>
+                        {agentModelMenuOpen && (
+                          <div className="absolute z-30 mt-1.5 max-h-56 w-full overflow-y-auto rounded-xl border border-gray-200/60 bg-white/95 p-1 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+                            {agentModelsLoading ? (
+                              <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">正在拉取模型...</div>
+                            ) : agentModels.length > 0 ? (
+                              agentModels.map((model) => (
+                                <button
+                                  key={model.id}
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    updateAgentProfile({ model: model.id }, true)
+                                    setAgentModelMenuOpen(false)
+                                  }}
+                                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition hover:bg-gray-100 dark:hover:bg-white/[0.06] ${draft.agentProfile.model === model.id ? 'text-blue-600 dark:text-blue-300' : 'text-gray-700 dark:text-gray-200'}`}
+                                >
+                                  <span className="min-w-0 truncate font-mono text-xs">{model.id}</span>
+                                  <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${getModelTypeClass(model.type)}`}>
+                                    {MODEL_TYPE_LABELS[model.type]}
+                                  </span>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+                                {agentModelsError ? '模型列表拉取失败，可手动输入模型' : '暂无可选模型，可手动输入模型'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        支持 Responses API 的模型名称。
+                        {agentModelsLoading ? '正在自动拉取可用模型。' : agentModelsError ? '模型列表拉取失败，仍可手动输入模型名称。' : '支持 Responses API 的模型名称，可从已拉取模型中选择。'}
                       </div>
                     </div>
 
@@ -2357,7 +2462,7 @@ export default function SettingsModal() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                   <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    每次保存数据时，系统会自动创建一份备份。备份文件保存在应用数据目录的 backups 文件夹中，最多保留 30 份最近的备份。设置为 0 表示每次保存都备份。
+                    每次保存应用状态时，系统会自动备份上一份状态 JSON。备份包含设置、输入草稿、收藏夹、词条库、工作区标签等持久化状态；不包含 IndexedDB 中的任务图片数据。需要完整迁移任务、图片和缩略图时，请使用下方一键 ZIP 备份。自动备份最多保留 30 份，设置为 0 表示每次保存都备份。
                   </div>
                 </div>
 
@@ -2399,7 +2504,7 @@ export default function SettingsModal() {
                       <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">一键备份</h4>
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      立即生成一份包含所有配置和任务的 ZIP 备份文件，保存到自定义位置或桌面。
+                      立即生成一份包含配置、任务、Agent 对话、词条库、图片和缩略图的 ZIP 备份文件，保存到自定义位置或桌面。
                     </p>
                     <div className="flex flex-col gap-3">
                       <div className="flex items-center gap-2">

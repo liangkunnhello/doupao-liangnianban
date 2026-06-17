@@ -109,6 +109,9 @@ export interface AppSettings {
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
+  wordLibraryDerivativeRule?: string
+  wordLibraryDerivativeRuleMode: 'single' | 'multiple'
+  wordLibraryDerivativeRules: WordLibraryDerivativeRule[]
   profiles: ApiProfile[]
   activeProfileId: string
   agentProfileId: string | null
@@ -119,6 +122,21 @@ export interface AppSettings {
 }
 
 // ===== 任务参数 =====
+
+export interface WordLibraryDerivativeRule {
+  id: string
+  name: string
+  content: string
+  enabled: boolean
+  builtIn?: boolean
+}
+
+export const DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE = [
+  'Identify the seed entry semantic role first, such as background, style, subject, material, color, composition, lighting, mood, era, or camera treatment.',
+  'Keep the core role and noun phrase stable, then derive entries by replacing same-category descriptive modifiers.',
+  'For example, red background should derive green background or yellow background; hand-drawn illustration style should derive cartoon illustration style or watercolor illustration style.',
+  'Avoid drifting into unrelated prompt concepts, and avoid producing synonyms that only rephrase the exact same idea.',
+].join('\n')
 
 export interface TaskParams {
   size: string
@@ -163,6 +181,19 @@ export interface MaskDraft {
 // ===== 任务记录 =====
 
 export type TaskStatus = 'running' | 'done' | 'error'
+
+export type TaskProgressStage =
+  | 'queued'
+  | 'requesting'
+  | 'relay-received'
+  | 'generating'
+  | 'previewing'
+  | 'saving'
+  | 'recovering'
+  | 'completed'
+  | 'partial-failure'
+  | 'failed'
+  | 'stopped'
 
 export type BatchItemStatus = 'done' | 'error'
 
@@ -221,6 +252,9 @@ export interface TaskRecord {
   rawResponsePayload?: string
   status: TaskStatus
   error: string | null
+  progressStage?: TaskProgressStage
+  progressMessage?: string
+  progressUpdatedAt?: number
   createdAt: number
   finishedAt: number | null
   /** 总耗时毫秒 */

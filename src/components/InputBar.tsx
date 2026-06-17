@@ -5,7 +5,7 @@ import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import WordLibrarySidebarToggle from './WordLibrarySidebarToggle'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -163,6 +163,25 @@ function getContentEditableSelection(el: HTMLElement): { start: number; end: num
     const end = el.textContent?.length ?? 0
     return { start: end, end }
   }
+}
+
+function getContentEditableOffsetFromPoint(el: HTMLElement, x: number, y: number): number {
+  const doc = el.ownerDocument as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+
+  const range = doc.caretRangeFromPoint?.(x, y)
+  if (range) {
+    return getContentEditableBoundaryOffset(el, range.startContainer, range.startOffset, 'start', true)
+  }
+
+  const position = doc.caretPositionFromPoint?.(x, y)
+  if (position) {
+    return getContentEditableBoundaryOffset(el, position.offsetNode, position.offset, 'start', true)
+  }
+
+  return stripImageMentionMarkers(getContentEditablePlainText(el)).length
 }
 
 function getContentEditablePlainText(el: HTMLElement): string {
@@ -718,6 +737,7 @@ export default function InputBar() {
   const suppressImageClickRef = useRef(false)
   const replaceImageTargetRef = useRef<{ index: number; id: string } | null>(null)
   const isUserInputRef = useRef(false)
+  const draggedVariableOffsetRef = useRef<number | null>(null)
   const imageHintLockedRef = useRef(false)
   const imageHintReleaseRef = useRef<(() => void) | null>(null)
   const [cursorPos, setCursorPos] = useState(0)
@@ -835,6 +855,67 @@ export default function InputBar() {
     const plainText = getContentEditablePlainText(el)
     useStore.getState().setPrompt(plainText)
     useStore.getState().setWordLibrarySidebarOpen(true)
+  }, [])
+  const handlePromptVariableContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const el = textareaRef.current
+    if (!el) return
+
+    const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('.wildcard-var')
+    if (!target || !el.contains(target)) return
+
+    e.preventDefault()
+    const offset = getVisibleOffsetBeforeNode(el, target)
+    const nextPrompt = convertVariableMentionAtVisibleOffsetToText(prompt, offset)
+    if (nextPrompt === prompt) return
+
+    const varName = target.dataset.varName ?? target.textContent ?? ''
+    isUserInputRef.current = false
+    setPrompt(nextPrompt)
+    window.setTimeout(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.focus()
+      setContentEditableCursor(textareaRef.current, offset + varName.length)
+    }, 0)
+  }, [prompt, setPrompt])
+  const handlePromptVariableDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const el = textareaRef.current
+    if (!el) return
+
+    const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('.wildcard-var')
+    if (!target || !el.contains(target)) return
+
+    draggedVariableOffsetRef.current = getVisibleOffsetBeforeNode(el, target)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', target.dataset.varName ?? target.textContent ?? '')
+  }, [])
+  const handlePromptVariableDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (draggedVariableOffsetRef.current == null) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }, [])
+  const handlePromptVariableDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const sourceOffset = draggedVariableOffsetRef.current
+    draggedVariableOffsetRef.current = null
+    if (sourceOffset == null) return
+
+    const el = textareaRef.current
+    if (!el) return
+
+    e.preventDefault()
+    const targetOffset = getContentEditableOffsetFromPoint(el, e.clientX, e.clientY)
+    const nextPrompt = moveVariableMentionInPrompt(prompt, sourceOffset, targetOffset)
+    if (nextPrompt === prompt) return
+
+    isUserInputRef.current = false
+    setPrompt(nextPrompt)
+    window.setTimeout(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.focus()
+      setContentEditableCursor(textareaRef.current, Math.min(targetOffset, stripImageMentionMarkers(nextPrompt).length))
+    }, 0)
+  }, [prompt, setPrompt])
+  const handlePromptVariableDragEnd = useCallback(() => {
+    draggedVariableOffsetRef.current = null
   }, [])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
@@ -1569,7 +1650,7 @@ export default function InputBar() {
             const style = color
               ? `style="background:${color}18;color:${color};border-color:${color};--var-bg:${color}18;--var-text:${color};--var-border:${color};--var-bg-hover:${color}28;--var-bg-selected:${color};--var-text-selected:#fff;--var-border-selected:${color}"`
               : ''
-            return `<span contenteditable="false" class="wildcard-var" data-var-name="${part.varName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" ${style}>${part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`
+            return `<span contenteditable="false" draggable="true" class="wildcard-var" data-var-name="${part.varName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" ${style}>${part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`
           }
           return part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         }).join('')
@@ -2493,6 +2574,11 @@ export default function InputBar() {
               onKeyDown={handleKeyDown}
               onPaste={handlePromptPaste}
               onCopy={handlePromptCopy}
+              onContextMenu={handlePromptVariableContextMenu}
+              onDragStart={handlePromptVariableDragStart}
+              onDragOver={handlePromptVariableDragOver}
+              onDrop={handlePromptVariableDrop}
+              onDragEnd={handlePromptVariableDragEnd}
               onDoubleClick={(e) => {
                 const target = e.target as HTMLElement
                 if (target.classList.contains('wildcard-var')) {

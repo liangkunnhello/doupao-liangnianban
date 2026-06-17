@@ -113,6 +113,7 @@ vi.mock('./lib/agentApi', () => ({
   }),
 }))
 import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
@@ -325,6 +326,31 @@ describe('mask draft lifecycle in store actions', () => {
     const state = useStore.getState()
     expect(state.tasks).toHaveLength(1)
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+  })
+
+  it('updates task progress when submitting a gallery task', async () => {
+    vi.mocked(callImageApi).mockImplementationOnce(() => new Promise(() => {}))
+
+    await submitTask()
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      status: 'running',
+      progressStage: 'requesting',
+    })
+  })
+
+  it('updates task progress when a partial image arrives', async () => {
+    vi.mocked(callImageApi).mockImplementationOnce(async (opts) => {
+      opts.onPartialImage?.({ image: 'data:image/png;base64,partial' })
+      return new Promise(() => {})
+    })
+
+    await submitTask()
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      status: 'running',
+      progressStage: 'previewing',
+    })
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {

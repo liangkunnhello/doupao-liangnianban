@@ -5,6 +5,7 @@ import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -297,6 +298,8 @@ function TaskCard({
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
+  const progressDisplay = getTaskProgressDisplay(task)
+  const hasPartialFailure = progressDisplay.cardLabel === '数量不够'
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -320,7 +323,7 @@ function TaskCard({
 
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
-  const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
+  const isInterrupted = progressDisplay.cardLabel === '已停止'
 
   return (
     <div className="relative rounded-xl">
@@ -440,7 +443,7 @@ function TaskCard({
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                生成中
+                {progressDisplay.cardLabel}
               </span>
             </>
           )}
@@ -465,10 +468,10 @@ function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">{progressDisplay.cardLabel}</span>
             </div>
           )}
-          {task.status === 'error' && isFalReconnecting && (
+          {task.status === 'error' && (isFalReconnecting || isCustomReconnecting) && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className="w-7 h-7 text-yellow-400"
@@ -484,11 +487,11 @@ function TaskCard({
                 />
               </svg>
               <span className="text-xs text-yellow-500 text-center leading-tight">
-                重连中
+                {progressDisplay.cardLabel}
               </span>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && !hasPartialSuccess && (
+          {task.status === 'error' && !isFalReconnecting && !isCustomReconnecting && !hasPartialSuccess && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
@@ -504,7 +507,7 @@ function TaskCard({
                 />
               </svg>
               <span className={`text-xs text-center leading-tight ${isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
-                {isInterrupted ? '已停止' : '失败'}
+                {progressDisplay.cardLabel}
               </span>
             </div>
           )}
@@ -523,6 +526,11 @@ function TaskCard({
                   {task.batchItemStatuses
                     ? `${task.batchItemStatuses.filter((s) => s === 'done').length}/${task.batchItemStatuses.length}`
                     : task.outputImages.length}
+                </span>
+              )}
+              {hasPartialFailure && (
+                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-yellow-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  {progressDisplay.cardLabel}
                 </span>
               )}
             </>
@@ -555,6 +563,11 @@ function TaskCard({
               {task.outputImages.length > 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
                   {task.outputImages.length}
+                </span>
+              )}
+              {hasPartialFailure && (
+                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-yellow-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  {progressDisplay.cardLabel}
                 </span>
               )}
             </>

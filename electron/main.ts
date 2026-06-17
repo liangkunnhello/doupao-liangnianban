@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
+let pendingReleaseNotes: unknown
 
 const iconPath = path.join(__dirname, '../public/app-icon.png')
 const appIcon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined
@@ -37,10 +38,12 @@ autoUpdater.on('checking-for-update', () => {
 })
 
 autoUpdater.on('update-available', (info) => {
+  pendingReleaseNotes = info.releaseNotes
   sendToWindow('update:status', { status: 'available', version: info.version, releaseNotes: info.releaseNotes })
 })
 
 autoUpdater.on('update-not-available', (info) => {
+  pendingReleaseNotes = undefined
   sendToWindow('update:status', { status: 'not-available', version: info.version })
 })
 
@@ -55,10 +58,11 @@ autoUpdater.on('download-progress', (progressInfo) => {
 })
 
 autoUpdater.on('update-downloaded', (info) => {
-  sendToWindow('update:status', { status: 'downloaded', version: info.version })
+  sendToWindow('update:status', { status: 'downloaded', version: info.version, releaseNotes: info.releaseNotes ?? pendingReleaseNotes })
 })
 
 autoUpdater.on('error', (error) => {
+  pendingReleaseNotes = undefined
   const rawMessage = error?.message || String(error)
   console.error('[autoUpdater] error:', rawMessage)
 

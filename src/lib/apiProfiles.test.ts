@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE } from '../types'
 import {
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
@@ -18,6 +19,55 @@ import {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+})
+
+describe('backup settings', () => {
+  it('uses 600 minutes as the default automatic backup interval', () => {
+    expect(DEFAULT_SETTINGS.backupInterval).toBe(600)
+    expect(normalizeSettings({}).backupInterval).toBe(600)
+  })
+
+  it('keeps an explicit zero-minute backup interval for every-save backups', () => {
+    expect(normalizeSettings({ backupInterval: 0 }).backupInterval).toBe(0)
+  })
+})
+
+describe('word library derivative rule settings', () => {
+  it('creates the built-in default rule as the enabled default', () => {
+    const settings = normalizeSettings({})
+
+    expect(settings.wordLibraryDerivativeRuleMode).toBe('single')
+    expect(settings.wordLibraryDerivativeRules).toEqual([{
+      id: 'default',
+      name: '默认规则',
+      content: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE,
+      enabled: true,
+      builtIn: true,
+    }])
+  })
+
+  it('migrates a legacy custom derivative rule into an enabled custom rule', () => {
+    const settings = normalizeSettings({
+      wordLibraryDerivativeRule: 'Only replace color adjectives.',
+    })
+
+    expect(settings.wordLibraryDerivativeRuleMode).toBe('single')
+    expect(settings.wordLibraryDerivativeRules).toEqual([
+      {
+        id: 'default',
+        name: '默认规则',
+        content: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE,
+        enabled: false,
+        builtIn: true,
+      },
+      {
+        id: 'custom-legacy',
+        name: '自定义规则',
+        content: 'Only replace color adjectives.',
+        enabled: true,
+      },
+    ])
+  })
 })
 
 describe('validateApiProfile', () => {

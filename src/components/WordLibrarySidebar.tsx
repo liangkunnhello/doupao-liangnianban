@@ -2,6 +2,9 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useStore } from '../store'
 import { CloseIcon } from './icons'
 import { VAR_MENTION_RE, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { getAgentApiProfile, validateApiProfile } from '../lib/apiProfiles'
+import { generateDerivedWordEntries } from '../lib/agentApi'
+import { DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, type WordLibraryDerivativeRule } from '../types'
 
 const COLOR_CLASSES = [
   'bg-emerald-500', 'bg-orange-500', 'bg-blue-500',
@@ -9,6 +12,22 @@ const COLOR_CLASSES = [
 ]
 function getColorClass(index: number) {
   return COLOR_CLASSES[index % COLOR_CLASSES.length]
+}
+
+function parseEntryLines(text: string): string[] {
+  return text.split('\n').map((s) => s.trim()).filter(Boolean)
+}
+
+function mergeEntryLines(currentText: string, generated: string[]): string {
+  const lines = parseEntryLines(currentText)
+  const seen = new Set(lines)
+  for (const item of generated) {
+    const value = item.trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    lines.push(value)
+  }
+  return lines.join('\n')
 }
 
 const MIN_W = 280
@@ -79,6 +98,8 @@ export default function WordLibrarySidebar() {
   const createGroup = useStore((s) => s.createWordLibraryGroup)
   const setPrompt = useStore((s) => s.setPrompt)
   const toast = useStore((s) => s.showToast)
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const promptSelectedVarName = useStore((s) => s.wordLibraryPromptSelectedVarName)
   const setPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
 
@@ -90,6 +111,12 @@ export default function WordLibrarySidebar() {
   const [editGroupId, setEditGroupId] = useState('')
   const [editDraw, setEditDraw] = useState(1)
   const [editText, setEditText] = useState('')
+  const [deriveSimilarity, setDeriveSimilarity] = useState(85)
+  const [deriveCount, setDeriveCount] = useState(6)
+  const [deriveLoading, setDeriveLoading] = useState(false)
+  const [derivedEntries, setDerivedEntries] = useState<string[]>([])
+  const [ruleModalOpen, setRuleModalOpen] = useState(false)
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null)
 
   const [groupOpen, setGroupOpen] = useState(false)
   const [creatingGroup, setCreatingGroup] = useState(false)
@@ -208,6 +235,16 @@ export default function WordLibrarySidebar() {
     return list
   }, [entries, selGroup, search])
 
+  const enabledDerivativeRules = useMemo(
+    () => settings.wordLibraryDerivativeRules.filter((rule) => rule.enabled),
+    [settings.wordLibraryDerivativeRules],
+  )
+  const derivativeRuleSummary = enabledDerivativeRules.length === 0
+    ? '未启用规则'
+    : enabledDerivativeRules.length === 1
+    ? enabledDerivativeRules[0].name
+    : `已启用 ${enabledDerivativeRules.length} 条规则`
+
   const groupCounts = useMemo(() => {
     const c: Record<string, number> = {}
     groups.forEach((g) => { c[g.id] = entries.filter((e) => e.groupId === g.id).length })
@@ -235,7 +272,7 @@ export default function WordLibrarySidebar() {
 
   const onSave = useCallback(() => {
     if (!activeId) return
-    const lines = editText.split('\n').map((s) => s.trim()).filter(Boolean)
+    const lines = parseEntryLines(editText)
     const oldEntry = entries.find((e) => e.id === activeId)
     updateEntry(activeId, {
       key: editKey, groupId: editGroupId,
@@ -252,6 +289,134 @@ export default function WordLibrarySidebar() {
     }
     toast('词条已保存', 'success')
   }, [activeId, editKey, editGroupId, editDraw, editText, entries, updateEntry, setPrompt, toast])
+
+  const onGenerateDerivedEntries = useCallback(async () => {
+    if (!activeEntry) return
+    const seedEntry = parseEntryLines(editText)[0]
+    if (!seedEntry) {
+      toast('请先输入至少一条词条', 'error')
+      return
+    }
+
+    const profile = getAgentApiProfile(settings)
+    const validationError = validateApiProfile(profile)
+    if (validationError) {
+      toast(`请先完善 Agent 配置：${validationError}`, 'error')
+      return
+    }
+    if (profile.apiMode !== 'responses') {
+      toast('AI 衍生需要 Agent 使用 Responses API', 'error')
+      return
+    }
+
+    const count = Math.max(1, Math.min(100, Math.trunc(Number(deriveCount) || 1)))
+    setDeriveCount(count)
+    setDeriveLoading(true)
+    setDerivedEntries([])
+    try {
+      const generated = await generateDerivedWordEntries({
+        settings,
+        profile,
+        seedEntry,
+        similarity: deriveSimilarity,
+        count,
+      })
+      if (generated.length === 0) {
+        toast('未生成可用词条，请调整相似度后重试', 'error')
+        return
+      }
+      setDerivedEntries(generated)
+      toast(`已生成 ${generated.length} 条词条`, 'success')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'AI 衍生失败'
+      toast(message, 'error')
+    } finally {
+      setDeriveLoading(false)
+    }
+  }, [activeEntry, editText, settings, deriveCount, deriveSimilarity, toast])
+
+  const appendDerivedEntries = useCallback(() => {
+    if (derivedEntries.length === 0) return
+    setEditText((current) => mergeEntryLines(current, derivedEntries))
+    toast('已追加到编辑区，请保存词条', 'success')
+  }, [derivedEntries, toast])
+
+  const replaceWithDerivedEntries = useCallback(() => {
+    if (derivedEntries.length === 0) return
+    setEditText(derivedEntries.join('\n'))
+    toast('已替换编辑区，请保存词条', 'success')
+  }, [derivedEntries, toast])
+
+  const updateDerivativeRules = useCallback((rules: WordLibraryDerivativeRule[]) => {
+    setSettings({ wordLibraryDerivativeRules: rules })
+  }, [setSettings])
+
+  const setDerivativeRuleMode = useCallback((mode: 'single' | 'multiple') => {
+    const rules = settings.wordLibraryDerivativeRules
+    if (mode === 'multiple') {
+      setSettings({ wordLibraryDerivativeRuleMode: mode })
+      return
+    }
+
+    let enabledSeen = false
+    const normalizedRules = rules.map((rule) => {
+      const enabled = rule.enabled && !enabledSeen
+      if (enabled) enabledSeen = true
+      return { ...rule, enabled }
+    })
+    if (!enabledSeen && normalizedRules[0]) normalizedRules[0] = { ...normalizedRules[0], enabled: true }
+    setSettings({ wordLibraryDerivativeRuleMode: mode, wordLibraryDerivativeRules: normalizedRules })
+  }, [settings.wordLibraryDerivativeRules, setSettings])
+
+  const toggleDerivativeRule = useCallback((ruleId: string) => {
+    const rules = settings.wordLibraryDerivativeRules
+    const nextRules = settings.wordLibraryDerivativeRuleMode === 'single'
+      ? rules.map((rule) => ({ ...rule, enabled: rule.id === ruleId }))
+      : rules.map((rule) => rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule)
+    updateDerivativeRules(nextRules)
+  }, [settings.wordLibraryDerivativeRuleMode, settings.wordLibraryDerivativeRules, updateDerivativeRules])
+
+  const addDerivativeRule = useCallback(() => {
+    const id = `rule-${Date.now().toString(36)}`
+    const rule: WordLibraryDerivativeRule = {
+      id,
+      name: '新规则',
+      content: '描述这条规则如何衍生词条，例如：保留主体名词，只替换颜色、风格或材质形容词。',
+      enabled: false,
+    }
+    updateDerivativeRules([...settings.wordLibraryDerivativeRules, rule])
+    setEditingRuleId(id)
+  }, [settings.wordLibraryDerivativeRules, updateDerivativeRules])
+
+  const copyDerivativeRule = useCallback((rule: WordLibraryDerivativeRule) => {
+    const id = `rule-${Date.now().toString(36)}`
+    const copied: WordLibraryDerivativeRule = {
+      id,
+      name: `${rule.name} 副本`,
+      content: rule.content,
+      enabled: false,
+    }
+    updateDerivativeRules([...settings.wordLibraryDerivativeRules, copied])
+    setEditingRuleId(id)
+  }, [settings.wordLibraryDerivativeRules, updateDerivativeRules])
+
+  const deleteDerivativeRule = useCallback((ruleId: string) => {
+    const current = settings.wordLibraryDerivativeRules
+    const target = current.find((rule) => rule.id === ruleId)
+    if (!target || target.builtIn) return
+    let nextRules = current.filter((rule) => rule.id !== ruleId)
+    if (!nextRules.some((rule) => rule.enabled) && nextRules[0]) nextRules = nextRules.map((rule, index) => ({ ...rule, enabled: index === 0 }))
+    updateDerivativeRules(nextRules)
+    if (editingRuleId === ruleId) setEditingRuleId(null)
+  }, [editingRuleId, settings.wordLibraryDerivativeRules, updateDerivativeRules])
+
+  const patchDerivativeRule = useCallback((ruleId: string, patch: Partial<WordLibraryDerivativeRule>) => {
+    updateDerivativeRules(settings.wordLibraryDerivativeRules.map((rule) => {
+      if (rule.id !== ruleId) return rule
+      if (rule.builtIn) return rule
+      return { ...rule, ...patch }
+    }))
+  }, [settings.wordLibraryDerivativeRules, updateDerivativeRules])
 
   const onReset = useCallback(() => {
     if (!activeEntry) return
@@ -750,6 +915,272 @@ export default function WordLibrarySidebar() {
             style={{ minHeight: 72, maxHeight: 250, height: 250, resize: 'none' }}
           />
         </div>
+
+        <div className="mx-4 mb-3 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold text-sidebar-foreground">AI 衍生词条</div>
+              <div className="text-[11px] text-muted-foreground">基于第一条候选词生成相关词条</div>
+            </div>
+            <button
+              type="button"
+              onClick={onGenerateDerivedEntries}
+              disabled={!activeEntry || deriveLoading}
+              className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-30"
+            >
+              {deriveLoading ? '生成中...' : '生成'}
+            </button>
+          </div>
+          <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-sidebar px-2.5 py-2">
+            <div className="min-w-0">
+              <div className="text-[11px] text-muted-foreground">当前规则</div>
+              <div className="truncate text-xs font-medium text-sidebar-foreground">{derivativeRuleSummary}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRuleModalOpen(true)}
+              disabled={deriveLoading}
+              className="shrink-0 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 disabled:opacity-40"
+            >
+              自定义规则
+            </button>
+          </div>
+          {false && <label className="hidden">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>衍生规则</span>
+              <button
+                type="button"
+                onClick={() => setSettings({ wordLibraryDerivativeRule: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE })}
+                disabled={deriveLoading}
+                className="rounded px-1.5 py-0.5 text-[10px] transition hover:bg-muted disabled:opacity-40"
+              >
+                恢复默认
+              </button>
+            </div>
+            <textarea
+              value={settings.wordLibraryDerivativeRule}
+              disabled={deriveLoading}
+              onChange={(e) => setSettings({ wordLibraryDerivativeRule: e.target.value })}
+              placeholder={DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE}
+              className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-xs leading-5 text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40"
+              style={{ minHeight: 82, resize: 'vertical' }}
+            />
+          </label>}
+          <div className="grid grid-cols-[1fr_76px] gap-3">
+            <label className="min-w-0">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>相似度</span>
+                <span>{deriveSimilarity}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={deriveSimilarity}
+                disabled={!activeEntry || deriveLoading}
+                onChange={(e) => setDeriveSimilarity(Number(e.target.value))}
+                className="w-full accent-blue-600 disabled:opacity-40"
+              />
+            </label>
+            <label>
+              <div className="mb-1 text-[11px] text-muted-foreground">数量</div>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={deriveCount}
+                disabled={!activeEntry || deriveLoading}
+                onChange={(e) => setDeriveCount(Number(e.target.value))}
+                onBlur={() => setDeriveCount((value) => Math.max(1, Math.min(100, Math.trunc(Number(value) || 1))))}
+                className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-sm text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40"
+              />
+            </label>
+          </div>
+          {derivedEntries.length > 0 && (
+            <div className="mt-3">
+              <div className="mb-2 max-h-24 overflow-y-auto rounded-lg border border-border bg-sidebar p-2 text-xs leading-5 text-sidebar-foreground">
+                {derivedEntries.join('、')}
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={appendDerivedEntries}
+                  className="rounded-lg bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80"
+                >
+                  追加
+                </button>
+                <button
+                  type="button"
+                  onClick={replaceWithDerivedEntries}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+                >
+                  替换
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {ruleModalOpen && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setRuleModalOpen(false)
+                setEditingRuleId(null)
+              }
+            }}
+          >
+            <div className="flex max-h-[82vh] w-full max-w-lg flex-col rounded-xl border border-border bg-sidebar shadow-2xl">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-sidebar-foreground">衍生规则</div>
+                  <div className="text-[11px] text-muted-foreground">选择 AI 衍生词条时使用的规则</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRuleModalOpen(false)
+                    setEditingRuleId(null)
+                  }}
+                  className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted"
+                  aria-label="关闭"
+                >
+                  <CloseIcon className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <div className="inline-flex rounded-lg bg-muted p-1">
+                  <button
+                    type="button"
+                    onClick={() => setDerivativeRuleMode('single')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                      settings.wordLibraryDerivativeRuleMode === 'single'
+                        ? 'bg-sidebar text-sidebar-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-sidebar-foreground'
+                    }`}
+                  >
+                    单选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDerivativeRuleMode('multiple')}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                      settings.wordLibraryDerivativeRuleMode === 'multiple'
+                        ? 'bg-sidebar text-sidebar-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-sidebar-foreground'
+                    }`}
+                  >
+                    多选
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={addDerivativeRule}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+                >
+                  添加规则
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
+                {settings.wordLibraryDerivativeRules.map((rule) => {
+                  const editing = editingRuleId === rule.id && !rule.builtIn
+                  return (
+                    <div
+                      key={rule.id}
+                      onDoubleClick={() => {
+                        if (!rule.builtIn) setEditingRuleId(rule.id)
+                      }}
+                      className={`rounded-lg border p-3 transition ${
+                        rule.enabled
+                          ? 'border-blue-500/50 bg-blue-500/10'
+                          : 'border-border bg-muted/30'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type={settings.wordLibraryDerivativeRuleMode === 'single' ? 'radio' : 'checkbox'}
+                          checked={rule.enabled}
+                          onChange={() => toggleDerivativeRule(rule.id)}
+                          className="mt-1 accent-blue-600"
+                          name="word-library-derivative-rule"
+                          aria-label={`启用 ${rule.name}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          {editing ? (
+                            <div className="space-y-2">
+                              <input
+                                value={rule.name}
+                                onChange={(e) => patchDerivativeRule(rule.id, { name: e.target.value })}
+                                className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-sm text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25"
+                              />
+                              <textarea
+                                value={rule.content}
+                                onChange={(e) => patchDerivativeRule(rule.id, { content: e.target.value })}
+                                className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-xs leading-5 text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25"
+                                style={{ minHeight: 110, resize: 'vertical' }}
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <div className="truncate text-sm font-semibold text-sidebar-foreground">{rule.name}</div>
+                                {rule.builtIn && <span className="shrink-0 rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-500">默认</span>}
+                              </div>
+                              <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{rule.content}</div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-end gap-2">
+                        {editing ? (
+                          <button
+                            type="button"
+                            onClick={() => setEditingRuleId(null)}
+                            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+                          >
+                            完成
+                          </button>
+                        ) : (
+                          <>
+                            {!rule.builtIn && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingRuleId(rule.id)}
+                                className="rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80"
+                              >
+                                重命名
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => copyDerivativeRule(rule)}
+                              className="rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80"
+                            >
+                              复制
+                            </button>
+                            {!rule.builtIn && (
+                              <button
+                                type="button"
+                                onClick={() => deleteDerivativeRule(rule.id)}
+                                className="rounded-lg bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-500/20"
+                              >
+                                删除
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Bottom actions - protected from overlap */}
         <div className="flex items-center justify-between px-4 py-3 border-t shrink-0 border-border">

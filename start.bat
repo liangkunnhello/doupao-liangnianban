@@ -18,7 +18,7 @@ echo [✓] Node.js 已安装:
 for /f "tokens=*" %%a in ('node --version') do echo   %%a
 
 :: 检查 npm 是否可用
-npm --version >nul 2>&1
+call npm --version >nul 2>&1
 if errorlevel 1 (
     echo [错误] npm 不可用，请检查 Node.js 安装
     pause
@@ -72,6 +72,6 @@ echo.
 
 echo 正在启动 Electron 开发服务器...
 echo.
-npm run electron:dev
+call npm run electron:dev
 echo.
 pause

@@ -36,11 +36,53 @@ export function stripImageMentionMarkers(prompt: string): string {
 export function getPromptIndexFromVisibleIndex(prompt: string, visibleIndex: number): number {
   let visible = 0
   for (let i = 0; i < prompt.length; i++) {
-    if (prompt[i] === MENTION_START || prompt[i] === MENTION_END || prompt[i] === VAR_START || prompt[i] === VAR_END) continue
     if (visible >= visibleIndex) return i
+    if (prompt[i] === MENTION_START || prompt[i] === MENTION_END || prompt[i] === VAR_START || prompt[i] === VAR_END) continue
     visible++
   }
   return prompt.length
+}
+
+function findVariableMentionAtVisibleOffset(prompt: string, visibleOffset: number) {
+  for (const match of prompt.matchAll(VAR_MENTION_RE)) {
+    if (match.index == null) continue
+    const varName = match[1]
+    const visibleStart = stripImageMentionMarkers(prompt.slice(0, match.index)).length
+    const visibleEnd = visibleStart + varName.length
+    if (visibleOffset >= visibleStart && visibleOffset <= visibleEnd) {
+      return {
+        start: match.index,
+        end: match.index + match[0].length,
+        visibleStart,
+        visibleEnd,
+        marker: match[0],
+        varName,
+      }
+    }
+  }
+  return null
+}
+
+export function convertVariableMentionAtVisibleOffsetToText(prompt: string, visibleOffset: number) {
+  const mention = findVariableMentionAtVisibleOffset(prompt, visibleOffset)
+  if (!mention) return prompt
+  return `${prompt.slice(0, mention.start)}${mention.varName}${prompt.slice(mention.end)}`
+}
+
+export function moveVariableMentionInPrompt(prompt: string, sourceVisibleOffset: number, targetVisibleOffset: number) {
+  const mention = findVariableMentionAtVisibleOffset(prompt, sourceVisibleOffset)
+  if (!mention) return prompt
+  if (targetVisibleOffset >= mention.visibleStart && targetVisibleOffset <= mention.visibleEnd) return prompt
+
+  const promptWithoutMention = `${prompt.slice(0, mention.start)}${prompt.slice(mention.end)}`
+  const nextTargetVisibleOffset = targetVisibleOffset > mention.visibleEnd
+    ? targetVisibleOffset - mention.varName.length
+    : targetVisibleOffset
+  const visibleLength = stripImageMentionMarkers(promptWithoutMention).length
+  const insertAt = nextTargetVisibleOffset >= visibleLength
+    ? promptWithoutMention.length
+    : getPromptIndexFromVisibleIndex(promptWithoutMention, nextTargetVisibleOffset)
+  return `${promptWithoutMention.slice(0, insertAt)}${mention.marker}${promptWithoutMention.slice(insertAt)}`
 }
 
 export function isCursorInSelectedImageMention(prompt: string, visibleCursor: number): boolean {

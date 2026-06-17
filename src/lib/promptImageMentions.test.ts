@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { InputImage } from '../types'
-import { getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi } from './promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, remapImageMentionsForOrder, replaceImageMentionsForApi, VAR_END, VAR_START } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
   { id: 'image-b', dataUrl: 'data:image/png;base64,b' },
 ]
+
+const variableMention = (name: string) => `${VAR_START}${name}${VAR_END}`
 
 describe('prompt image mentions', () => {
   it('detects @ query after the cursor', () => {
@@ -126,6 +128,28 @@ describe('prompt image mentions', () => {
 
     it('does not replace mentions outside the current image range', () => {
       expect(replaceImageMentionsForApi(`把 ${getSelectedImageMentionLabel(2)} 变蓝`, 2)).toBe('把 @图3 变蓝')
+    })
+  })
+
+  describe('prompt variable mention editing', () => {
+    it('converts the variable mention at the visible offset into plain text', () => {
+      expect(convertVariableMentionAtVisibleOffsetToText(`make ${variableMention('style')} portrait`, 6)).toBe('make style portrait')
+    })
+
+    it('moves a variable mention before another visible position', () => {
+      expect(moveVariableMentionInPrompt(
+        `make ${variableMention('style')} with ${variableMention('lighting')}`,
+        18,
+        5,
+      )).toBe(`make ${variableMention('lighting')}${variableMention('style')} with `)
+    })
+
+    it('moves a variable mention after text when dropped at the end', () => {
+      expect(moveVariableMentionInPrompt(
+        `${variableMention('style')} portrait with ${variableMention('lighting')}`,
+        1,
+        28,
+      )).toBe(` portrait with ${variableMention('lighting')}${variableMention('style')}`)
     })
   })
 })

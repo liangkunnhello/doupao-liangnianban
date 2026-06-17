@@ -3,10 +3,10 @@ import { useState, useEffect, useCallback } from 'react'
 type UpdateStatus =
   | { status: 'idle' }
   | { status: 'checking' }
-  | { status: 'available'; version: string }
+  | { status: 'available'; version: string; releaseNotes?: unknown }
   | { status: 'not-available'; version: string }
   | { status: 'downloading'; progress: number }
-  | { status: 'downloaded'; version: string }
+  | { status: 'downloaded'; version: string; releaseNotes?: unknown }
   | { status: 'error'; message: string }
 
 type AutoUpdateHook = {
@@ -14,6 +14,7 @@ type AutoUpdateHook = {
   version?: string
   progress?: number
   message?: string
+  releaseNotes?: unknown
   check: () => void
   download: () => void
   install: () => void
@@ -69,6 +70,7 @@ export function useAutoUpdate(): AutoUpdateHook {
     version: 'version' in state ? state.version : undefined,
     progress: 'progress' in state ? state.progress : undefined,
     message: 'message' in state ? state.message : undefined,
+    releaseNotes: 'releaseNotes' in state ? state.releaseNotes : undefined,
     check,
     download,
     install,

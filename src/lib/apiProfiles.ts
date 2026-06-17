@@ -12,8 +12,9 @@ import type {
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
   ReferenceImageEditAction,
+  WordLibraryDerivativeRule,
 } from '../types'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { shouldUseApiProxy } from './devProxy'
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './customProviderConfigUrl'
@@ -135,6 +136,65 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeDerivativeRuleMode(value: unknown): AppSettings['wordLibraryDerivativeRuleMode'] {
+  return value === 'multiple' ? 'multiple' : 'single'
+}
+
+function createDefaultDerivativeRule(enabled = true): WordLibraryDerivativeRule {
+  return {
+    id: 'default',
+    name: '默认规则',
+    content: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE,
+    enabled,
+    builtIn: true,
+  }
+}
+
+function normalizeDerivativeRules(record: Record<string, unknown>, mode: AppSettings['wordLibraryDerivativeRuleMode']): WordLibraryDerivativeRule[] {
+  const rules: WordLibraryDerivativeRule[] = []
+  const rawRules = Array.isArray(record.wordLibraryDerivativeRules) ? record.wordLibraryDerivativeRules : []
+
+  for (const item of rawRules) {
+    if (!isRecord(item)) continue
+    const content = typeof item.content === 'string' ? item.content : ''
+    const rawId = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `rule-${rules.length + 1}`
+    const builtIn = item.builtIn === true || rawId === 'default'
+    rules.push({
+      id: builtIn ? 'default' : rawId,
+      name: typeof item.name === 'string' ? item.name : builtIn ? '默认规则' : '自定义规则',
+      content: builtIn ? DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE : content,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : rules.length === 0,
+      ...(builtIn ? { builtIn: true } : {}),
+    })
+  }
+
+  if (!rules.some((rule) => rule.id === 'default')) {
+    const legacyRule = typeof record.wordLibraryDerivativeRule === 'string' ? record.wordLibraryDerivativeRule.trim() : ''
+    const hasLegacyCustom = Boolean(legacyRule && legacyRule !== DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE)
+    rules.unshift(createDefaultDerivativeRule(!hasLegacyCustom))
+    if (hasLegacyCustom) {
+      rules.push({
+        id: 'custom-legacy',
+        name: '自定义规则',
+        content: legacyRule,
+        enabled: true,
+      })
+    }
+  }
+
+  const uniqueRules = rules.filter((rule, index, list) => list.findIndex((item) => item.id === rule.id) === index)
+  if (mode === 'multiple') return uniqueRules.length ? uniqueRules : [createDefaultDerivativeRule(true)]
+
+  let enabledSeen = false
+  const normalized = uniqueRules.map((rule) => {
+    const enabled = rule.enabled && !enabledSeen
+    if (enabled) enabledSeen = true
+    return { ...rule, enabled }
+  })
+  if (!enabledSeen && normalized[0]) normalized[0] = { ...normalized[0], enabled: true }
+  return normalized.length ? normalized : [createDefaultDerivativeRule(true)]
 }
 
 function normalizeRequestMethod(value: unknown, fallback: CustomProviderRequestMethod = 'POST'): CustomProviderRequestMethod {
@@ -524,6 +584,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? record.activeProfileId
     : profiles[0].id
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
+  const wordLibraryDerivativeRuleMode = normalizeDerivativeRuleMode(record.wordLibraryDerivativeRuleMode)
+  const wordLibraryDerivativeRules = normalizeDerivativeRules(record, wordLibraryDerivativeRuleMode)
 
   return {
     baseUrl: active.baseUrl,
@@ -548,6 +610,9 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
+    wordLibraryDerivativeRule: typeof record.wordLibraryDerivativeRule === 'string' ? record.wordLibraryDerivativeRule : undefined,
+    wordLibraryDerivativeRuleMode,
+    wordLibraryDerivativeRules,
     profiles,
     activeProfileId,
     agentProfileId: typeof record.agentProfileId === 'string' && profiles.some((p) => p.id === record.agentProfileId)
@@ -559,7 +624,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
       createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
       customProviderIds,
     ),
-    backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 0,
+    backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 600,
     customBackupPath: typeof record.customBackupPath === 'string' ? record.customBackupPath : '',
   }
 }
@@ -867,6 +932,6 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentProfileId: null,
   agentUseCustomProfile: false,
   agentProfile: createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
-  backupInterval: 0,
+  backupInterval: 600,
   customBackupPath: '',
 })

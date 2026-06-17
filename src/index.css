@@ -484,8 +484,12 @@ input[type="number"] {
   line-height: 1;
   vertical-align: baseline;
   user-select: all;
-  cursor: default;
+  cursor: grab;
   transition: all 0.15s ease;
+}
+
+.wildcard-var:active {
+  cursor: grabbing;
 }
 
 .mention-tag::selection,

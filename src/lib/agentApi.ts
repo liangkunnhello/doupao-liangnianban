@@ -1,4 +1,4 @@
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
 
@@ -709,6 +709,108 @@ export async function callAgentConversationTitleApi(opts: {
 
     const payload = await response.json() as ResponsesApiResponse
     return parseAgentConversationTitleXml(extractText(payload))
+  } finally {
+    clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abortFromCaller)
+  }
+}
+
+const WORD_DERIVATIVE_INSTRUCTIONS = [
+  'Generate related short prompt word entries.',
+  'Return only a JSON array of strings. Do not include markdown, numbering, explanations, or extra keys.',
+  'Each item should be concise and useful as one word-library entry.',
+  'Follow the derivative rule from the user message. Prefer semantic slot substitution over broad similarity.',
+].join('\n')
+
+function parseWordEntryList(text: string, limit: number): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    const match = text.match(/\[[\s\S]*\]/)
+    if (!match) return []
+    try {
+      parsed = JSON.parse(match[0])
+    } catch {
+      return []
+    }
+  }
+
+  if (!Array.isArray(parsed)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of parsed) {
+    if (typeof item !== 'string') continue
+    const value = item.trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+    if (result.length >= limit) break
+  }
+  return result
+}
+
+function getEnabledDerivativeRuleText(settings: AppSettings) {
+  const enabledRules = settings.wordLibraryDerivativeRules
+    .filter((rule) => rule.enabled && rule.content.trim())
+  const rules = enabledRules.length
+    ? enabledRules
+    : [{ id: 'default', name: '默认规则', content: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, enabled: true, builtIn: true }]
+
+  return rules
+    .map((rule) => `Rule: ${rule.name.trim() || '未命名规则'}\n${rule.content.trim()}`)
+    .join('\n\n')
+}
+
+export async function generateDerivedWordEntries(opts: {
+  settings: AppSettings
+  profile: ApiProfile
+  seedEntry: string
+  similarity: number
+  count: number
+  signal?: AbortSignal
+}): Promise<string[]> {
+  const { settings, profile, seedEntry, similarity, count, signal } = opts
+  const normalizedCount = Math.max(1, Math.min(100, Math.trunc(count)))
+  const normalizedSimilarity = Math.max(0, Math.min(100, Math.trunc(similarity)))
+  const proxyConfig = readClientDevProxyConfig()
+  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  signal?.addEventListener('abort', abortFromCaller, { once: true })
+
+  try {
+    const derivativeRule = getEnabledDerivativeRuleText(settings)
+    const prompt = [
+      `Seed entry: ${seedEntry.trim()}`,
+      `Derivative rule:\n${derivativeRule}`,
+      `Similarity: ${normalizedSimilarity}/100. 100 means very close variants; 0 means broadly divergent but still useful for image prompts.`,
+      `Count: ${normalizedCount}`,
+      'Generate entries in the same language as the seed entry when possible.',
+    ].join('\n')
+
+    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+      method: 'POST',
+      headers: createHeaders(profile),
+      cache: 'no-store',
+      body: JSON.stringify({
+        model: profile.model || settings.model,
+        instructions: WORD_DERIVATIVE_INSTRUCTIONS,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
+        max_output_tokens: Math.max(128, normalizedCount * 24),
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response))
+    }
+
+    const payload = await response.json() as ResponsesApiResponse
+    throwIfAborted(controller.signal, signal)
+    return parseWordEntryList(extractText(payload), normalizedCount)
   } finally {
     clearTimeout(timeoutId)
     signal?.removeEventListener('abort', abortFromCaller)
