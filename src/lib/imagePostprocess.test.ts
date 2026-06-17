@@ -22,7 +22,16 @@ describe('image postprocess plan', () => {
     }))
 
     expect(plan.enabled).toBe(true)
-    expect(plan.resize).toEqual({ width: 1024, height: 1024 })
+    expect(plan.resize).toEqual({ width: 1025, height: 1025 })
+  })
+
+  it('keeps small resize targets unchanged', () => {
+    const plan = getImagePostprocessPlan(params({
+      postprocess_resize_enabled: true,
+      postprocess_size: '100 x 100',
+    }))
+
+    expect(plan.resize).toEqual({ width: 100, height: 100 })
   })
 
   it('rejects auto resize targets when resize is enabled', () => {

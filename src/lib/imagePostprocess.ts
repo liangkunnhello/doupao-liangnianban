@@ -1,6 +1,5 @@
 import type { TaskParams } from '../types'
 import { MIME_MAP } from './imageApiShared'
-import { normalizeImageSize } from './size'
 
 export interface PostprocessResizePlan {
   width: number
@@ -33,12 +32,7 @@ export function getImagePostprocessPlan(params: TaskParams): ImagePostprocessPla
 }
 
 function getResizePlan(size: string): PostprocessResizePlan {
-  const normalized = normalizeImageSize(size)
-  if (!normalized || normalized === 'auto') {
-    throw new Error('Local postprocess size is invalid')
-  }
-
-  const parsed = parseNormalizedSize(normalized)
+  const parsed = parseNormalizedSize(size)
   if (!parsed) {
     throw new Error('Local postprocess size is invalid')
   }
@@ -47,7 +41,7 @@ function getResizePlan(size: string): PostprocessResizePlan {
 }
 
 function parseNormalizedSize(size: string): PostprocessResizePlan | null {
-  const match = size.match(/^(\d+)x(\d+)$/)
+  const match = size.trim().match(/^(\d+)\s*[xX×]\s*(\d+)$/)
   if (!match) return null
 
   const width = Number(match[1])
