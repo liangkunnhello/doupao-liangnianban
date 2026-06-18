@@ -720,7 +720,6 @@ export default function InputBar() {
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
-  const [showPostprocessSizePicker, setShowPostprocessSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const [imageDragIndex, setImageDragIndex] = useState<number | null>(null)
@@ -2232,69 +2231,6 @@ export default function InputBar() {
           text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
         />
       </label>
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">Post size</span>
-        <button
-          type="button"
-          onClick={() => setParams({ postprocess_resize_enabled: !params.postprocess_resize_enabled })}
-          className={params.postprocess_resize_enabled ? selectClass : 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-xs transition-all duration-200 shadow-sm'}
-        >
-          {params.postprocess_resize_enabled ? 'On' : 'Off'}
-        </button>
-      </label>
-      {params.postprocess_resize_enabled && (
-        <label className="flex flex-col gap-0.5">
-          <span className="text-gray-400 dark:text-gray-500 ml-1">Save size</span>
-          <button
-            type="button"
-            onClick={() => setShowPostprocessSizePicker(true)}
-            className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-xs transition-all duration-200 shadow-sm"
-          >
-            {normalizeImageSize(params.postprocess_size) || 'Select'}
-          </button>
-        </label>
-      )}
-      <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">Local compress</span>
-        <button
-          type="button"
-          onClick={() => setParams({ postprocess_compress_enabled: !params.postprocess_compress_enabled })}
-          className={params.postprocess_compress_enabled ? selectClass : 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-xs transition-all duration-200 shadow-sm'}
-        >
-          {params.postprocess_compress_enabled ? 'On' : 'Off'}
-        </button>
-      </label>
-      {params.postprocess_compress_enabled && (
-        <>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-gray-400 dark:text-gray-500 ml-1">Local format</span>
-            <Select
-              value={params.postprocess_format}
-              onChange={(val) => setParams({ postprocess_format: val as any })}
-              options={[
-                { label: 'PNG', value: 'png' },
-                { label: 'JPEG', value: 'jpeg' },
-                { label: 'WebP', value: 'webp' },
-              ]}
-              className={selectClass}
-            />
-          </label>
-          <label className="flex flex-col gap-0.5">
-            <span className="text-gray-400 dark:text-gray-500 ml-1">Local quality</span>
-            <input
-              value={postprocessQualityInput}
-              onChange={(e) => setPostprocessQualityInput(e.target.value)}
-              onBlur={commitPostprocessQuality}
-              disabled={params.postprocess_format === 'png'}
-              type="number"
-              min={0}
-              max={100}
-              placeholder="0-100"
-              className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            />
-          </label>
-        </>
-      )}
       <label
         className="relative flex flex-col gap-0.5"
         onMouseEnter={moderationHint.show}
@@ -2412,18 +2348,24 @@ export default function InputBar() {
       {showSizePicker && (
         <SizePickerModal
           currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
-          onSelect={(size) => setParams({ size })}
+          onSelect={(size) => setParams({
+            size,
+            postprocess_resize_enabled: size !== 'auto' ? params.postprocess_resize_enabled : false,
+            ...(params.postprocess_resize_enabled && size !== 'auto' ? { postprocess_size: size } : {}),
+          })}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
-        />
-      )}
-
-      {showPostprocessSizePicker && (
-        <SizePickerModal
-          currentSize={params.postprocess_size}
-          onSelect={(size) => setParams({ postprocess_size: size })}
-          onClose={() => setShowPostprocessSizePicker(false)}
-          allowAuto={false}
+          postprocessSettings={{
+            resizeEnabled: params.postprocess_resize_enabled,
+            compressEnabled: params.postprocess_compress_enabled,
+            format: params.postprocess_format,
+            qualityInput: postprocessQualityInput,
+            onResizeEnabledChange: (enabled) => setParams({ postprocess_resize_enabled: enabled }),
+            onCompressEnabledChange: (enabled) => setParams({ postprocess_compress_enabled: enabled }),
+            onFormatChange: (format) => setParams({ postprocess_format: format }),
+            onQualityInputChange: setPostprocessQualityInput,
+            onQualityBlur: commitPostprocessQuality,
+          }}
         />
       )}
 

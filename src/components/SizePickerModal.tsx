@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, isRecommendedSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import Select from './Select'
 import ViewportTooltip from './ViewportTooltip'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
@@ -21,6 +22,17 @@ interface Props {
   onSelect: (size: string) => void
   onClose: () => void
   allowAuto?: boolean
+  postprocessSettings?: {
+    resizeEnabled: boolean
+    compressEnabled: boolean
+    format: 'png' | 'jpeg' | 'webp'
+    qualityInput: string
+    onResizeEnabledChange: (enabled: boolean) => void
+    onCompressEnabledChange: (enabled: boolean) => void
+    onFormatChange: (format: 'png' | 'jpeg' | 'webp') => void
+    onQualityInputChange: (value: string) => void
+    onQualityBlur: () => void
+  }
 }
 
 type Mode = 'auto' | 'ratio' | 'resolution'
@@ -43,7 +55,7 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, postprocessSettings }: Props) {
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
@@ -158,6 +170,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     onSelect(previewSize)
     onClose()
   }
+
+  const postprocessResizeAvailable = Boolean(previewSize && previewSize !== 'auto')
 
   const buttonClass = (active: boolean) => {
     return `rounded-xl border px-3 py-2 text-sm transition ${active
@@ -377,6 +391,87 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
               )}
             </div>
           </div>
+          {postprocessSettings && (
+            <section className="rounded-2xl border border-gray-200/70 bg-white/60 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <div className="mb-3">
+                <div className="text-sm font-medium text-gray-800 dark:text-gray-100">生成后处理</div>
+                <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">仅处理返回后的最终图片，不改变接口请求参数</div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm text-gray-700 dark:text-gray-200">后处理尺寸</div>
+                    <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                      {postprocessResizeAvailable ? `保存为 ${previewSize}` : '请先选择具体尺寸'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!postprocessResizeAvailable && !postprocessSettings.resizeEnabled}
+                    onClick={() => postprocessSettings.onResizeEnabledChange(!postprocessSettings.resizeEnabled)}
+                    className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs transition ${
+                      postprocessSettings.resizeEnabled && postprocessResizeAvailable
+                        ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
+                        : 'border-gray-200/70 bg-white/60 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    {postprocessSettings.resizeEnabled ? '开启' : '关闭'}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm text-gray-700 dark:text-gray-200">压缩不缩放</div>
+                    <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">只调整输出格式和质量</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => postprocessSettings.onCompressEnabledChange(!postprocessSettings.compressEnabled)}
+                    className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs transition ${
+                      postprocessSettings.compressEnabled
+                        ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
+                        : 'border-gray-200/70 bg-white/60 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'
+                    }`}
+                  >
+                    {postprocessSettings.compressEnabled ? '开启' : '关闭'}
+                  </button>
+                </div>
+
+                {postprocessSettings.compressEnabled && (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <label className="min-w-0">
+                      <span className="mb-1.5 block text-xs text-gray-400 dark:text-gray-500">输出格式</span>
+                      <Select
+                        value={postprocessSettings.format}
+                        onChange={(value) => postprocessSettings.onFormatChange(value)}
+                        options={[
+                          { label: 'PNG', value: 'png' },
+                          { label: 'JPEG', value: 'jpeg' },
+                          { label: 'WebP', value: 'webp' },
+                        ]}
+                        className="rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-xs text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                      />
+                    </label>
+                    <label className="min-w-0">
+                      <span className="mb-1.5 block text-xs text-gray-400 dark:text-gray-500">压缩质量</span>
+                      <input
+                        value={postprocessSettings.qualityInput}
+                        onChange={(e) => postprocessSettings.onQualityInputChange(e.target.value)}
+                        onBlur={postprocessSettings.onQualityBlur}
+                        disabled={postprocessSettings.format === 'png'}
+                        type="number"
+                        min={0}
+                        max={100}
+                        placeholder="0-100"
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="mt-5 flex gap-2">
