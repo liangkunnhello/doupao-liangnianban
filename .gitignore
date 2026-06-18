@@ -12,3 +12,4 @@ release-v2/
 *.nupkg
 latest.yml
 *.asar
+.superpowers/
