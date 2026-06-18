@@ -96,26 +96,26 @@ describe('image postprocess plan', () => {
     }))).toThrow('postprocess size')
   })
 
-  it('uses selected compression format and quality for JPEG/WebP', () => {
+  it('uses selected compression format and max size for JPEG/WebP', () => {
     expect(getImagePostprocessPlan(params({
       postprocess_compress_enabled: true,
       postprocess_format: 'jpeg',
-      postprocess_quality: 80,
-    })).encode).toEqual({ format: 'jpeg', mime: 'image/jpeg', quality: 0.8 })
+      postprocess_max_size_kb: 399,
+    } as Partial<TaskParams>)).encode).toEqual({ format: 'jpeg', mime: 'image/jpeg', maxSizeBytes: 399 * 1024 })
 
     expect(getImagePostprocessPlan(params({
       postprocess_compress_enabled: true,
       postprocess_format: 'webp',
-      postprocess_quality: 55,
-    })).encode).toEqual({ format: 'webp', mime: 'image/webp', quality: 0.55 })
+      postprocess_max_size_kb: 128,
+    } as Partial<TaskParams>)).encode).toEqual({ format: 'webp', mime: 'image/webp', maxSizeBytes: 128 * 1024 })
   })
 
-  it('ignores quality for PNG compression', () => {
+  it('uses max size for PNG compression without quality search', () => {
     expect(getImagePostprocessPlan(params({
       postprocess_compress_enabled: true,
       postprocess_format: 'png',
-      postprocess_quality: 10,
-    })).encode).toEqual({ format: 'png', mime: 'image/png', quality: undefined })
+      postprocess_max_size_kb: 399,
+    } as Partial<TaskParams>)).encode).toEqual({ format: 'png', mime: 'image/png', maxSizeBytes: 399 * 1024 })
   })
 
   it('resizes before encoding when both switches are enabled', () => {
@@ -124,12 +124,12 @@ describe('image postprocess plan', () => {
       postprocess_size: '1536x1024',
       postprocess_compress_enabled: true,
       postprocess_format: 'webp',
-      postprocess_quality: 90,
-    }))
+      postprocess_max_size_kb: 399,
+    } as Partial<TaskParams>))
 
     expect(plan.enabled).toBe(true)
     expect(plan.resize).toEqual({ width: 1536, height: 1024 })
-    expect(plan.encode).toEqual({ format: 'webp', mime: 'image/webp', quality: 0.9 })
+    expect(plan.encode).toEqual({ format: 'webp', mime: 'image/webp', maxSizeBytes: 399 * 1024 })
   })
 
   it('merges postprocessed actual params over original values', () => {
@@ -186,5 +186,40 @@ describe('image postprocess plan', () => {
       postprocess_compress_enabled: true,
       postprocess_format: 'webp',
     }))).rejects.toThrow('Local image postprocessing failed: image/webp output is not supported')
+  })
+
+  it('searches JPEG/WebP quality until the blob is below the max size', async () => {
+    canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
+    canvasImageMocks.canvasToBlob.mockImplementation(async (_canvas, mime: string, quality?: number) => {
+      const size = quality && quality > 0.5 ? 2048 : 512
+      return new Blob(['x'.repeat(size)], { type: mime })
+    })
+
+    const result = await postprocessGeneratedImage('data:image/png;base64,source', params({
+      postprocess_compress_enabled: true,
+      postprocess_format: 'webp',
+      postprocess_max_size_kb: 1,
+    } as Partial<TaskParams>))
+
+    expect(canvasImageMocks.canvasToBlob).toHaveBeenCalledWith(expect.any(Object), 'image/webp', expect.any(Number))
+    expect(canvasImageMocks.canvasToBlob.mock.calls.length).toBeGreaterThan(1)
+    expect(result).toEqual({
+      dataUrl: 'data:image/webp;base64,encoded',
+      actualParams: {
+        size: '640x480',
+        output_format: 'webp',
+      },
+    })
+  })
+
+  it('rejects PNG output that is larger than the max size', async () => {
+    canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
+    canvasImageMocks.canvasToBlob.mockResolvedValue(new Blob(['x'.repeat(2048)], { type: 'image/png' }))
+
+    await expect(postprocessGeneratedImage('data:image/png;base64,source', params({
+      postprocess_compress_enabled: true,
+      postprocess_format: 'png',
+      postprocess_max_size_kb: 1,
+    } as Partial<TaskParams>))).rejects.toThrow('target size')
   })
 })

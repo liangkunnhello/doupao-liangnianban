@@ -26,12 +26,12 @@ interface Props {
     resizeEnabled: boolean
     compressEnabled: boolean
     format: 'png' | 'jpeg' | 'webp'
-    qualityInput: string
+    maxSizeInput: string
     onResizeEnabledChange: (enabled: boolean) => void
     onCompressEnabledChange: (enabled: boolean) => void
     onFormatChange: (format: 'png' | 'jpeg' | 'webp') => void
-    onQualityInputChange: (value: string) => void
-    onQualityBlur: () => void
+    onMaxSizeInputChange: (value: string) => void
+    onMaxSizeBlur: () => void
   }
 }
 
@@ -423,7 +423,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm text-gray-700 dark:text-gray-200">压缩不缩放</div>
-                    <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">只调整输出格式和质量</div>
+                    <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">限制最终文件体积，不缩放尺寸</div>
                   </div>
                   <button
                     type="button"
@@ -454,16 +454,14 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                       />
                     </label>
                     <label className="min-w-0">
-                      <span className="mb-1.5 block text-xs text-gray-400 dark:text-gray-500">压缩质量</span>
+                      <span className="mb-1.5 block text-xs text-gray-400 dark:text-gray-500">最大体积(KB)</span>
                       <input
-                        value={postprocessSettings.qualityInput}
-                        onChange={(e) => postprocessSettings.onQualityInputChange(e.target.value)}
-                        onBlur={postprocessSettings.onQualityBlur}
-                        disabled={postprocessSettings.format === 'png'}
+                        value={postprocessSettings.maxSizeInput}
+                        onChange={(e) => postprocessSettings.onMaxSizeInputChange(e.target.value)}
+                        onBlur={postprocessSettings.onMaxSizeBlur}
                         type="number"
-                        min={0}
-                        max={100}
-                        placeholder="0-100"
+                        min={1}
+                        placeholder="例如 399"
                         className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                       />
                     </label>

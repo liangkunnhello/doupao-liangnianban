@@ -10,7 +10,7 @@ export interface PostprocessResizePlan {
 export interface PostprocessEncodePlan {
   format: TaskParams['output_format'] | null
   mime: string | null
-  quality?: number
+  maxSizeBytes?: number
 }
 
 export interface ImagePostprocessPlan {
@@ -27,7 +27,7 @@ export interface ProcessImageResult {
 export function getImagePostprocessPlan(params: TaskParams): ImagePostprocessPlan {
   const resize = params.postprocess_resize_enabled ? getResizePlan(params.postprocess_size) : null
   const encode = params.postprocess_compress_enabled
-    ? getEncodePlan(params.postprocess_format, params.postprocess_quality)
+    ? getEncodePlan(params.postprocess_format, params.postprocess_max_size_kb)
     : { format: null, mime: null }
 
   return {
@@ -64,7 +64,7 @@ export async function postprocessGeneratedImage(dataUrl: string, params: TaskPar
   }
   ctx.drawImage(image, 0, 0, width, height)
 
-  const blob = await canvasToBlob(canvas, requestedMime, plan.encode.quality)
+  const blob = await encodeCanvasToTargetSize(canvas, requestedMime, plan.encode.maxSizeBytes)
   const finalMime = canonicalizeImageMime(blob.type || requestedMime) ?? requestedMime
   if (requestedExplicitMime && finalMime !== requestedExplicitMime) {
     throw new Error(`Local image postprocessing failed: ${requestedMime} output is not supported`)
@@ -112,7 +112,7 @@ function parseNormalizedSize(size: string): PostprocessResizePlan | null {
 
 function getEncodePlan(
   format: TaskParams['output_format'],
-  quality: number | null,
+  maxSizeKb: number | null,
 ): PostprocessEncodePlan {
   const mime = MIME_MAP[format]
   if (!mime) throw new Error('Local postprocess format is invalid')
@@ -120,13 +120,60 @@ function getEncodePlan(
   return {
     format,
     mime,
-    quality: format === 'png' ? undefined : normalizeCanvasQuality(quality),
+    maxSizeBytes: normalizeMaxSizeBytes(maxSizeKb),
   }
 }
 
-function normalizeCanvasQuality(value: number | null): number {
-  if (value == null || !Number.isFinite(value)) return 0.9
-  return Math.min(1, Math.max(0, value / 100))
+function normalizeMaxSizeBytes(value: number | null): number {
+  const maxSizeKb = value == null || !Number.isFinite(value) ? 399 : value
+  return Math.max(1, Math.round(maxSizeKb)) * 1024
+}
+
+async function encodeCanvasToTargetSize(
+  canvas: HTMLCanvasElement,
+  mime: string,
+  maxSizeBytes: number | undefined,
+): Promise<Blob> {
+  if (!maxSizeBytes) return await canvasToBlob(canvas, mime, undefined)
+
+  if (mime === 'image/png') {
+    const blob = await canvasToBlob(canvas, mime, undefined)
+    if (blob.size > maxSizeBytes) {
+      throw new Error('Local image postprocessing failed: PNG output exceeds target size')
+    }
+    return blob
+  }
+
+  if (mime !== 'image/jpeg' && mime !== 'image/webp') {
+    const blob = await canvasToBlob(canvas, mime, undefined)
+    if (blob.size > maxSizeBytes) {
+      throw new Error('Local image postprocessing failed: output exceeds target size')
+    }
+    return blob
+  }
+
+  let low = 0.05
+  let high = 0.95
+  let bestBlob: Blob | null = null
+
+  for (let i = 0; i < 8; i += 1) {
+    const quality = (low + high) / 2
+    const blob = await canvasToBlob(canvas, mime, quality)
+
+    if (blob.size <= maxSizeBytes) {
+      bestBlob = blob
+      low = quality
+    } else {
+      high = quality
+    }
+  }
+
+  if (bestBlob) return bestBlob
+
+  const smallestBlob = await canvasToBlob(canvas, mime, 0.01)
+  if (smallestBlob.size <= maxSizeBytes) return smallestBlob
+
+  throw new Error('Local image postprocessing failed: cannot compress output to target size')
 }
 
 function canonicalizeImageMime(value: string | null | undefined): string | null {

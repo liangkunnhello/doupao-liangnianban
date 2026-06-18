@@ -779,8 +779,8 @@ export default function InputBar() {
   const [outputCompressionInput, setOutputCompressionInput] = useState(
     params.output_compression == null ? '' : String(params.output_compression),
   )
-  const [postprocessQualityInput, setPostprocessQualityInput] = useState(
-    params.postprocess_quality == null ? '' : String(params.postprocess_quality),
+  const [postprocessMaxSizeInput, setPostprocessMaxSizeInput] = useState(
+    params.postprocess_max_size_kb == null ? '' : String(params.postprocess_max_size_kb),
   )
   const [nInput, setNInput] = useState(String(params.n))
   const [nInputFocused, setNInputFocused] = useState(false)
@@ -1081,10 +1081,10 @@ export default function InputBar() {
   }, [params.output_compression])
 
   useEffect(() => {
-    setPostprocessQualityInput(
-      params.postprocess_quality == null ? '' : String(params.postprocess_quality),
+    setPostprocessMaxSizeInput(
+      params.postprocess_max_size_kb == null ? '' : String(params.postprocess_max_size_kb),
     )
-  }, [params.postprocess_quality])
+  }, [params.postprocess_max_size_kb])
 
   useEffect(() => {
     setNInput(agentAutoImageCount ? 'auto' : String(params.n))
@@ -1146,22 +1146,22 @@ export default function InputBar() {
     setParams({ output_compression: nextValue })
   }, [outputCompressionInput, params.output_compression, setParams])
 
-  const commitPostprocessQuality = useCallback(() => {
-    if (postprocessQualityInput.trim() === '') {
-      setPostprocessQualityInput('')
-      setParams({ postprocess_quality: null })
+  const commitPostprocessMaxSize = useCallback(() => {
+    if (postprocessMaxSizeInput.trim() === '') {
+      setPostprocessMaxSizeInput('')
+      setParams({ postprocess_max_size_kb: null })
       return
     }
 
-    const nextValue = Number(postprocessQualityInput)
-    if (!Number.isFinite(nextValue) || nextValue < 0 || nextValue > 100) {
-      setPostprocessQualityInput(params.postprocess_quality == null ? '' : String(params.postprocess_quality))
+    const nextValue = Number(postprocessMaxSizeInput)
+    if (!Number.isFinite(nextValue) || nextValue < 1) {
+      setPostprocessMaxSizeInput(params.postprocess_max_size_kb == null ? '' : String(params.postprocess_max_size_kb))
       return
     }
 
-    setPostprocessQualityInput(String(nextValue))
-    setParams({ postprocess_quality: nextValue })
-  }, [params.postprocess_quality, postprocessQualityInput, setParams])
+    setPostprocessMaxSizeInput(String(Math.round(nextValue)))
+    setParams({ postprocess_max_size_kb: Math.round(nextValue) })
+  }, [params.postprocess_max_size_kb, postprocessMaxSizeInput, setParams])
 
   const commitN = useCallback(() => {
     nLimitHint.hide()
@@ -2359,12 +2359,12 @@ export default function InputBar() {
             resizeEnabled: params.postprocess_resize_enabled,
             compressEnabled: params.postprocess_compress_enabled,
             format: params.postprocess_format,
-            qualityInput: postprocessQualityInput,
+            maxSizeInput: postprocessMaxSizeInput,
             onResizeEnabledChange: (enabled) => setParams({ postprocess_resize_enabled: enabled }),
             onCompressEnabledChange: (enabled) => setParams({ postprocess_compress_enabled: enabled }),
             onFormatChange: (format) => setParams({ postprocess_format: format }),
-            onQualityInputChange: setPostprocessQualityInput,
-            onQualityBlur: commitPostprocessQuality,
+            onMaxSizeInputChange: setPostprocessMaxSizeInput,
+            onMaxSizeBlur: commitPostprocessMaxSize,
           }}
         />
       )}

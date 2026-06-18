@@ -147,7 +147,7 @@ export interface TaskParams {
   postprocess_size: string
   postprocess_compress_enabled: boolean
   postprocess_format: 'png' | 'jpeg' | 'webp'
-  postprocess_quality: number | null
+  postprocess_max_size_kb: number | null
   moderation: 'auto' | 'low'
   n: number
 }
@@ -161,7 +161,7 @@ export const DEFAULT_PARAMS: TaskParams = {
   postprocess_size: 'auto',
   postprocess_compress_enabled: false,
   postprocess_format: 'webp',
-  postprocess_quality: 90,
+  postprocess_max_size_kb: 399,
   moderation: 'auto',
   n: 1,
 }
