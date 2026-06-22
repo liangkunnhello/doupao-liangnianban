@@ -435,36 +435,6 @@ export function FavoriteCollectionsView() {
     ]
   }, [collections, tasks])
 
-  return (
-    <div data-favorite-collections-root data-no-drag-select className="mb-4 rounded-xl border border-gray-200 bg-white/80 p-2 shadow-sm dark:border-white/[0.08] dark:bg-gray-900/80">
-      <div className="flex gap-2 overflow-x-auto hide-scrollbar">
-        {cards.map((card) => {
-          const isAll = card.id === ALL_FAVORITES_COLLECTION_ID
-          const selected = isAll ? !activeFavoriteCollectionId : activeFavoriteCollectionId === card.id
-          return (
-            <button
-              key={card.id}
-              type="button"
-              onClick={() => setActiveFavoriteCollectionId(isAll ? null : card.id)}
-              className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition ${
-                selected
-                  ? 'border-yellow-400 bg-yellow-50 text-yellow-700 dark:border-yellow-500/50 dark:bg-yellow-500/10 dark:text-yellow-300'
-                  : 'border-transparent text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
-              }`}
-              title={card.name}
-            >
-              {isAll ? <FavoriteIcon filled className="h-4 w-4 shrink-0 text-yellow-500" /> : <FolderIcon className="h-4 w-4 shrink-0 text-gray-400" />}
-              <span className="max-w-[120px] truncate text-sm font-medium">{card.name}</span>
-              <span className={`rounded px-1.5 py-0.5 text-[11px] ${selected ? 'bg-yellow-500/10' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
-                {card.tasks.length}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-
   const filteredCards = useMemo(() => {
     if (!searchQuery.trim()) return cards
     const lowerQuery = searchQuery.toLowerCase()
@@ -546,14 +516,42 @@ export function FavoriteCollectionsView() {
   }
 
   return (
-    <div data-favorite-collections-root className="relative min-h-[50vh]">
-      {filteredCards.length === 0 ? (
-        <div className="py-32 text-center text-gray-400 dark:text-gray-500">
-          <FavoriteIcon className="mx-auto mb-4 h-12 w-12 text-gray-300 dark:text-gray-600" />
-          <p className="text-sm">{cards.length === 0 ? '还没有收藏的图片' : '没有找到匹配的收藏夹'}</p>
+    <>
+      <div data-favorite-collections-root data-no-drag-select className="mb-4 rounded-xl border border-gray-200 bg-white/80 p-2 shadow-sm dark:border-white/[0.08] dark:bg-gray-900/80">
+        <div className="flex gap-2 overflow-x-auto hide-scrollbar">
+          {cards.map((card) => {
+            const isAll = card.id === ALL_FAVORITES_COLLECTION_ID
+            const selected = isAll ? !activeFavoriteCollectionId : activeFavoriteCollectionId === card.id
+            return (
+              <button
+                key={card.id}
+                type="button"
+                onClick={() => setActiveFavoriteCollectionId(isAll ? null : card.id)}
+                className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                  selected
+                    ? 'border-yellow-400 bg-yellow-50 text-yellow-700 dark:border-yellow-500/50 dark:bg-yellow-500/10 dark:text-yellow-300'
+                    : 'border-transparent text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
+                }`}
+                title={card.name}
+              >
+                {isAll ? <FavoriteIcon filled className="h-4 w-4 shrink-0 text-yellow-500" /> : <FolderIcon className="h-4 w-4 shrink-0 text-gray-400" />}
+                <span className="max-w-[120px] truncate text-sm font-medium">{card.name}</span>
+                <span className={`rounded px-1.5 py-0.5 text-[11px] ${selected ? 'bg-yellow-500/10' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
+                  {card.tasks.length}
+                </span>
+              </button>
+            )
+          })}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-10">
+      </div>
+      <div data-favorite-collections-root data-drag-select-surface className="relative min-h-[50vh]">
+        {filteredCards.length === 0 ? (
+          <div className="py-32 text-center text-gray-400 dark:text-gray-500">
+            <FavoriteIcon className="mx-auto mb-4 h-12 w-12 text-gray-300 dark:text-gray-600" />
+            <p className="text-sm">{cards.length === 0 ? '还没有收藏的图片' : '没有找到匹配的收藏夹'}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-10">
           {filteredCards.map((card) => {
             const coverTask = getLatestCoverTask(card.tasks)
             const isVirtualAll = card.id === ALL_FAVORITES_COLLECTION_ID
@@ -601,6 +599,7 @@ export function FavoriteCollectionsView() {
         />
       )}
     </div>
+    </>
   )
 }
 

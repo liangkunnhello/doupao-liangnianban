@@ -145,9 +145,39 @@ function createWindow() {
     }
   })
 
+  let rendererCrashCount = 0
+  const MAX_RENDERER_CRASH_RELOADS = 5
+  const RELOAD_ON_GONE_REASONS = new Set([
+    'crashed',
+    'oom',
+    'killed',
+    'abnormal-exit',
+    'launch-failure',
+    'integrity-failure',
+  ])
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (rendererCrashCount > 0) {
+      console.log('[renderer-crash] 页面成功加载，重置崩溃计数')
+      rendererCrashCount = 0
+    }
+  })
+
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[renderer-crash]', details.reason, details.exitCode)
+    rendererCrashCount += 1
+    console.error(`[renderer-crash #${rendererCrashCount}] reason=${details.reason} exitCode=${details.exitCode}`)
+
+    if (!RELOAD_ON_GONE_REASONS.has(details.reason)) {
+      console.log(`[renderer-crash] reason=${details.reason} 不是需要自动恢复的崩溃类型，跳过刷新`)
+      return
+    }
+
+    if (rendererCrashCount > MAX_RENDERER_CRASH_RELOADS) {
+      console.error('[renderer-crash] 连续崩溃次数过多，停止自动刷新以避免无限循环')
+      return
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
+      console.error('[renderer-crash] 正在重新加载窗口...')
       mainWindow.reload()
     }
   })
