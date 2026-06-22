@@ -171,6 +171,14 @@ export function HistoryIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function CalendarIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3M4 11h16M5 5h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+    </svg>
+  )
+}
+
 export function InstallIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" {...props}>
@@ -206,6 +214,23 @@ export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
         strokeWidth={2}
         d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
       />
+    </svg>
+  )
+}
+
+export function SunIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </svg>
+  )
+}
+
+export function MoonIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" {...props}>
+      <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
     </svg>
   )
 }

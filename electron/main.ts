@@ -145,10 +145,29 @@ function createWindow() {
     }
   })
 
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[renderer-crash]', details.reason, details.exitCode)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.reload()
+    }
+  })
+
+  mainWindow.on('unresponsive', () => {
+    console.error('[window-unresponsive]')
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
 }
+
+process.on('uncaughtException', (error) => {
+  console.error('[main-uncaughtException]', error)
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[main-unhandledRejection]', reason)
+})
 
 app.whenReady().then(() => {
   initLocalSavePath()

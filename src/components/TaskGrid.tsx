@@ -1,5 +1,6 @@
 import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { getNextTaskGridVisibleCount, getTaskGridRenderSlice, INITIAL_TASK_GRID_RENDER_COUNT, TASK_GRID_RENDER_BATCH_SIZE } from '../lib/taskGridWindow'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -10,11 +11,11 @@ export default function TaskGrid() {
     const tab = activeTabId ? workspaceTabs.find((t) => t.id === activeTabId) : null
     return tab?.tasks ?? []
   }, [activeTabId, workspaceTabs])
-  const tasks = activeTabId ? tabTasks : allTasks
+  const filterFavorite = useStore((s) => s.filterFavorite)
+  const tasks = filterFavorite ? allTasks : activeTabId ? tabTasks : allTasks
   const searchQuery = useStore((s) => s.searchQuery)
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
-  const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -24,6 +25,8 @@ export default function TaskGrid() {
   const clearSelection = useStore((s) => s.clearSelection)
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  const [visibleCount, setVisibleCount] = useState(INITIAL_TASK_GRID_RENDER_COUNT)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
@@ -63,6 +66,39 @@ export default function TaskGrid() {
       return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q) || batchErrorStr.includes(q)
     })
   }, [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  const visibleTasks = useMemo(
+    () => getTaskGridRenderSlice(filteredTasks, visibleCount),
+    [filteredTasks, visibleCount],
+  )
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_TASK_GRID_RENDER_COUNT)
+  }, [activeTabId, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+
+  useEffect(() => {
+    if (visibleCount >= filteredTasks.length) return
+    const target = loadMoreRef.current
+    if (!target || typeof IntersectionObserver === 'undefined') return
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      setVisibleCount((count) => getNextTaskGridVisibleCount(count, filteredTasks.length, TASK_GRID_RENDER_BATCH_SIZE))
+    }, { rootMargin: '600px 0px' })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [filteredTasks.length, visibleCount])
+
+  useEffect(() => {
+    if (visibleCount >= filteredTasks.length || typeof IntersectionObserver !== 'undefined') return
+    const handleScroll = () => {
+      const remaining = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight)
+      if (remaining > 800) return
+      setVisibleCount((count) => getNextTaskGridVisibleCount(count, filteredTasks.length, TASK_GRID_RENDER_BATCH_SIZE))
+    }
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    handleScroll()
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [filteredTasks.length, visibleCount])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -307,7 +343,7 @@ export default function TaskGrid() {
       className="relative min-h-[50vh]"
     >
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {filteredTasks.map((task) => (
+        {visibleTasks.map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
@@ -333,6 +369,9 @@ export default function TaskGrid() {
           </div>
         ))}
       </div>
+      {visibleCount < filteredTasks.length && (
+        <div ref={loadMoreRef} className="h-10" aria-hidden="true" />
+      )}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"

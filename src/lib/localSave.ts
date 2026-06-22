@@ -95,6 +95,12 @@ export async function readDirectory(dirPath: string): Promise<string[]> {
   return api.readDir(dirPath)
 }
 
+export async function checkPathExists(filePath: string): Promise<boolean | null> {
+  const api = getAPI()
+  if (!api) return null
+  return api.checkExists(filePath)
+}
+
 export async function joinPath(...paths: string[]): Promise<string> {
   const api = getAPI()
   if (!api) return paths.join('/')
@@ -128,6 +134,23 @@ function sanitizeFolderName(name: string): string {
   return name.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').slice(0, 100) || '未命名'
 }
 
+function formatDateVariable(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+function resolveOutputDirectoryVariables(path: string): string {
+  return path.replace(/\{date\}/gi, formatDateVariable())
+}
+
+function getDirectoryBaseName(dirPath: string): string {
+  const normalized = dirPath.trim().replace(/[\\/]+$/, '')
+  const parts = normalized.split(/[\\/]+/).filter(Boolean)
+  return sanitizeFolderName(parts[parts.length - 1] || 'images')
+}
+
 export async function getLocalImageSaveDirectory(subFolder?: string): Promise<string | null> {
   const api = getAPI()
   const basePath = await getLocalSavePath()
@@ -140,20 +163,33 @@ export async function getLocalImageSaveDirectory(subFolder?: string): Promise<st
   return imagesDir
 }
 
+export async function getExplicitImageSaveDirectory(outputDirectory: string): Promise<string | null> {
+  const api = getAPI()
+  if (!api) return null
+  const trimmed = resolveOutputDirectoryVariables(outputDirectory.trim())
+  if (!trimmed) return null
+  const ok = await api.ensureDir(trimmed)
+  return ok ? trimmed : null
+}
+
 export async function saveImageToLocal(
   taskId: string,
   imageIndex: number,
   dataUrl: string,
   ext: string = 'png',
   subFolder?: string,
+  outputDirectory?: string,
 ): Promise<string | null> {
   const api = getAPI()
   if (!api) return null
 
-  const imagesDir = await getLocalImageSaveDirectory(subFolder)
+  const imagesDir = outputDirectory
+    ? await getExplicitImageSaveDirectory(outputDirectory)
+    : await getLocalImageSaveDirectory(subFolder)
   if (!imagesDir) return null
   const fileExt = EXT_MAP[ext] || 'png'
-  const fileName = `${taskId}_${imageIndex + 1}.${fileExt}`
+  const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
+  const fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
   const filePath = await api.pathJoin(imagesDir, fileName)
 
   const success = await api.saveImage(filePath, dataUrl)

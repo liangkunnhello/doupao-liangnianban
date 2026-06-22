@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, isRecommendedSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { calculateImageSize, calculatePostprocessImageSize, isRecommendedSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
 import ViewportTooltip from './ViewportTooltip'
@@ -19,7 +19,7 @@ const RATIOS = [
 
 interface Props {
   currentSize: string
-  onSelect: (size: string) => void
+  onSelect: (size: string, postprocessSize?: string) => void
   onClose: () => void
   allowAuto?: boolean
   postprocessSettings?: {
@@ -27,7 +27,7 @@ interface Props {
     compressEnabled: boolean
     format: 'png' | 'jpeg' | 'webp'
     maxSizeInput: string
-    onResizeEnabledChange: (enabled: boolean) => void
+    onResizeEnabledChange: (enabled: boolean, size?: string) => void
     onCompressEnabledChange: (enabled: boolean) => void
     onFormatChange: (format: 'png' | 'jpeg' | 'webp') => void
     onMaxSizeInputChange: (value: string) => void
@@ -134,6 +134,12 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     return ''
   }, [mode, tier, activeRatio, customW, customH])
 
+  const postprocessPreviewSize = useMemo(() => {
+    if (mode !== 'ratio') return previewSize
+    const size = calculatePostprocessImageSize(tier, activeRatio)
+    return size || previewSize
+  }, [mode, tier, activeRatio, previewSize])
+
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
     if (mode === 'ratio' && ratio === 'custom') return customRatioClamped
@@ -167,7 +173,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const applySize = () => {
     if (!previewSize) return
-    onSelect(previewSize)
+    onSelect(previewSize, postprocessPreviewSize)
     onClose()
   }
 
@@ -403,13 +409,13 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                   <div className="min-w-0">
                     <div className="text-sm text-gray-700 dark:text-gray-200">后处理尺寸</div>
                     <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
-                      {postprocessResizeAvailable ? `保存为 ${previewSize}` : '请先选择具体尺寸'}
+                      {postprocessResizeAvailable ? `保存为 ${postprocessPreviewSize}` : '请先选择具体尺寸'}
                     </div>
                   </div>
                   <button
                     type="button"
                     disabled={!postprocessResizeAvailable && !postprocessSettings.resizeEnabled}
-                    onClick={() => postprocessSettings.onResizeEnabledChange(!postprocessSettings.resizeEnabled)}
+                    onClick={() => postprocessSettings.onResizeEnabledChange(!postprocessSettings.resizeEnabled, postprocessPreviewSize)}
                     className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs transition ${
                       postprocessSettings.resizeEnabled && postprocessResizeAvailable
                         ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'

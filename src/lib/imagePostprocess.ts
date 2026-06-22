@@ -25,7 +25,7 @@ export interface ProcessImageResult {
 }
 
 export function getImagePostprocessPlan(params: TaskParams): ImagePostprocessPlan {
-  const resize = params.postprocess_resize_enabled ? getResizePlan(params.postprocess_size) : null
+  const resize = params.postprocess_resize_enabled ? parseNormalizedSize(params.postprocess_size) : null
   const encode = params.postprocess_compress_enabled
     ? getEncodePlan(params.postprocess_format, params.postprocess_max_size_kb)
     : { format: null, mime: null }
@@ -86,15 +86,6 @@ export function mergePostprocessedActualParams(
 ): Partial<TaskParams> | undefined {
   const merged = { ...(original ?? {}), ...(postprocessed ?? {}) }
   return Object.keys(merged).length ? merged : undefined
-}
-
-function getResizePlan(size: string): PostprocessResizePlan {
-  const parsed = parseNormalizedSize(size)
-  if (!parsed) {
-    throw new Error('Local postprocess size is invalid')
-  }
-
-  return parsed
 }
 
 function parseNormalizedSize(size: string): PostprocessResizePlan | null {

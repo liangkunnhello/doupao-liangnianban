@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
-import WordLibrarySidebarToggle from './WordLibrarySidebarToggle'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { convertVariableMentionAtVisibleOffsetToText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
@@ -492,7 +491,6 @@ export default function InputBar() {
 
   const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
-  const setWordLibrarySidebarOpen = useStore((s) => s.setWordLibrarySidebarOpen)
 
   const VAR_COLOR_MAP = useMemo(() => {
     const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
@@ -857,7 +855,6 @@ export default function InputBar() {
     // 同步到 store
     const plainText = getContentEditablePlainText(el)
     useStore.getState().setPrompt(plainText)
-    useStore.getState().setWordLibrarySidebarOpen(true)
   }, [])
   const handlePromptVariableContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const el = textareaRef.current
@@ -2348,10 +2345,13 @@ export default function InputBar() {
       {showSizePicker && (
         <SizePickerModal
           currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
-          onSelect={(size) => setParams({
-            size,
-            postprocess_resize_enabled: size !== 'auto' ? params.postprocess_resize_enabled : false,
-            ...(params.postprocess_resize_enabled && size !== 'auto' ? { postprocess_size: size } : {}),
+          onSelect={(size, postprocessSize) => setParams({
+            ...(params.postprocess_resize_enabled && size !== 'auto'
+              ? { postprocess_size: postprocessSize ?? size }
+              : {
+                  size,
+                  postprocess_resize_enabled: size !== 'auto' ? params.postprocess_resize_enabled : false,
+                }),
           })}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
@@ -2360,7 +2360,10 @@ export default function InputBar() {
             compressEnabled: params.postprocess_compress_enabled,
             format: params.postprocess_format,
             maxSizeInput: postprocessMaxSizeInput,
-            onResizeEnabledChange: (enabled) => setParams({ postprocess_resize_enabled: enabled }),
+            onResizeEnabledChange: (enabled, size) => setParams({
+              postprocess_resize_enabled: enabled,
+              ...(enabled && size && size !== 'auto' ? { postprocess_size: size } : {}),
+            }),
             onCompressEnabledChange: (enabled) => setParams({ postprocess_compress_enabled: enabled }),
             onFormatChange: (format) => setParams({ postprocess_format: format }),
             onMaxSizeInputChange: setPostprocessMaxSizeInput,
@@ -2670,7 +2673,6 @@ export default function InputBar() {
                   if (target.classList.contains('wildcard-var')) {
                     const varName = target.dataset.varName ?? target.textContent ?? ''
                     setWordLibraryPromptSelectedVarName(varName)
-                    setWordLibrarySidebarOpen(true)
                   }
                   const sel = window.getSelection()
                   if (sel) {
@@ -2716,8 +2718,6 @@ export default function InputBar() {
               {renderParams('grid-cols-6')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
-                {/* 词条库侧边栏切换按钮 */}
-                <WordLibrarySidebarToggle />
                 {/* 转换为变量按钮 */}
                 <div
                   className="relative"
@@ -2873,10 +2873,6 @@ export default function InputBar() {
                       </div>
                     </>
                   )}
-                </div>
-                {/* 词条库侧边栏切换按钮 */}
-                <div className="flex-shrink-0">
-                  <WordLibrarySidebarToggle />
                 </div>
                 {/* 转换为变量按钮 */}
                 <div

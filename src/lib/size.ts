@@ -217,6 +217,12 @@ const COMMON_SIZE_PRESETS: Record<SizeTier, Record<PresetRatio, string>> = {
   },
 }
 
+const POSTPROCESS_SIZE_PRESET_OVERRIDES: Partial<Record<SizeTier, Partial<Record<PresetRatio, string>>>> = {
+  '1K': {
+    '9:16': '1080x1920',
+  },
+}
+
 function getPresetRatioKey(ratioWidth: number, ratioHeight: number): PresetRatio | null {
   if (!Number.isInteger(ratioWidth) || !Number.isInteger(ratioHeight)) return null
 
@@ -273,4 +279,16 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
 
   if (bestPixels === 0) return null
   return `${bestWidth}x${bestHeight}`
+}
+
+export function calculatePostprocessImageSize(tier: SizeTier, ratio: string) {
+  const parsed = parseRatio(ratio)
+  if (!parsed) return null
+
+  const presetRatioKey = getPresetRatioKey(parsed.width, parsed.height)
+  if (presetRatioKey) {
+    return POSTPROCESS_SIZE_PRESET_OVERRIDES[tier]?.[presetRatioKey] ?? COMMON_SIZE_PRESETS[tier][presetRatioKey]
+  }
+
+  return calculateImageSize(tier, ratio)
 }

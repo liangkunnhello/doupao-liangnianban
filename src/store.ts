@@ -15,6 +15,8 @@ import type {
   InputImage,
   InputImageFolder,
   MaskDraft,
+  ScheduleItem,
+  ScheduleState,
   TaskRecord,
   FavoriteCollection,
   ExportData,
@@ -28,6 +30,7 @@ import type {
 import type { StoredImage } from './types'
 import type { CallApiOptions, CallApiResult } from './lib/imageApiShared'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
+import { createDefaultScheduleRows, formatDateKey, getScheduleRunKey, getWeekStartDate, parseDateKey, resolveScheduleOutputTarget } from './lib/schedule'
 import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getAgentApiProfile, getApiMaxN, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
@@ -40,6 +43,8 @@ import {
   getAllAgentConversations,
   replaceAgentConversations,
   clearAgentConversations as dbClearAgentConversations,
+  getWordLibraryState,
+  putWordLibraryState,
   getImage,
   getImageThumbnail,
   getStoredFreshImageThumbnail,
@@ -84,6 +89,7 @@ let thumbnailBackfillScheduled = false
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
+export const MAX_RETAINED_STREAM_PARTIAL_IMAGES = 3
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
@@ -95,6 +101,8 @@ const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const agentRoundControllers = new Map<string, AbortController>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
+let wordLibraryPersistenceReady = false
+let wordLibraryMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
@@ -181,13 +189,13 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
   if (!task) return
 
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
-  const subFolder = containingTab?.name
+  const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
     const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
     if (dataUrl) {
-      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder)
+      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
     }
   }
 }
@@ -219,7 +227,7 @@ async function saveTaskToLocalFS(taskId: string) {
   if (!task) return
 
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
-  const subFolder = containingTab?.name
+  const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
   let imageFailCount = 0
   try {
@@ -227,7 +235,7 @@ async function saveTaskToLocalFS(taskId: string) {
       const imageId = task.outputImages[i]
       const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
       if (dataUrl) {
-        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
         if (!saved) imageFailCount++
       } else {
         imageFailCount++
@@ -731,6 +739,87 @@ function createDefaultFavoriteCollection(now = Date.now()): FavoriteCollection {
   }
 }
 
+function createDefaultScheduleState(now = new Date()): ScheduleState {
+  return {
+    rows: createDefaultScheduleRows(),
+    items: [],
+    activeWeekStart: formatDateKey(getWeekStartDate(now)),
+    modalOpen: false,
+    runningWeekStarts: [],
+  }
+}
+
+function addScheduleDays(dateKey: string, days: number): string {
+  const date = parseDateKey(dateKey)
+  date.setDate(date.getDate() + days)
+  return formatDateKey(date)
+}
+
+function formatFavoriteOutputDate(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+function applyFavoriteOutputDateVariable(path: string | undefined, enabled: boolean): string {
+  const value = path ?? ''
+  if (enabled) return value.replace(/(?:19|20)\d{6}/, '{date}')
+  return value.replace(/\{date\}/gi, formatFavoriteOutputDate())
+}
+
+function normalizeScheduleState(value: unknown, fallback = createDefaultScheduleState()): ScheduleState {
+  if (!isRecord(value)) return fallback
+  const legacyRunningWeekStart = typeof value.runningDate === 'string'
+    ? formatDateKey(getWeekStartDate(parseDateKey(value.runningDate)))
+    : null
+  const runningWeekStarts = Array.isArray(value.runningWeekStarts)
+    ? Array.from(new Set(value.runningWeekStarts.filter((weekStart): weekStart is string => typeof weekStart === 'string')))
+    : legacyRunningWeekStart
+      ? [legacyRunningWeekStart]
+      : fallback.runningWeekStarts
+  const rows = Array.isArray(value.rows)
+    ? value.rows
+        .filter((row): row is Record<string, unknown> => isRecord(row) && typeof row.id === 'string')
+        .map((row, index) => ({
+          id: String(row.id),
+          name: typeof row.name === 'string' && row.name.trim() ? row.name : `任务 ${index + 1}`,
+          order: typeof row.order === 'number' ? row.order : index,
+        }))
+    : fallback.rows
+  const items = Array.isArray(value.items)
+    ? value.items
+        .filter((item): item is Record<string, unknown> =>
+          isRecord(item) &&
+          typeof item.id === 'string' &&
+          typeof item.taskId === 'string' &&
+          typeof item.date === 'string' &&
+          typeof item.rowId === 'string',
+        )
+        .map((item, index): ScheduleItem => ({
+          id: String(item.id),
+          taskId: String(item.taskId),
+          collectionId: typeof item.collectionId === 'string' ? item.collectionId : null,
+          date: String(item.date),
+          rowId: String(item.rowId),
+          order: typeof item.order === 'number' ? item.order : index,
+          count: Math.max(1, typeof item.count === 'number' ? Math.floor(item.count) : 1),
+          time: typeof item.time === 'string' && item.time.trim() ? item.time : null,
+          lastRunKey: typeof item.lastRunKey === 'string' ? item.lastRunKey : undefined,
+          status: item.status === 'queued' || item.status === 'running' || item.status === 'done' || item.status === 'error' || item.status === 'idle' ? item.status : undefined,
+          lastTaskIds: Array.isArray(item.lastTaskIds) ? item.lastTaskIds.filter((id): id is string => typeof id === 'string') : undefined,
+          lastError: typeof item.lastError === 'string' ? item.lastError : undefined,
+        }))
+    : fallback.items
+  return {
+    rows: rows.length ? rows : fallback.rows,
+    items,
+    activeWeekStart: typeof value.activeWeekStart === 'string' ? value.activeWeekStart : fallback.activeWeekStart,
+    modalOpen: Boolean(value.modalOpen),
+    runningWeekStarts,
+  }
+}
+
 function normalizeFavoriteCollections(value: unknown): FavoriteCollection[] {
   const now = Date.now()
   const collections = Array.isArray(value) ? value : []
@@ -837,11 +926,16 @@ export function getPersistedState(state: AppState) {
     agentAssetPanelCollapsed: state.agentAssetPanelCollapsed,
     favoriteCollections: state.favoriteCollections,
     defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
+    schedule: state.schedule,
     supportPromptDismissed: state.supportPromptDismissed,
     supportPromptOpen: state.supportPromptOpen,
     supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
-    wordLibraryGroups: state.wordLibraryGroups,
-    wordLibraryEntries: state.wordLibraryEntries,
+    ...(wordLibraryMigrationPending && !wordLibraryPersistenceReady
+      ? {
+          wordLibraryGroups: state.wordLibraryGroups,
+          wordLibraryEntries: state.wordLibraryEntries,
+        }
+      : {}),
     ...(state.workspaceTabs.length > 0
       ? {
           workspaceTabs: state.workspaceTabs.map((tab) => ({
@@ -885,7 +979,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'postprocess' ? persisted.appMode : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -916,6 +1010,10 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections(persisted.favoriteCollections))
     : currentState.favoriteCollections
   const defaultFavoriteCollectionId = resolveDefaultFavoriteCollectionId(favoriteCollections, persisted.defaultFavoriteCollectionId)
+  const schedule = normalizeScheduleState(persisted.schedule, currentState.schedule)
+  if (Array.isArray(persisted.wordLibraryGroups) || Array.isArray(persisted.wordLibraryEntries)) {
+    wordLibraryMigrationPending = true
+  }
   const wordLibraryGroups = normalizeWordLibraryGroups(persisted.wordLibraryGroups, currentState.wordLibraryGroups)
   const persistedWordLibraryEntries = normalizeWordLibraryEntries(persisted.wordLibraryEntries, wordLibraryGroups)
   // Gallery 模式下顶层输入状态（params/inputImageFolder）应镜像活动 workspace 标签页，
@@ -956,6 +1054,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     agentAssetPanelCollapsed: Boolean(persisted.agentAssetPanelCollapsed),
     favoriteCollections,
     defaultFavoriteCollectionId,
+    schedule,
     activeFavoriteCollectionId: null,
     favoritePickerTaskIds: null,
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
@@ -1088,6 +1187,21 @@ interface AppState {
   favoritePickerTaskIds: string[] | null
   openFavoritePicker: (taskIds: string[]) => void
   closeFavoritePicker: () => void
+  schedule: ScheduleState
+  setScheduleModalOpen: (open: boolean) => void
+  setScheduleWeekStart: (weekStart: string) => void
+  startScheduleWeek: (weekStart: string) => void
+  stopScheduleWeek: (weekStart: string) => void
+  copyPreviousWeekSchedule: () => string[]
+  addScheduleRow: () => string
+  updateScheduleRow: (id: string, name: string) => void
+  removeScheduleRow: (id: string) => void
+  addScheduleItem: (item: Omit<ScheduleItem, 'id' | 'order'> & { order?: number }) => string
+  updateScheduleItem: (id: string, patch: Partial<Omit<ScheduleItem, 'id'>>) => void
+  removeScheduleItem: (id: string) => void
+  updateTaskFavoriteOutputPath: (taskId: string, outputPath: string) => void
+  updateTaskFavoriteOutputDateVariable: (taskId: string, enabled: boolean) => void
+  runScheduleItem: (id: string, now?: Date, countOverride?: number, appendToLastTaskIds?: boolean) => Promise<string | null>
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
@@ -1112,7 +1226,8 @@ interface AppState {
 
   // UI
   detailTaskId: string | null
-  setDetailTaskId: (id: string | null) => void
+  detailReturnToSchedule: boolean
+  setDetailTaskId: (id: string | null, options?: { returnToSchedule?: boolean }) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
   setLightboxImageId: (id: string | null, list?: string[]) => void
@@ -1313,6 +1428,26 @@ function normalizeWordLibraryEntries(value: unknown, groups: WordLibraryGroup[])
       }
     })
     .filter((entry): entry is WordLibraryEntry => entry != null)
+}
+
+function mergeWordLibraryGroups(stored: WordLibraryGroup[], legacy: WordLibraryGroup[]): WordLibraryGroup[] {
+  const merged = new Map<string, WordLibraryGroup>()
+  for (const group of legacy) merged.set(group.id, group)
+  for (const group of stored) merged.set(group.id, group)
+  return [...merged.values()]
+}
+
+function mergeWordLibraryEntries(stored: WordLibraryEntry[], legacy: WordLibraryEntry[], groups: WordLibraryGroup[]): WordLibraryEntry[] {
+  const normalizedLegacy = normalizeWordLibraryEntries(legacy, groups)
+  const normalizedStored = normalizeWordLibraryEntries(stored, groups)
+  const merged = new Map<string, WordLibraryEntry>()
+  for (const entry of normalizedLegacy) merged.set(entry.id, entry)
+  for (const entry of normalizedStored) merged.set(entry.id, entry)
+  return [...merged.values()]
+}
+
+async function replaceStoredWordLibrary(groups: WordLibraryGroup[], entries: WordLibraryEntry[]) {
+  await putWordLibraryState({ groups, entries })
 }
 
 function normalizeInputImages(value: unknown): InputImage[] {
@@ -1640,6 +1775,22 @@ export const useStore = create<AppState>()(
             agentEditingRoundId: null,
             ...restored,
           }))
+          return
+        }
+
+        if (appMode === 'postprocess') {
+          const state = get()
+          const agentInputDrafts = saveActiveAgentInputDrafts(state)
+          const galleryInputDraft = saveGalleryInputDraft(state)
+          set({
+            appMode,
+            agentInputDrafts,
+            galleryInputDraft,
+            agentMobileHeaderVisible: true,
+            selectedTaskIds: [],
+            selectedFavoriteCollectionIds: [],
+            agentEditingRoundId: null,
+          })
           return
         }
 
@@ -1980,6 +2131,263 @@ export const useStore = create<AppState>()(
         set({ favoritePickerTaskIds: Array.from(new Set(taskIds)).filter(Boolean) })
       },
       closeFavoritePicker: () => set({ favoritePickerTaskIds: null }),
+      schedule: createDefaultScheduleState(),
+      setScheduleModalOpen: (modalOpen) => set((state) => ({
+        schedule: { ...state.schedule, modalOpen },
+      })),
+      setScheduleWeekStart: (activeWeekStart) => set((state) => ({
+        schedule: { ...state.schedule, activeWeekStart },
+      })),
+      startScheduleWeek: (weekStart) => set((state) => ({
+        schedule: {
+          ...state.schedule,
+          runningWeekStarts: Array.from(new Set([...state.schedule.runningWeekStarts, weekStart])).sort(),
+        },
+      })),
+      stopScheduleWeek: (weekStart) => set((state) => ({
+        schedule: {
+          ...state.schedule,
+          runningWeekStarts: state.schedule.runningWeekStarts.filter((item) => item !== weekStart),
+        },
+      })),
+      copyPreviousWeekSchedule: () => {
+        const copiedIds: string[] = []
+        set((state) => {
+          const activeWeekStart = state.schedule.activeWeekStart
+          const previousWeekStart = addScheduleDays(activeWeekStart, -7)
+          const activeWeekEnd = addScheduleDays(activeWeekStart, 6)
+          const previousWeekEnd = addScheduleDays(previousWeekStart, 6)
+          const activeItems = state.schedule.items.filter((item) => item.date >= activeWeekStart && item.date <= activeWeekEnd)
+          const previousItems = state.schedule.items
+            .filter((item) => item.date >= previousWeekStart && item.date <= previousWeekEnd)
+            .slice()
+            .sort((a, b) => a.date.localeCompare(b.date) || a.rowId.localeCompare(b.rowId) || a.order - b.order)
+          const orderByCell = new Map<string, number>()
+          for (const item of activeItems) {
+            const key = `${item.date}:${item.rowId}`
+            orderByCell.set(key, Math.max(orderByCell.get(key) ?? -1, item.order))
+          }
+          const copiedItems = previousItems.map((item) => {
+            const nextDate = addScheduleDays(item.date, 7)
+            const cellKey = `${nextDate}:${item.rowId}`
+            const order = (orderByCell.get(cellKey) ?? -1) + 1
+            orderByCell.set(cellKey, order)
+            const id = genId()
+            copiedIds.push(id)
+            return {
+              id,
+              taskId: item.taskId,
+              collectionId: item.collectionId,
+              date: nextDate,
+              rowId: item.rowId,
+              order,
+              count: item.count,
+              time: item.time,
+              status: 'idle' as const,
+            }
+          })
+          if (copiedItems.length === 0) return state
+          return {
+            schedule: {
+              ...state.schedule,
+              items: [...state.schedule.items, ...copiedItems],
+            },
+          }
+        })
+        return copiedIds
+      },
+      addScheduleRow: () => {
+        const id = genId()
+        set((state) => ({
+          schedule: {
+            ...state.schedule,
+            rows: [
+              ...state.schedule.rows,
+              {
+                id,
+                name: `任务 ${state.schedule.rows.length + 1}`,
+                order: state.schedule.rows.length,
+              },
+            ],
+          },
+        }))
+        return id
+      },
+      updateScheduleRow: (id, name) => set((state) => {
+        const normalizedName = name.trim()
+        if (!normalizedName) return state
+        return {
+          schedule: {
+            ...state.schedule,
+            rows: state.schedule.rows.map((row) => row.id === id ? { ...row, name: normalizedName } : row),
+          },
+        }
+      }),
+      removeScheduleRow: (id) => set((state) => {
+        if (state.schedule.rows.length <= 1) return state
+        const rows = state.schedule.rows.filter((row) => row.id !== id)
+        if (rows.length === state.schedule.rows.length) return state
+        return {
+          schedule: {
+            ...state.schedule,
+            rows: rows.map((row, index) => ({ ...row, order: index })),
+            items: state.schedule.items.filter((item) => item.rowId !== id),
+          },
+        }
+      }),
+      addScheduleItem: (item) => {
+        const id = genId()
+        set((state) => {
+          const sameCellItems = state.schedule.items.filter((existing) => existing.date === item.date && existing.rowId === item.rowId)
+          const order = item.order ?? sameCellItems.reduce((max, existing) => Math.max(max, existing.order), -1) + 1
+          const nextItem: ScheduleItem = {
+            id,
+            taskId: item.taskId,
+            collectionId: item.collectionId,
+            date: item.date,
+            rowId: item.rowId,
+            order,
+            count: Math.max(1, Math.floor(item.count || 1)),
+            time: item.time || null,
+            status: 'idle',
+          }
+          return {
+            schedule: {
+              ...state.schedule,
+              items: [...state.schedule.items, nextItem],
+            },
+          }
+        })
+        return id
+      },
+      updateScheduleItem: (id, patch) => set((state) => ({
+        schedule: {
+          ...state.schedule,
+          items: state.schedule.items.map((item) => item.id === id
+            ? {
+                ...item,
+                ...patch,
+                count: patch.count === undefined ? item.count : Math.max(1, Math.floor(patch.count || 1)),
+                time: patch.time === undefined ? item.time : (patch.time || null),
+              }
+            : item,
+          ),
+        },
+      })),
+      removeScheduleItem: (id) => set((state) => ({
+        schedule: {
+          ...state.schedule,
+          items: state.schedule.items.filter((item) => item.id !== id),
+        },
+      })),
+      updateTaskFavoriteOutputPath: (taskId, outputPath) => set((state) => {
+        const patchTask = (task: TaskRecord) => task.id === taskId
+          ? {
+              ...task,
+              favoriteOutputPath: task.favoriteOutputUseDateVariable
+                ? applyFavoriteOutputDateVariable(outputPath, true)
+                : outputPath,
+            }
+          : task
+        return {
+          tasks: state.tasks.map(patchTask),
+          workspaceTabs: state.workspaceTabs.map((tab) => ({
+            ...tab,
+            tasks: tab.tasks.map(patchTask),
+          })),
+        }
+      }),
+      updateTaskFavoriteOutputDateVariable: (taskId, enabled) => set((state) => {
+        const patchTask = (task: TaskRecord) => task.id === taskId
+          ? {
+              ...task,
+              favoriteOutputPath: applyFavoriteOutputDateVariable(task.favoriteOutputPath, enabled),
+              favoriteOutputUseDateVariable: enabled,
+            }
+          : task
+        return {
+          tasks: state.tasks.map(patchTask),
+          workspaceTabs: state.workspaceTabs.map((tab) => ({
+            ...tab,
+            tasks: tab.tasks.map(patchTask),
+          })),
+        }
+      }),
+      runScheduleItem: async (id, now = new Date(), countOverride, appendToLastTaskIds = false) => {
+        const state = useStore.getState()
+        const item = state.schedule.items.find((scheduleItem) => scheduleItem.id === id)
+        if (!item) return null
+        const sourceTask = state.tasks.find((task) => task.id === item.taskId)
+        if (!sourceTask || !sourceTask.isFavorite) {
+          const message = '日程任务引用的收藏任务不存在'
+          useStore.getState().updateScheduleItem(id, {
+            status: 'error',
+            lastError: message,
+          })
+          state.showToast(message, 'error')
+          return null
+        }
+
+        useStore.getState().updateScheduleItem(id, {
+          status: 'queued',
+          lastError: undefined,
+        })
+
+        const inputImages = sourceTask.inputImageFolderPath
+          ? []
+          : (await Promise.all(sourceTask.inputImageIds.map(async (imageId) => {
+              const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
+              return dataUrl ? { id: imageId, dataUrl } : null
+            }))).filter((image): image is InputImage => Boolean(image))
+        const inputImageFolder = sourceTask.inputImageFolderPath
+          ? { path: sourceTask.inputImageFolderPath, imageIds: sourceTask.inputImageIds }
+          : null
+        const maskDataUrl = sourceTask.maskImageId ? (getCachedImage(sourceTask.maskImageId) || (await getImage(sourceTask.maskImageId))?.dataUrl) : null
+        const maskDraft = sourceTask.maskTargetImageId && maskDataUrl
+          ? { targetImageId: sourceTask.maskTargetImageId, maskDataUrl, updatedAt: now.getTime() }
+          : null
+        const outputTarget = resolveScheduleOutputTarget({
+          favoriteOutputPath: sourceTask.favoriteOutputPath,
+          collectionId: item.collectionId,
+          taskCollectionIds: sourceTask.favoriteCollectionIds,
+          collections: state.favoriteCollections,
+          defaultCollectionId: state.defaultFavoriteCollectionId,
+        })
+
+        try {
+          const runCount = Math.max(1, Math.floor((countOverride ?? item.count) || 1))
+          const taskId = await submitTaskWithData({
+            prompt: sourceTask.prompt,
+            inputImages,
+            inputImageFolder,
+            params: { ...sourceTask.params, n: runCount },
+            maskDraft,
+            scheduledOutputPath: 'path' in outputTarget ? outputTarget.path : undefined,
+            scheduledOutputSubFolder: 'subFolder' in outputTarget ? outputTarget.subFolder : undefined,
+          }, { useCurrentApiProfileWhenReusedMissing: true })
+          if (!taskId) {
+            useStore.getState().updateScheduleItem(id, { status: 'idle' })
+            return null
+          }
+          const latestItem = useStore.getState().schedule.items.find((scheduleItem) => scheduleItem.id === id)
+          useStore.getState().updateScheduleItem(id, {
+            status: 'running',
+            lastRunKey: getScheduleRunKey(item),
+            lastTaskIds: appendToLastTaskIds ? [...(latestItem?.lastTaskIds ?? []), taskId] : [taskId],
+            lastError: undefined,
+          })
+          return taskId
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          useStore.getState().updateScheduleItem(id, {
+            status: 'error',
+            lastRunKey: getScheduleRunKey(item),
+            lastError: message,
+          })
+          state.showToast(message, 'error')
+          return null
+        }
+      },
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
@@ -2046,9 +2454,24 @@ export const useStore = create<AppState>()(
 
       // UI
       detailTaskId: null,
-      setDetailTaskId: (detailTaskId) => {
+      detailReturnToSchedule: false,
+      setDetailTaskId: (detailTaskId, options) => {
         if (detailTaskId) dismissAllTooltips()
-        set({ detailTaskId })
+        set((state) => {
+          if (detailTaskId) {
+            return {
+              detailTaskId,
+              detailReturnToSchedule: Boolean(options?.returnToSchedule),
+            }
+          }
+          return {
+            detailTaskId: null,
+            detailReturnToSchedule: false,
+            schedule: state.detailReturnToSchedule
+              ? { ...state.schedule, modalOpen: true }
+              : state.schedule,
+          }
+        })
       },
       lightboxImageId: null,
       lightboxImageList: [],
@@ -2461,6 +2884,49 @@ useStore.subscribe((state) => {
     agentConversationPersistDebounceTimer = null
     void flushAgentConversationsToIndexedDB()
   }, 500)
+})
+
+let lastStoredWordLibraryGroups = useStore.getState().wordLibraryGroups
+let lastStoredWordLibraryEntries = useStore.getState().wordLibraryEntries
+let wordLibraryPersistRunning = false
+let wordLibraryPersistQueued = false
+let wordLibraryPersistDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+async function flushWordLibraryToIndexedDB() {
+  if (wordLibraryPersistRunning) {
+    wordLibraryPersistQueued = true
+    return
+  }
+
+  wordLibraryPersistRunning = true
+  try {
+    do {
+      wordLibraryPersistQueued = false
+      const { wordLibraryGroups, wordLibraryEntries } = useStore.getState()
+      await replaceStoredWordLibrary(wordLibraryGroups, wordLibraryEntries)
+      lastStoredWordLibraryGroups = wordLibraryGroups
+      lastStoredWordLibraryEntries = wordLibraryEntries
+    } while (
+      wordLibraryPersistQueued ||
+      useStore.getState().wordLibraryGroups !== lastStoredWordLibraryGroups ||
+      useStore.getState().wordLibraryEntries !== lastStoredWordLibraryEntries
+    )
+  } finally {
+    wordLibraryPersistRunning = false
+  }
+}
+
+useStore.subscribe((state) => {
+  if (state.wordLibraryGroups === lastStoredWordLibraryGroups && state.wordLibraryEntries === lastStoredWordLibraryEntries) return
+  if (!wordLibraryPersistenceReady) {
+    wordLibraryPersistQueued = true
+    return
+  }
+  if (wordLibraryPersistDebounceTimer) clearTimeout(wordLibraryPersistDebounceTimer)
+  wordLibraryPersistDebounceTimer = setTimeout(() => {
+    wordLibraryPersistDebounceTimer = null
+    void flushWordLibraryToIndexedDB()
+  }, 300)
 })
 
 // ===== Actions =====
@@ -2939,6 +3405,28 @@ export async function initStore() {
     // Force persist rewrite by touching a stable field without triggering reactive updates
     useStore.setState((state) => ({ agentConversationsLoaded: state.agentConversationsLoaded }))
   }
+  const storedWordLibrary = await getWordLibraryState()
+  const wordState = useStore.getState()
+  const legacyWordGroups = normalizeWordLibraryGroups(wordState.wordLibraryGroups, wordState.wordLibraryGroups)
+  const storedWordGroups = normalizeWordLibraryGroups(storedWordLibrary?.groups, legacyWordGroups)
+  const mergedWordGroups = mergeWordLibraryGroups(storedWordGroups, legacyWordGroups)
+  const mergedWordEntries = mergeWordLibraryEntries(storedWordLibrary?.entries ?? [], wordState.wordLibraryEntries, mergedWordGroups)
+  useStore.setState({
+    wordLibraryGroups: mergedWordGroups,
+    wordLibraryEntries: mergedWordEntries,
+  })
+  await replaceStoredWordLibrary(mergedWordGroups, mergedWordEntries)
+  const shouldRewriteWordLibraryLocalState = wordLibraryMigrationPending
+  wordLibraryPersistenceReady = true
+  wordLibraryMigrationPending = false
+  lastStoredWordLibraryGroups = mergedWordGroups
+  lastStoredWordLibraryEntries = mergedWordEntries
+  if (wordLibraryPersistQueued) {
+    await flushWordLibraryToIndexedDB()
+  }
+  if (shouldRewriteWordLibraryLocalState) {
+    useStore.setState((state) => ({ wordLibraryEditEntryId: state.wordLibraryEditEntryId }))
+  }
   const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const favoriteState = useStore.getState()
@@ -3181,13 +3669,15 @@ export async function submitTaskWithData(
     params: TaskParams
     maskDraft: MaskDraft | null
     targetTabId?: string | null
+    scheduledOutputPath?: string
+    scheduledOutputSubFolder?: string
   },
   options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {},
 ) {
   const { settings, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
-  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId } = data
+  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder } = data
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -3295,6 +3785,8 @@ export async function submitTaskWithData(
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
+    scheduledOutputPath,
+    scheduledOutputSubFolder,
   }
 
   const latestTasks = useStore.getState().tasks
@@ -3314,6 +3806,7 @@ export async function submitTaskWithData(
 
   // 异步调用 API
   executeTask(taskId)
+  return taskId
 }
 
 /** 提交新任务 */
@@ -3730,7 +4223,11 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
 
     const currentIds = latestTask.streamPartialImageIds || []
     if (currentIds.includes(imgId)) return
-    updateTaskInStore(taskId, { streamPartialImageIds: [...currentIds, imgId] })
+    const nextIds = [...currentIds, imgId]
+    const retainedIds = nextIds.slice(-MAX_RETAINED_STREAM_PARTIAL_IMAGES)
+    const discardedIds = nextIds.slice(0, Math.max(0, nextIds.length - retainedIds.length))
+    updateTaskInStore(taskId, { streamPartialImageIds: retainedIds })
+    if (discardedIds.length > 0) await deleteUnreferencedImageIds(discardedIds)
   } catch (err) {
     console.error(err)
   }
@@ -5092,12 +5589,21 @@ async function executeTask(taskId: string) {
     async function executeInBatches<T>(
       items: T[],
       batchHandler: (item: T, index: number) => Promise<CallApiResult>,
-      imagesPerItem: number = 1,
+      expectedImagesPerItem: number | ((item: T, index: number) => number) = 1,
     ): Promise<CallApiResult & { batchItemStatuses?: BatchItemStatus[]; batchItemErrors?: BatchItemError[] }> {
       if (items.length === 0) return { images: [] }
 
       const totalBatches = items.length
-      const totalImages = totalBatches * imagesPerItem
+      const getExpectedImages = (item: T, index: number) => Math.max(1, Math.floor(
+        typeof expectedImagesPerItem === 'function' ? expectedImagesPerItem(item, index) : expectedImagesPerItem,
+      ))
+      const imageBaseIndexes = items.reduce<number[]>((indexes, item, index) => {
+        const previousBase = indexes[index - 1] ?? 0
+        const previousCount = index === 0 ? 0 : getExpectedImages(items[index - 1], index - 1)
+        indexes.push(previousBase + previousCount)
+        return indexes
+      }, [])
+      const totalImages = items.reduce((count, item, index) => count + getExpectedImages(item, index), 0)
       let allImages: string[] = []
       let allActualParamsList: Array<Partial<TaskParams> | undefined> = []
       let allRevisedPrompts: Array<string | undefined> = []
@@ -5151,8 +5657,9 @@ async function executeTask(taskId: string) {
         }
       }
 
-      async function storeBatchResult(result: CallApiResult, index: number) {
-        const imageBaseIndex = index * imagesPerItem
+      async function storeBatchResult(result: CallApiResult, item: T, index: number) {
+        const imageBaseIndex = imageBaseIndexes[index]
+        const expectedImages = getExpectedImages(item, index)
 
         const itemImages = result.images
         const itemActualParamsList = result.actualParamsList?.length
@@ -5178,7 +5685,17 @@ async function executeTask(taskId: string) {
         if (!firstActualParamsValue) {
           firstActualParamsValue = firstActualParams(processedActualParamsList) ?? result.actualParams
         }
-        successBatchCount++
+        if (itemImages.length > 0) successBatchCount++
+        if (itemImages.length < expectedImages) {
+          failureBatchCount++
+          const missingCount = expectedImages - itemImages.length
+          const errorMsg = `服务商返回的图片数量少于请求数量：请求 ${expectedImages} 张，实际返回 ${itemImages.length} 张。`
+          for (let j = 0; j < missingCount; j++) {
+            const missingIndex = imageBaseIndex + itemImages.length + j
+            imageStatuses[missingIndex] = 'error'
+            imageErrors.push({ index: missingIndex, error: errorMsg })
+          }
+        }
         const currentTask = useStore.getState().tasks.find((t) => t.id === taskId)
         if (currentTask && currentTask.status === 'running') {
           const existingOutputIds = currentTask.outputImages || []
@@ -5190,11 +5707,14 @@ async function executeTask(taskId: string) {
         }
       }
 
-      function recordBatchFailure(error: unknown, index: number) {
-        const imageBaseIndex = index * imagesPerItem
+      function recordBatchFailure(error: unknown, itemOrIndex: T | number, maybeIndex?: number) {
+        const index = typeof maybeIndex === 'number' ? maybeIndex : Number(itemOrIndex)
+        const item = typeof maybeIndex === 'number' ? itemOrIndex as T : items[index]
+        const imageBaseIndex = imageBaseIndexes[index]
+        const expectedImages = getExpectedImages(item, index)
         failureBatchCount++
         const errorMsg = error instanceof Error ? error.message : String(error)
-        for (let j = 0; j < imagesPerItem; j++) {
+        for (let j = 0; j < expectedImages; j++) {
           imageStatuses[imageBaseIndex + j] = 'error'
           imageErrors.push({ index: imageBaseIndex + j, error: errorMsg })
         }
@@ -5211,9 +5731,9 @@ async function executeTask(taskId: string) {
           await acquire()
           try {
             const result = await retryItem(() => batchHandler(item, index))
-            await storeBatchResult(result, index)
+            await storeBatchResult(result, item, index)
           } catch (err) {
-            recordBatchFailure(err, index)
+            recordBatchFailure(err, item, index)
           } finally {
             release()
           }
@@ -5399,7 +5919,7 @@ async function executeTask(taskId: string) {
             void persistTaskStreamPartialImage(taskId, partial.image)
           },
         })
-      }, requestN)
+      }, (currentN) => currentN)
     } else {
       result = await callImageApi({
         settings: requestSettings,
@@ -5757,7 +6277,7 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
   const ids = normalizeFavoriteCollectionIds(collectionIds)
   const uniqueTaskIds = Array.from(new Set(taskIds)).filter(Boolean)
   if (!uniqueTaskIds.length) return
-  const { tasks, setTasks, clearSelection, showToast } = useStore.getState()
+  const { tasks, workspaceTabs, setTasks, clearSelection, showToast } = useStore.getState()
   const idSet = new Set(uniqueTaskIds)
   const changedTaskIds = new Set<string>()
   const updated = tasks.map((task) => {
@@ -5771,6 +6291,13 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
     return
   }
   setTasks(updated)
+  const updatedTaskById = new Map(updated.filter((task) => changedTaskIds.has(task.id)).map((task) => [task.id, task]))
+  useStore.setState({
+    workspaceTabs: workspaceTabs.map((tab) => ({
+      ...tab,
+      tasks: tab.tasks.map((task) => updatedTaskById.get(task.id) ?? task),
+    })),
+  })
   await Promise.all(updated.filter((task) => changedTaskIds.has(task.id)).map((task) => putTask(task)))
   clearSelection()
   showToast(ids.length ? '收藏夹已更新' : '已取消收藏', 'success')

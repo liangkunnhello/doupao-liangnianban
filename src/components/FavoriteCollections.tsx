@@ -413,6 +413,7 @@ export function FavoriteCollectionsView() {
   const setDefaultFavoriteCollectionId = useStore((s) => s.setDefaultFavoriteCollectionId)
   const searchQuery = useStore((s) => s.searchQuery)
   const setActiveFavoriteCollectionId = useStore((s) => s.setActiveFavoriteCollectionId)
+  const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedFavoriteCollectionIds = useStore((s) => s.selectedFavoriteCollectionIds)
   const setSelectedFavoriteCollectionIds = useStore((s) => s.setSelectedFavoriteCollectionIds)
@@ -433,6 +434,36 @@ export function FavoriteCollectionsView() {
       })),
     ]
   }, [collections, tasks])
+
+  return (
+    <div data-favorite-collections-root data-no-drag-select className="mb-4 rounded-xl border border-gray-200 bg-white/80 p-2 shadow-sm dark:border-white/[0.08] dark:bg-gray-900/80">
+      <div className="flex gap-2 overflow-x-auto hide-scrollbar">
+        {cards.map((card) => {
+          const isAll = card.id === ALL_FAVORITES_COLLECTION_ID
+          const selected = isAll ? !activeFavoriteCollectionId : activeFavoriteCollectionId === card.id
+          return (
+            <button
+              key={card.id}
+              type="button"
+              onClick={() => setActiveFavoriteCollectionId(isAll ? null : card.id)}
+              className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                selected
+                  ? 'border-yellow-400 bg-yellow-50 text-yellow-700 dark:border-yellow-500/50 dark:bg-yellow-500/10 dark:text-yellow-300'
+                  : 'border-transparent text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
+              }`}
+              title={card.name}
+            >
+              {isAll ? <FavoriteIcon filled className="h-4 w-4 shrink-0 text-yellow-500" /> : <FolderIcon className="h-4 w-4 shrink-0 text-gray-400" />}
+              <span className="max-w-[120px] truncate text-sm font-medium">{card.name}</span>
+              <span className={`rounded px-1.5 py-0.5 text-[11px] ${selected ? 'bg-yellow-500/10' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
+                {card.tasks.length}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 
   const filteredCards = useMemo(() => {
     if (!searchQuery.trim()) return cards
@@ -562,10 +593,10 @@ export function FavoriteCollectionsView() {
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
           style={{
-            left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
-            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
-            width: Math.abs(selectionBox.currentPageX - selectionBox.startPageX),
-            height: Math.abs(selectionBox.currentPageY - selectionBox.startPageY),
+            left: Math.min(selectionBox!.startPageX, selectionBox!.currentPageX) - window.scrollX,
+            top: Math.min(selectionBox!.startPageY, selectionBox!.currentPageY) - window.scrollY,
+            width: Math.abs(selectionBox!.currentPageX - selectionBox!.startPageX),
+            height: Math.abs(selectionBox!.currentPageY - selectionBox!.startPageY),
           }}
         />
       )}

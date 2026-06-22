@@ -89,11 +89,17 @@ describe('image postprocess plan', () => {
     expect(plan.resize).toEqual({ width: 100, height: 100 })
   })
 
-  it('rejects auto resize targets when resize is enabled', () => {
-    expect(() => getImagePostprocessPlan(params({
+  it('ignores auto resize targets when resize is enabled', () => {
+    const plan = getImagePostprocessPlan(params({
       postprocess_resize_enabled: true,
       postprocess_size: 'auto',
-    }))).toThrow('postprocess size')
+    }))
+
+    expect(plan).toEqual({
+      enabled: false,
+      resize: null,
+      encode: { format: null, mime: null },
+    })
   })
 
   it('uses selected compression format and max size for JPEG/WebP', () => {

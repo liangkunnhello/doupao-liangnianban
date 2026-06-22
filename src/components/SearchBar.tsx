@@ -13,7 +13,6 @@ export default function SearchBar() {
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setActiveFavoriteCollectionId = useStore((s) => s.setActiveFavoriteCollectionId)
   const openManageCollectionsModal = useStore((s) => s.openManageCollectionsModal)
-  const inCollectionOverview = filterFavorite && !activeFavoriteCollectionId
   const hasFailedTasks = useStore((s) => s.tasks.some((t) => t.status === 'error'))
 
   const handleFavoriteClick = () => {
@@ -34,11 +33,11 @@ export default function SearchBar() {
               ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-500'
               : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
           }`}
-          title={activeFavoriteCollectionId ? '返回收藏夹' : filterFavorite ? '退出收藏夹视图' : '收藏夹'}
+          title={activeFavoriteCollectionId ? '显示全部收藏' : filterFavorite ? '退出收藏夹视图' : '收藏夹'}
         >
           {activeFavoriteCollectionId ? <ChevronLeftIcon className="w-5 h-5" /> : <FavoriteIcon filled={filterFavorite} className="w-5 h-5" />}
         </button>
-        {inCollectionOverview && (
+        {filterFavorite && (
           <button
             onClick={openManageCollectionsModal}
             className="p-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-all"
@@ -47,22 +46,20 @@ export default function SearchBar() {
             <CollectionManageIcon className="w-5 h-5" />
           </button>
         )}
-        {!inCollectionOverview && (
-          <div className="relative w-28">
-            <Select
-              value={filterStatus}
-              onChange={(val) => setFilterStatus(val as any)}
-              options={[
-                { label: '全部状态', value: 'all' },
-                { label: '已完成', value: 'done' },
-                { label: '生成中', value: 'running' },
-                { label: '失败', value: 'error' },
-              ]}
-              className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
-            />
-          </div>
-        )}
-        {!inCollectionOverview && hasFailedTasks && (
+        <div className="relative w-28">
+          <Select
+            value={filterStatus}
+            onChange={(val) => setFilterStatus(val as any)}
+            options={[
+              { label: '全部状态', value: 'all' },
+              { label: '已完成', value: 'done' },
+              { label: '生成中', value: 'running' },
+              { label: '失败', value: 'error' },
+            ]}
+            className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+          />
+        </div>
+        {hasFailedTasks && (
           <button
             onClick={clearFailedTasks}
             className="p-2.5 rounded-xl border border-red-200 dark:border-red-500/30 bg-white dark:bg-gray-900 text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all"
@@ -90,7 +87,7 @@ export default function SearchBar() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           type="text"
-          placeholder={inCollectionOverview ? '搜索收藏夹名称...' : '搜索提示词、参数...'}
+          placeholder="搜索提示词、参数..."
           className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
         />
       </div>

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
+import { createDefaultScheduleRows } from './lib/schedule'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
+import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 vi.mock('./lib/db', () => {
   const tasks = new Map<string, TaskRecord>()
@@ -39,6 +40,8 @@ vi.mock('./lib/db', () => {
       agentConversations.clear()
       for (const conversation of conversations) agentConversations.set(conversation.id, conversation)
     },
+    getWordLibraryState: async () => undefined,
+    putWordLibraryState: async () => undefined,
     getImage: async (id: string) => images.get(id),
     getImageThumbnail: async (id: string) => thumbnails.get(id),
     getStoredFreshImageThumbnail: async (id: string) => thumbnails.get(id),
@@ -112,10 +115,10 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -157,6 +160,25 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
     createdAt: 1,
     finishedAt: 2,
     elapsed: 1,
+    ...overrides,
+  }
+}
+
+function workspaceTab(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
+  return {
+    id: 'tab-a',
+    name: '标签 A',
+    groupId: null,
+    prompt: '',
+    inputImages: [],
+    inputImageFolder: null,
+    params: { ...DEFAULT_PARAMS },
+    maskDraft: null,
+    maskEditorImageId: null,
+    tasks: [],
+    createdAt: 1,
+    updatedAt: 1,
+    order: 0,
     ...overrides,
   }
 }
@@ -268,6 +290,334 @@ describe('workspace tab defaults', () => {
   })
 })
 
+describe('schedule state', () => {
+  beforeEach(() => {
+    useStore.setState({
+      schedule: {
+        rows: createDefaultScheduleRows(),
+        items: [],
+        activeWeekStart: '2026-06-15',
+        modalOpen: false,
+        runningWeekStarts: [],
+      },
+      tasks: [],
+      workspaceTabs: [],
+      favoriteCollections: [{ id: DEFAULT_FAVORITE_COLLECTION_ID, name: '默认', createdAt: 1, updatedAt: 1 }],
+      defaultFavoriteCollectionId: DEFAULT_FAVORITE_COLLECTION_ID,
+    })
+  })
+
+  it('persists default schedule rows in persisted state', () => {
+    const persisted = getPersistedState(useStore.getState())
+
+    expect(persisted.schedule.rows).toHaveLength(8)
+    expect(persisted.schedule.items).toEqual([])
+  })
+
+  it('adds a schedule item and clamps count to at least one', () => {
+    const id = useStore.getState().addScheduleItem({
+      taskId: 'task-a',
+      collectionId: 'collection-a',
+      date: '2026-06-18',
+      rowId: 'row-1',
+      count: 0,
+      time: null,
+    })
+
+    expect(useStore.getState().schedule.items.find((item) => item.id === id)).toMatchObject({
+      taskId: 'task-a',
+      collectionId: 'collection-a',
+      date: '2026-06-18',
+      rowId: 'row-1',
+      count: 1,
+      order: 0,
+    })
+  })
+
+  it('renames schedule rows and removes their scheduled items', () => {
+    const rowId = useStore.getState().addScheduleRow()
+    const itemId = useStore.getState().addScheduleItem({
+      taskId: 'task-a',
+      collectionId: 'collection-a',
+      date: '2026-06-18',
+      rowId,
+      count: 1,
+      time: null,
+    })
+
+    useStore.getState().updateScheduleRow(rowId, 'Morning batch')
+
+    expect(useStore.getState().schedule.rows.find((row) => row.id === rowId)?.name).toBe('Morning batch')
+    expect(useStore.getState().schedule.items.some((item) => item.id === itemId)).toBe(true)
+
+    useStore.getState().removeScheduleRow(rowId)
+
+    expect(useStore.getState().schedule.rows.some((row) => row.id === rowId)).toBe(false)
+    expect(useStore.getState().schedule.items.some((item) => item.id === itemId)).toBe(false)
+  })
+
+  it('returns to the schedule modal when closing a task opened from schedule', () => {
+    useStore.getState().setScheduleModalOpen(false)
+    useStore.getState().setDetailTaskId('task-a', { returnToSchedule: true })
+
+    useStore.getState().setDetailTaskId(null)
+
+    expect(useStore.getState().detailTaskId).toBeNull()
+    expect(useStore.getState().schedule.modalOpen).toBe(true)
+  })
+
+  it('starts and stops schedule runs independently by week', () => {
+    useStore.getState().startScheduleWeek('2026-06-15')
+    useStore.getState().startScheduleWeek('2026-06-22')
+
+    expect(useStore.getState().schedule.runningWeekStarts).toEqual(['2026-06-15', '2026-06-22'])
+
+    useStore.getState().stopScheduleWeek('2026-06-15')
+
+    expect(useStore.getState().schedule.runningWeekStarts).toEqual(['2026-06-22'])
+  })
+
+  it('copies previous week schedule items into the active week', () => {
+    useStore.setState({
+      schedule: {
+        ...useStore.getState().schedule,
+        activeWeekStart: '2026-06-15',
+        items: [
+          {
+            id: 'prev-a',
+            taskId: 'task-a',
+            collectionId: 'collection-a',
+            date: '2026-06-08',
+            rowId: 'row-1',
+            order: 0,
+            count: 2,
+            time: '09:30',
+            status: 'done',
+            lastRunKey: '2026-06-08:prev-a',
+            lastTaskIds: ['generated-a'],
+            lastError: 'old error',
+          },
+          {
+            id: 'current-a',
+            taskId: 'task-current',
+            collectionId: 'collection-current',
+            date: '2026-06-15',
+            rowId: 'row-1',
+            order: 0,
+            count: 1,
+            time: null,
+            status: 'idle',
+          },
+        ],
+      },
+    })
+
+    const copiedIds = useStore.getState().copyPreviousWeekSchedule()
+
+    expect(copiedIds).toHaveLength(1)
+    const copied = useStore.getState().schedule.items.find((item) => item.id === copiedIds[0])
+    expect(copied).toMatchObject({
+      taskId: 'task-a',
+      collectionId: 'collection-a',
+      date: '2026-06-15',
+      rowId: 'row-1',
+      order: 1,
+      count: 2,
+      time: '09:30',
+      status: 'idle',
+    })
+    expect(copied).not.toHaveProperty('lastRunKey')
+    expect(copied).not.toHaveProperty('lastTaskIds')
+    expect(copied).not.toHaveProperty('lastError')
+  })
+
+  it('updates favorite output path on global and tab task copies', () => {
+    const favoriteTask = task({
+      id: 'task-a',
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+    })
+    useStore.setState({
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
+    })
+
+    useStore.getState().updateTaskFavoriteOutputPath('task-a', 'D:\\Exports\\A')
+
+    expect(useStore.getState().tasks[0].favoriteOutputPath).toBe('D:\\Exports\\A')
+    expect(useStore.getState().workspaceTabs[0].tasks[0].favoriteOutputPath).toBe('D:\\Exports\\A')
+  })
+
+  it('toggles date variables for favorite output paths on global and tab task copies', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-20T12:00:00+08:00'))
+    const favoriteTask = task({
+      id: 'task-a',
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+      favoriteOutputPath: 'D:\\Exports\\20260620\\插画',
+    })
+    useStore.setState({
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
+    })
+
+    useStore.getState().updateTaskFavoriteOutputDateVariable('task-a', true)
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      favoriteOutputPath: 'D:\\Exports\\{date}\\插画',
+      favoriteOutputUseDateVariable: true,
+    })
+    expect(useStore.getState().workspaceTabs[0].tasks[0]).toMatchObject({
+      favoriteOutputPath: 'D:\\Exports\\{date}\\插画',
+      favoriteOutputUseDateVariable: true,
+    })
+
+    useStore.getState().updateTaskFavoriteOutputDateVariable('task-a', false)
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      favoriteOutputPath: 'D:\\Exports\\20260620\\插画',
+      favoriteOutputUseDateVariable: false,
+    })
+    vi.useRealTimers()
+  })
+
+  it('syncs favorite collection changes to workspace tab task copies immediately', async () => {
+    const normalTask = task({
+      id: 'task-a',
+      isFavorite: false,
+      favoriteCollectionIds: [],
+    })
+    useStore.setState({
+      tasks: [normalTask],
+      workspaceTabs: [workspaceTab({ tasks: [normalTask] })],
+    })
+
+    await updateTasksFavoriteCollections(['task-a'], [DEFAULT_FAVORITE_COLLECTION_ID])
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+    })
+    expect(useStore.getState().workspaceTabs[0].tasks[0]).toMatchObject({
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+    })
+  })
+
+  it('runs a scheduled item with explicit favorite output path metadata', async () => {
+    const favoriteTask = task({
+      id: 'task-a',
+      prompt: 'scheduled prompt',
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+      favoriteOutputPath: 'D:\\Exports\\A',
+    })
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
+      params: { ...DEFAULT_PARAMS },
+      inputImages: [],
+      maskDraft: null,
+    })
+    const itemId = useStore.getState().addScheduleItem({
+      taskId: 'task-a',
+      collectionId: DEFAULT_FAVORITE_COLLECTION_ID,
+      date: '2026-06-18',
+      rowId: 'row-1',
+      count: 3,
+      time: '09:00',
+    })
+
+    await useStore.getState().runScheduleItem(itemId, new Date(2026, 5, 18, 9))
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      prompt: 'scheduled prompt',
+      scheduledOutputPath: 'D:\\Exports\\A',
+      params: expect.objectContaining({ n: 3 }),
+    })
+    expect(useStore.getState().schedule.items.find((item) => item.id === itemId)).toMatchObject({
+      status: 'running',
+      lastRunKey: `2026-06-18:${itemId}`,
+      lastTaskIds: [useStore.getState().tasks[0].id],
+    })
+  })
+
+  it('runs a scheduled item with collection fallback subfolder metadata', async () => {
+    const collection = { id: 'collection-a', name: '海报', createdAt: 1, updatedAt: 1 }
+    const favoriteTask = task({
+      id: 'task-a',
+      prompt: 'scheduled prompt',
+      isFavorite: true,
+      favoriteCollectionIds: [collection.id],
+      favoriteOutputPath: '',
+    })
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
+      favoriteCollections: [collection],
+      defaultFavoriteCollectionId: collection.id,
+      params: { ...DEFAULT_PARAMS },
+      inputImages: [],
+      maskDraft: null,
+    })
+    const itemId = useStore.getState().addScheduleItem({
+      taskId: 'task-a',
+      collectionId: collection.id,
+      date: '2026-06-18',
+      rowId: 'row-1',
+      count: 2,
+      time: null,
+    })
+
+    await useStore.getState().runScheduleItem(itemId, new Date(2026, 5, 18, 9))
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      scheduledOutputSubFolder: '海报',
+      params: expect.objectContaining({ n: 2 }),
+    })
+  })
+
+  it('appends a supplement scheduled run with only the missing count', async () => {
+    const favoriteTask = task({
+      id: 'task-a',
+      prompt: 'scheduled prompt',
+      isFavorite: true,
+      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+      params: { ...DEFAULT_PARAMS, n: 5 },
+    })
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
+      params: { ...DEFAULT_PARAMS },
+      inputImages: [],
+      maskDraft: null,
+    })
+    const itemId = useStore.getState().addScheduleItem({
+      taskId: 'task-a',
+      collectionId: DEFAULT_FAVORITE_COLLECTION_ID,
+      date: '2026-06-18',
+      rowId: 'row-1',
+      count: 5,
+      time: null,
+    })
+
+    const firstTaskId = await useStore.getState().runScheduleItem(itemId, new Date(2026, 5, 18, 9))
+    const supplementTaskId = await useStore.getState().runScheduleItem(itemId, new Date(2026, 5, 18, 10), 2, true)
+
+    expect(useStore.getState().tasks.find((item) => item.id === supplementTaskId)).toMatchObject({
+      params: expect.objectContaining({ n: 2 }),
+    })
+    expect(useStore.getState().schedule.items.find((item) => item.id === itemId)?.lastTaskIds).toEqual([
+      firstTaskId,
+      supplementTaskId,
+    ])
+  })
+})
+
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
     useStore.setState({
@@ -351,6 +701,62 @@ describe('mask draft lifecycle in store actions', () => {
       status: 'running',
       progressStage: 'previewing',
     })
+  })
+
+  it('marks missing images when a multi-image API request returns too few results', async () => {
+    vi.mocked(callImageApi).mockResolvedValueOnce({
+      images: ['data:image/png;base64,only-one'],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+    })
+    useStore.setState({
+      params: { ...DEFAULT_PARAMS, n: 10 },
+    })
+
+    await submitTask()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks[0].status).toBe('done')
+    })
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      outputImages: expect.arrayContaining([expect.any(String)]),
+      batchItemStatuses: [
+        'done',
+        'error',
+        'error',
+        'error',
+        'error',
+        'error',
+        'error',
+        'error',
+        'error',
+        'error',
+      ],
+    })
+    expect(useStore.getState().tasks[0].batchItemErrors).toHaveLength(9)
+  })
+
+  it('keeps only recent stream partial images when a task fails', async () => {
+    await clearImages()
+    vi.mocked(callImageApi).mockImplementationOnce(async (opts) => {
+      for (let i = 0; i < MAX_RETAINED_STREAM_PARTIAL_IMAGES + 3; i++) {
+        opts.onPartialImage?.({ image: `data:image/png;base64,partial-${i}` })
+      }
+      throw new Error('stream failed')
+    })
+
+    await submitTask()
+
+    await vi.waitFor(() => {
+      const currentTask = useStore.getState().tasks[0]
+      expect(currentTask.status).toBe('error')
+      expect(currentTask.streamPartialImageIds ?? []).toHaveLength(MAX_RETAINED_STREAM_PARTIAL_IMAGES)
+    })
+
+    const partialIds = useStore.getState().tasks[0].streamPartialImageIds ?? []
+    expect(partialIds).toHaveLength(MAX_RETAINED_STREAM_PARTIAL_IMAGES)
+    expect(await getAllImageIds()).toEqual(partialIds)
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {
@@ -1025,6 +1431,29 @@ describe('data import', () => {
       entries: [],
       draw_count: 1,
     }])
+  })
+
+  it('omits word library data from localStorage state after IndexedDB migration', async () => {
+    useStore.setState({
+      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryEntries: [{
+        id: 'entry-a',
+        groupId: 'default',
+        key: 'large',
+        label: 'large',
+        entries: ['cat', 'dog'],
+        draw_count: 1,
+      }],
+      tasks: [],
+      agentConversations: [],
+    })
+
+    await initStore()
+
+    const persisted = getPersistedState(useStore.getState())
+    expect('wordLibraryGroups' in persisted).toBe(false)
+    expect('wordLibraryEntries' in persisted).toBe(false)
+    expect(useStore.getState().wordLibraryEntries).toHaveLength(1)
   })
 
 })

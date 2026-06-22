@@ -1,7 +1,8 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'gallery' | 'agent' | 'postprocess'
+export type ThemeMode = 'light' | 'dark'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
   'task-selection',
@@ -86,6 +87,8 @@ export interface ApiProfile {
 }
 
 export interface AppSettings {
+  /** 界面主题：手动浅色 / 深色 */
+  themeMode: ThemeMode
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
   apiKey: string
@@ -273,6 +276,13 @@ export interface TaskRecord {
   isFavorite?: boolean
   /** 所属收藏夹 ID 列表 */
   favoriteCollectionIds?: string[]
+  /** 收藏任务专用输出目录；为空时按收藏夹名称回退 */
+  favoriteOutputPath?: string
+  favoriteOutputUseDateVariable?: boolean
+  /** 日程运行任务的显式输出目录 */
+  scheduledOutputPath?: string
+  /** 日程运行任务的输出子目录 */
+  scheduledOutputSubFolder?: string
   /** 来源模式：画廊 / Agent */
   sourceMode?: AppMode
   /** Agent 对话 ID */
@@ -294,6 +304,37 @@ export interface FavoriteCollection {
   name: string
   createdAt: number
   updatedAt: number
+}
+
+export type ScheduleItemStatus = 'idle' | 'queued' | 'running' | 'done' | 'error'
+
+export interface ScheduleItem {
+  id: string
+  taskId: string
+  collectionId: string | null
+  date: string
+  rowId: string
+  order: number
+  count: number
+  time: string | null
+  lastRunKey?: string
+  status?: ScheduleItemStatus
+  lastTaskIds?: string[]
+  lastError?: string
+}
+
+export interface ScheduleRow {
+  id: string
+  name: string
+  order: number
+}
+
+export interface ScheduleState {
+  rows: ScheduleRow[]
+  items: ScheduleItem[]
+  activeWeekStart: string
+  modalOpen: boolean
+  runningWeekStarts: string[]
 }
 
 // ===== Agent 模式 =====

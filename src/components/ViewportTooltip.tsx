@@ -8,6 +8,10 @@ interface ViewportTooltipProps {
   className?: string
 }
 
+export function getViewportTooltipClasses(className = '') {
+  return `fixed pointer-events-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-normal text-gray-700 shadow-lg ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-gray-800 dark:text-white dark:ring-white/10 ${className}`
+}
+
 export default function ViewportTooltip({ visible, children, className = '' }: ViewportTooltipProps) {
   const anchorRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -102,7 +106,7 @@ export default function ViewportTooltip({ visible, children, className = '' }: V
       {effectiveVisible && createPortal(
         <div
           ref={tooltipRef}
-          className={`fixed pointer-events-none rounded-lg bg-gray-800 px-3 py-2 text-xs font-normal text-white shadow-lg ${className}`}
+          className={getViewportTooltipClasses(className)}
           style={{
             left: position?.left ?? 0,
             top: position?.top ?? 0,
@@ -112,7 +116,7 @@ export default function ViewportTooltip({ visible, children, className = '' }: V
         >
           {children}
           <div
-            className={`absolute left-0 border-4 border-transparent ${position?.placement === 'bottom' ? 'bottom-full border-b-gray-800' : 'top-full border-t-gray-800'}`}
+            className={`absolute left-0 border-4 border-transparent ${position?.placement === 'bottom' ? 'bottom-full border-b-white dark:border-b-gray-800' : 'top-full border-t-white dark:border-t-gray-800'}`}
             style={{
               left: position?.arrowLeft ?? 0,
               transform: 'translateX(-50%)',

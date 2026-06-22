@@ -4,7 +4,7 @@ import { CloseIcon } from './icons'
 import { VAR_MENTION_RE, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { getAgentApiProfile, validateApiProfile } from '../lib/apiProfiles'
 import { generateDerivedWordEntries } from '../lib/agentApi'
-import { DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, type WordLibraryDerivativeRule } from '../types'
+import type { WordLibraryDerivativeRule } from '../types'
 
 const COLOR_CLASSES = [
   'bg-emerald-500', 'bg-orange-500', 'bg-blue-500',
@@ -88,8 +88,6 @@ function loadSavedDock(): 'left' | 'right' | null {
 }
 
 export default function WordLibrarySidebar() {
-  const open = useStore((s) => s.wordLibrarySidebarOpen)
-  const setOpen = useStore((s) => s.setWordLibrarySidebarOpen)
   const groups = useStore((s) => s.wordLibraryGroups)
   const entries = useStore((s) => s.wordLibraryEntries)
   const createEntry = useStore((s) => s.createWordLibraryEntry)
@@ -115,6 +113,7 @@ export default function WordLibrarySidebar() {
   const [deriveCount, setDeriveCount] = useState(6)
   const [deriveLoading, setDeriveLoading] = useState(false)
   const [derivedEntries, setDerivedEntries] = useState<string[]>([])
+  const [derivedClosing, setDerivedClosing] = useState(false)
   const [ruleModalOpen, setRuleModalOpen] = useState(false)
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null)
 
@@ -125,27 +124,18 @@ export default function WordLibrarySidebar() {
 
   const [pos, setPos] = useState(() => loadSavedPos() ?? { x: 0, y: 0 })
   const [sz, setSz] = useState(() => loadSavedSize() ?? { w: DEFAULT_W, h: DEFAULT_H })
-  const [docked, setDocked] = useState<'left' | 'right' | null>(() => loadSavedDock())
+  const [docked, setDocked] = useState<'left' | 'right' | null>('right')
   const dragRef = useRef(false)
   const resizeRef = useRef(false)
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
   const dragOff = useRef({ x: 0, y: 0 })
   const panelRef = useRef<HTMLDivElement>(null)
+  const derivedCloseTimerRef = useRef<number | null>(null)
 
   const lastPrompt = useRef('')
   const autoCreated = useRef<Set<string>>(new Set())
   const lastAdded = useRef<string | null>(null)
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
-
-  // init position (fallback if no saved position)
-  useEffect(() => {
-    if (open && pos.x === 0 && pos.y === 0) {
-      setPos({
-        x: Math.max(16, window.innerWidth - sz.w - 16),
-        y: Math.max(16, (window.innerHeight - sz.h) / 2),
-      })
-    }
-  }, [open, pos.x, pos.y, sz.w, sz.h])
 
   // persist size, position and dock state (debounced: only save on mouseup / close)
   const pendingWidth = useRef<number | null>(null)
@@ -173,6 +163,10 @@ export default function WordLibrarySidebar() {
   useEffect(() => { pendingWidth.current = sz.w }, [sz.w])
   useEffect(() => { pendingPos.current = pos }, [pos])
   useEffect(() => { pendingDock.current = docked }, [docked])
+
+  useEffect(() => () => {
+    if (derivedCloseTimerRef.current != null) window.clearTimeout(derivedCloseTimerRef.current)
+  }, [])
 
   // drag & resize handlers
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -217,8 +211,6 @@ export default function WordLibrarySidebar() {
     window.addEventListener('mouseup', up)
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [sz.w, sz.h, pos.x])
-
-  const close = useCallback(() => setOpen(false), [setOpen])
 
   const filtered = useMemo(() => {
     let list = [...entries]
@@ -312,6 +304,7 @@ export default function WordLibrarySidebar() {
     const count = Math.max(1, Math.min(100, Math.trunc(Number(deriveCount) || 1)))
     setDeriveCount(count)
     setDeriveLoading(true)
+    setDerivedClosing(false)
     setDerivedEntries([])
     try {
       const generated = await generateDerivedWordEntries({
@@ -335,17 +328,29 @@ export default function WordLibrarySidebar() {
     }
   }, [activeEntry, editText, settings, deriveCount, deriveSimilarity, toast])
 
+  const closeDerivedPopover = useCallback(() => {
+    setDerivedClosing(true)
+    if (derivedCloseTimerRef.current != null) window.clearTimeout(derivedCloseTimerRef.current)
+    derivedCloseTimerRef.current = window.setTimeout(() => {
+      setDerivedEntries([])
+      setDerivedClosing(false)
+      derivedCloseTimerRef.current = null
+    }, 180)
+  }, [])
+
   const appendDerivedEntries = useCallback(() => {
     if (derivedEntries.length === 0) return
     setEditText((current) => mergeEntryLines(current, derivedEntries))
+    closeDerivedPopover()
     toast('已追加到编辑区，请保存词条', 'success')
-  }, [derivedEntries, toast])
+  }, [closeDerivedPopover, derivedEntries, toast])
 
   const replaceWithDerivedEntries = useCallback(() => {
     if (derivedEntries.length === 0) return
     setEditText(derivedEntries.join('\n'))
+    closeDerivedPopover()
     toast('已替换编辑区，请保存词条', 'success')
-  }, [derivedEntries, toast])
+  }, [closeDerivedPopover, derivedEntries, toast])
 
   const updateDerivativeRules = useCallback((rules: WordLibraryDerivativeRule[]) => {
     setSettings({ wordLibraryDerivativeRules: rules })
@@ -613,15 +618,13 @@ export default function WordLibrarySidebar() {
     const root = document.documentElement
     const leftVar = '--word-library-left-width'
     const rightVar = '--word-library-right-width'
-    root.style.setProperty(leftVar, open && docked === 'left' ? `${sz.w}px` : '0px')
-    root.style.setProperty(rightVar, open && docked === 'right' ? `${sz.w}px` : '0px')
+    root.style.setProperty(leftVar, '0px')
+    root.style.setProperty(rightVar, `${sz.w}px`)
     return () => {
       root.style.setProperty(leftVar, '0px')
       root.style.setProperty(rightVar, '0px')
     }
-  }, [open, docked, sz.w])
-
-  if (!open) return null
+  }, [sz.w])
 
   const isDocked = Boolean(docked)
   const dockedStyle = isDocked
@@ -646,7 +649,7 @@ export default function WordLibrarySidebar() {
   return (
     <div
       ref={panelRef}
-      className="fixed z-40 flex flex-col text-foreground overflow-hidden bg-background border border-border"
+      className="fixed z-40 flex flex-col text-foreground overflow-visible bg-background border border-border"
       style={{
         width: sz.w,
         minWidth: MIN_W,
@@ -657,8 +660,7 @@ export default function WordLibrarySidebar() {
       {/* ===== Header (drag) ===== */}
       <div
         data-drag
-        onMouseDown={onDragStart}
-        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-border"
+        className="shrink-0 px-4 pt-4 pb-3 border-b select-none border-border"
       >
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2.5">
@@ -672,13 +674,6 @@ export default function WordLibrarySidebar() {
               <p className="text-[11px] text-muted-foreground leading-tight">{entries.length} 个词条 · {groups.length} 个分组</p>
             </div>
           </div>
-          <button
-            onClick={close}
-            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-sidebar-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-            aria-label="关闭"
-          >
-            <CloseIcon className="h-4 w-4" />
-          </button>
         </div>
 
         <div className="relative">
@@ -813,16 +808,26 @@ export default function WordLibrarySidebar() {
               {activeEntry && <div className="text-xs text-muted-foreground mt-0.5 truncate">ID: {activeEntry.key}</div>}
             </div>
           </div>
-          <button
-            onClick={onNew}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium text-white transition hover:opacity-90 shrink-0 flex items-center gap-1"
-            style={{ background: '#2563eb' }}
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            新建
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRuleModalOpen(true)}
+              title={derivativeRuleSummary}
+              className="rounded-lg bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80"
+            >
+              规则
+            </button>
+            <button
+              onClick={onNew}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-white transition hover:opacity-90 flex items-center gap-1"
+              style={{ background: '#2563eb' }}
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              新建
+            </button>
+          </div>
         </div>
 
         {/* Form row */}
@@ -916,74 +921,27 @@ export default function WordLibrarySidebar() {
           />
         </div>
 
-        <div className="mx-4 mb-3 rounded-lg border border-border bg-muted/30 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold text-sidebar-foreground">AI 衍生词条</div>
-              <div className="text-[11px] text-muted-foreground">基于第一条候选词生成相关词条</div>
-            </div>
-            <button
-              type="button"
-              onClick={onGenerateDerivedEntries}
-              disabled={!activeEntry || deriveLoading}
-              className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-30"
-            >
-              {deriveLoading ? '生成中...' : '生成'}
-            </button>
-          </div>
-          <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-sidebar px-2.5 py-2">
-            <div className="min-w-0">
-              <div className="text-[11px] text-muted-foreground">当前规则</div>
-              <div className="truncate text-xs font-medium text-sidebar-foreground">{derivativeRuleSummary}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setRuleModalOpen(true)}
-              disabled={deriveLoading}
-              className="shrink-0 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 disabled:opacity-40"
-            >
-              自定义规则
-            </button>
-          </div>
-          {false && <label className="hidden">
-            <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-              <span>衍生规则</span>
-              <button
-                type="button"
-                onClick={() => setSettings({ wordLibraryDerivativeRule: DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE })}
-                disabled={deriveLoading}
-                className="rounded px-1.5 py-0.5 text-[10px] transition hover:bg-muted disabled:opacity-40"
-              >
-                恢复默认
-              </button>
-            </div>
-            <textarea
-              value={settings.wordLibraryDerivativeRule}
-              disabled={deriveLoading}
-              onChange={(e) => setSettings({ wordLibraryDerivativeRule: e.target.value })}
-              placeholder={DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE}
-              className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-xs leading-5 text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40"
-              style={{ minHeight: 82, resize: 'vertical' }}
-            />
-          </label>}
-          <div className="grid grid-cols-[1fr_76px] gap-3">
+        <div className="relative mx-4 mb-3 rounded-lg border border-border bg-muted/30 p-2.5 overflow-visible">
+          <div className="grid grid-cols-[1fr_64px_64px] items-end gap-2">
             <label className="min-w-0">
-              <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                 <span>相似度</span>
                 <span>{deriveSimilarity}%</span>
               </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={deriveSimilarity}
-                disabled={!activeEntry || deriveLoading}
-                onChange={(e) => setDeriveSimilarity(Number(e.target.value))}
-                className="w-full accent-blue-600 disabled:opacity-40"
-              />
+              <div className="flex h-9 items-center rounded-lg border border-border bg-sidebar px-2.5">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={deriveSimilarity}
+                  disabled={!activeEntry || deriveLoading}
+                  onChange={(e) => setDeriveSimilarity(Number(e.target.value))}
+                  className="w-full accent-blue-600 disabled:opacity-40"
+                />
+              </div>
             </label>
             <label>
-              <div className="mb-1 text-[11px] text-muted-foreground">数量</div>
+              <div className="mb-1 text-xs text-muted-foreground">数量</div>
               <input
                 type="number"
                 min={1}
@@ -992,13 +950,28 @@ export default function WordLibrarySidebar() {
                 disabled={!activeEntry || deriveLoading}
                 onChange={(e) => setDeriveCount(Number(e.target.value))}
                 onBlur={() => setDeriveCount((value) => Math.max(1, Math.min(100, Math.trunc(Number(value) || 1))))}
-                className="w-full rounded-lg border border-border bg-sidebar px-2 py-1.5 text-sm text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40"
+                className="h-9 w-full rounded-lg border border-border bg-sidebar px-2.5 text-sm text-foreground outline-none transition focus:ring-2 focus:ring-blue-500/25 disabled:opacity-40"
               />
             </label>
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground opacity-0">操作</div>
+              <button
+                type="button"
+                onClick={onGenerateDerivedEntries}
+                disabled={!activeEntry || deriveLoading}
+                className="h-9 w-full rounded-lg bg-blue-600 px-3 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-30"
+              >
+                {deriveLoading ? '生成中' : '生成'}
+              </button>
+            </div>
           </div>
           {derivedEntries.length > 0 && (
-            <div className="mt-3">
-              <div className="mb-2 max-h-24 overflow-y-auto rounded-lg border border-border bg-sidebar p-2 text-xs leading-5 text-sidebar-foreground">
+            <div
+              className={`absolute right-full bottom-0 z-30 mr-2 w-64 rounded-xl border border-border bg-sidebar p-3 shadow-2xl transition-all duration-200 ${
+                derivedClosing ? 'translate-x-8 scale-95 opacity-0' : 'translate-x-0 scale-100 opacity-100'
+              }`}
+            >
+              <div className="mb-2 max-h-28 overflow-y-auto rounded-lg border border-border bg-background/40 p-2 text-xs leading-5 text-sidebar-foreground">
                 {derivedEntries.join('、')}
               </div>
               <div className="flex items-center justify-end gap-2">
@@ -1035,7 +1008,6 @@ export default function WordLibrarySidebar() {
               <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
                 <div>
                   <div className="text-sm font-semibold text-sidebar-foreground">衍生规则</div>
-                  <div className="text-[11px] text-muted-foreground">选择 AI 衍生词条时使用的规则</div>
                 </div>
                 <button
                   type="button"

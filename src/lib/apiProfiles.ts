@@ -14,6 +14,7 @@ import type {
   ReferenceImageEditAction,
   WordLibraryDerivativeRule,
 } from '../types'
+import { normalizeThemeMode } from './theme'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { shouldUseApiProxy } from './devProxy'
 import { readRuntimeEnv } from './runtimeEnv'
@@ -588,6 +589,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
   const wordLibraryDerivativeRules = normalizeDerivativeRules(record, wordLibraryDerivativeRuleMode)
 
   return {
+    themeMode: normalizeThemeMode(record.themeMode),
     baseUrl: active.baseUrl,
     apiKey: active.apiKey,
     model: active.model,
@@ -908,6 +910,7 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
 }
 
 export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
+  themeMode: 'light',
   baseUrl: DEFAULT_BASE_URL,
   apiKey: '',
   model: DEFAULT_IMAGES_MODEL,

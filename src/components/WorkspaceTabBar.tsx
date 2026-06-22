@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { PlusIcon, CloseIcon, ChevronDownIcon, SettingsIcon, CopyIcon, EditIcon, TrashIcon } from './icons'
+import { CalendarIcon, PlusIcon, CloseIcon, ChevronDownIcon, SettingsIcon, CopyIcon, EditIcon, TrashIcon } from './icons'
 import type { WorkspaceTab, WorkspaceTabGroup } from '../types'
 
 const MIN_W = 280
@@ -76,6 +76,7 @@ export default function WorkspaceTabBar() {
   const moveWorkspaceTabToGroup = useStore((s) => s.moveWorkspaceTabToGroup)
   const createWorkspaceTabGroup = useStore((s) => s.createWorkspaceTabGroup)
   const setWorkspaceTabManagerOpen = useStore((s) => s.setWorkspaceTabManagerOpen)
+  const setScheduleModalOpen = useStore((s) => s.setScheduleModalOpen)
   const setPromptInputDialog = useStore((s) => s.setPromptInputDialog)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
@@ -627,6 +628,18 @@ export default function WorkspaceTabBar() {
             {searchQuery ? '无匹配标签页' : '暂无标签页'}
           </div>
         )}
+      </div>
+
+      <div className="shrink-0 border-t border-border p-2">
+        <button
+          type="button"
+          onClick={() => setScheduleModalOpen(true)}
+          className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted text-xs font-medium text-sidebar-foreground transition-colors hover:bg-muted/80"
+          title="打开日程表"
+        >
+          <CalendarIcon className="h-4 w-4" />
+          日程表
+        </button>
       </div>
 
       {/* ===== Resize handle (hidden when docked) ===== */}

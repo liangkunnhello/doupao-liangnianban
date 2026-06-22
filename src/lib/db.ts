@@ -1,11 +1,12 @@
-import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
+import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
+const STORE_WORD_LIBRARY = 'wordLibrary'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
@@ -28,6 +29,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_AGENT_CONVERSATIONS)) {
         db.createObjectStore(STORE_AGENT_CONVERSATIONS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_WORD_LIBRARY)) {
+        db.createObjectStore(STORE_WORD_LIBRARY, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -101,6 +105,28 @@ export function replaceAgentConversations(conversations: AgentConversation[]): P
         tx.onabort = () => reject(tx.error)
       }),
   )
+}
+
+// ===== Word library =====
+
+export type StoredWordLibraryState = {
+  id: 'word-library'
+  groups: WordLibraryGroup[]
+  entries: WordLibraryEntry[]
+  updatedAt: number
+}
+
+export function getWordLibraryState(): Promise<StoredWordLibraryState | undefined> {
+  return dbTransaction(STORE_WORD_LIBRARY, 'readonly', (s) => s.get('word-library'))
+}
+
+export function putWordLibraryState(state: Omit<StoredWordLibraryState, 'id' | 'updatedAt'>): Promise<IDBValidKey> {
+  return dbTransaction(STORE_WORD_LIBRARY, 'readwrite', (s) => s.put({
+    id: 'word-library',
+    groups: state.groups,
+    entries: state.entries,
+    updatedAt: Date.now(),
+  }))
 }
 
 // ===== Images =====
@@ -300,21 +326,29 @@ export function batchDeleteImages(ids: string[]): Promise<void> {
 
 export function batchGetImages(ids: string[]): Promise<Map<string, StoredImage>> {
   if (ids.length === 0) return Promise.resolve(new Map())
-  const idSet = new Set(ids)
+  const uniqueIds = Array.from(new Set(ids))
   return openDB().then(
     (db) =>
       new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_IMAGES, 'readonly')
         const store = tx.objectStore(STORE_IMAGES)
-        const req = store.getAll()
-        req.onsuccess = () => {
-          const map = new Map<string, StoredImage>()
-          for (const img of req.result as StoredImage[]) {
-            if (idSet.has(img.id)) map.set(img.id, img)
-          }
-          resolve(map)
+        const map = new Map<string, StoredImage>()
+        let pending = uniqueIds.length
+
+        const finishOne = () => {
+          pending--
+          if (pending === 0) resolve(map)
         }
-        req.onerror = () => reject(req.error)
+
+        for (const id of uniqueIds) {
+          const req = store.get(id)
+          req.onsuccess = () => {
+            const image = req.result as StoredImage | undefined
+            if (image) map.set(id, image)
+            finishOne()
+          }
+          req.onerror = () => reject(req.error)
+        }
       }),
   )
 }
