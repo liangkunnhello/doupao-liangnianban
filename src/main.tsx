@@ -28,13 +28,14 @@ if ('serviceWorker' in navigator) {
     })
     const SW_RELOAD_KEY = 'sw-controllerchange-reload'
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      // 防止 Service Worker 反复更新导致页面无限刷新
-      if (sessionStorage.getItem(SW_RELOAD_KEY) === '1') return
-      sessionStorage.setItem(SW_RELOAD_KEY, '1')
+      try {
+        if (sessionStorage.getItem(SW_RELOAD_KEY) === '1') return
+        sessionStorage.setItem(SW_RELOAD_KEY, '1')
+      } catch { return }
       window.location.reload()
     })
     window.addEventListener('load', () => {
-      sessionStorage.removeItem(SW_RELOAD_KEY)
+      try { sessionStorage.removeItem(SW_RELOAD_KEY) } catch {}
     })
   } else {
     navigator.serviceWorker.getRegistrations().then((registrations) => {

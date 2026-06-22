@@ -54,7 +54,7 @@ function loadSavedWidth(): number | null {
 }
 
 function saveSharedWidth(w: number) {
-  localStorage.setItem(SHARED_WIDTH_KEY, JSON.stringify(Math.max(MIN_W, Math.min(MAX_W, w))))
+  try { localStorage.setItem(SHARED_WIDTH_KEY, JSON.stringify(Math.max(MIN_W, Math.min(MAX_W, w)))) } catch {}
 }
 
 function loadSavedSize() {
@@ -148,12 +148,14 @@ export default function WordLibrarySidebar() {
         pendingWidth.current = null
       }
       if (pendingPos.current) {
-        localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(pendingPos.current))
+        try { localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(pendingPos.current)) } catch {}
         pendingPos.current = null
       }
       if (pendingDock.current !== undefined) {
-        if (pendingDock.current) localStorage.setItem(DOCK_STORAGE_KEY, pendingDock.current)
-        else localStorage.removeItem(DOCK_STORAGE_KEY)
+        try {
+          if (pendingDock.current) localStorage.setItem(DOCK_STORAGE_KEY, pendingDock.current)
+          else localStorage.removeItem(DOCK_STORAGE_KEY)
+        } catch {}
         pendingDock.current = undefined as unknown as null
       }
     }

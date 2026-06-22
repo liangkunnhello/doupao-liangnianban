@@ -23,8 +23,10 @@ export function installChunkLoadRecovery(win: Window = window) {
 
   const reloadOnce = () => {
     const key = 'chunk-load-recovery-reloaded'
-    if (win.sessionStorage.getItem(key) === '1') return
-    win.sessionStorage.setItem(key, '1')
+    try {
+      if (win.sessionStorage.getItem(key) === '1') return
+      win.sessionStorage.setItem(key, '1')
+    } catch { return }
     win.location.reload()
   }
 
@@ -35,6 +37,6 @@ export function installChunkLoadRecovery(win: Window = window) {
     if (isChunkLoadFailure(event.reason)) reloadOnce()
   })
   win.addEventListener('load', () => {
-    win.sessionStorage.removeItem('chunk-load-recovery-reloaded')
+    try { win.sessionStorage.removeItem('chunk-load-recovery-reloaded') } catch {}
   })
 }

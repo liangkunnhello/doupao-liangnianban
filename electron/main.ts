@@ -5,6 +5,18 @@ import { existsSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { registerIpcHandlers, initLocalSavePath } from './ipc-handlers'
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+])
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
