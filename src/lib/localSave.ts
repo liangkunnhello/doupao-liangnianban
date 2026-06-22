@@ -151,6 +151,33 @@ function getDirectoryBaseName(dirPath: string): string {
   return sanitizeFolderName(parts[parts.length - 1] || 'images')
 }
 
+export function formatFileDate(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}
+
+export function getBatchIndexInDir(imagesDir: string, datePrefix: string): Promise<number> {
+  const api = getAPI()
+  if (!api) return Promise.resolve(1)
+  return api.readDir(imagesDir).then((files) => {
+    let maxBatch = 0
+    for (const file of files) {
+      const match = file.match(new RegExp(`^${escapeRegExp(datePrefix)}-(\\d+)-`))
+      if (match) {
+        const batch = parseInt(match[1], 10)
+        if (batch > maxBatch) maxBatch = batch
+      }
+    }
+    return maxBatch + 1
+  }).catch(() => 1)
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export async function getLocalImageSaveDirectory(subFolder?: string): Promise<string | null> {
   const api = getAPI()
   const basePath = await getLocalSavePath()
@@ -179,6 +206,7 @@ export async function saveImageToLocal(
   ext: string = 'png',
   subFolder?: string,
   outputDirectory?: string,
+  batchIndex?: number,
 ): Promise<string | null> {
   const api = getAPI()
   if (!api) return null
@@ -188,8 +216,10 @@ export async function saveImageToLocal(
     : await getLocalImageSaveDirectory(subFolder)
   if (!imagesDir) return null
   const fileExt = EXT_MAP[ext] || 'png'
-  const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
-  const fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
+  const datePrefix = formatFileDate()
+  const batch = batchIndex ?? await getBatchIndexInDir(imagesDir, datePrefix)
+  const seq = String(imageIndex + 1).padStart(2, '0')
+  const fileName = `${datePrefix}-${batch}-${seq}.${fileExt}`
   const filePath = await api.pathJoin(imagesDir, fileName)
 
   const success = await api.saveImage(filePath, dataUrl)

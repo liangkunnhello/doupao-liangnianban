@@ -71,7 +71,7 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, formatFileDate, getBatchIndexInDir } from './lib/localSave'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -191,11 +191,17 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
   const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
+  const imagesDir = task.scheduledOutputPath
+    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
+    : await getLocalImageSaveDirectory(subFolder)
+  const datePrefix = formatFileDate()
+  const batchIndex = imagesDir ? await getBatchIndexInDir(imagesDir, datePrefix) : 1
+
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
     const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
     if (dataUrl) {
-      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
+      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, batchIndex)
     }
   }
 }
@@ -229,13 +235,19 @@ async function saveTaskToLocalFS(taskId: string) {
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
   const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
+  const imagesDir = task.scheduledOutputPath
+    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
+    : await getLocalImageSaveDirectory(subFolder)
+  const datePrefix = formatFileDate()
+  const batchIndex = imagesDir ? await getBatchIndexInDir(imagesDir, datePrefix) : 1
+
   let imageFailCount = 0
   try {
     for (let i = 0; i < task.outputImages.length; i++) {
       const imageId = task.outputImages[i]
       const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
       if (dataUrl) {
-        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, batchIndex)
         if (!saved) imageFailCount++
       } else {
         imageFailCount++

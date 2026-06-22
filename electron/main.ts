@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, protocol, net } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
@@ -132,11 +132,19 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    mainWindow.loadURL('app://./index.html')
   }
 
   mainWindow.webContents.on('preload-error', (_event, preloadPath, err) => {
     console.error('[preload-error] 加载失败:', preloadPath, err)
+  })
+
+  mainWindow.webContents.on('dom-ready', () => {
+    mainWindow?.webContents.executeJavaScript(`
+      if (!window.electronAPI) {
+        console.error('[critical] preload failed to inject electronAPI - environment detection will use userAgent fallback')
+      }
+    `).catch(() => {})
   })
 
   mainWindow.webContents.on('console-message', (_event, level, message) => {
@@ -145,41 +153,10 @@ function createWindow() {
     }
   })
 
-  let rendererCrashCount = 0
-  const MAX_RENDERER_CRASH_RELOADS = 5
-  const RELOAD_ON_GONE_REASONS = new Set([
-    'crashed',
-    'oom',
-    'killed',
-    'abnormal-exit',
-    'launch-failure',
-    'integrity-failure',
-  ])
-
-  mainWindow.webContents.on('did-finish-load', () => {
-    if (rendererCrashCount > 0) {
-      console.log('[renderer-crash] 页面成功加载，重置崩溃计数')
-      rendererCrashCount = 0
-    }
-  })
-
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    rendererCrashCount += 1
-    console.error(`[renderer-crash #${rendererCrashCount}] reason=${details.reason} exitCode=${details.exitCode}`)
-
-    if (!RELOAD_ON_GONE_REASONS.has(details.reason)) {
-      console.log(`[renderer-crash] reason=${details.reason} 不是需要自动恢复的崩溃类型，跳过刷新`)
-      return
-    }
-
-    if (rendererCrashCount > MAX_RENDERER_CRASH_RELOADS) {
-      console.error('[renderer-crash] 连续崩溃次数过多，停止自动刷新以避免无限循环')
-      return
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      console.error('[renderer-crash] 正在重新加载窗口...')
-      mainWindow.reload()
-    }
+    console.error(`[renderer-crash] reason=${details.reason} exitCode=${details.exitCode}`)
+    // 不再自动 reload，避免刷新打断生图任务
+    // 如果渲染进程崩溃，用户可手动重启应用
   })
 
   mainWindow.on('unresponsive', () => {
@@ -200,6 +177,14 @@ process.on('unhandledRejection', (reason) => {
 })
 
 app.whenReady().then(() => {
+  if (!process.env.VITE_DEV_SERVER_URL) {
+    protocol.handle('app', (request) => {
+      const url = new URL(request.url)
+      const filePath = path.join(__dirname, '../dist', url.pathname)
+      return net.fetch('file:///' + path.normalize(filePath).replace(/\\/g, '/'))
+    })
+  }
+
   initLocalSavePath()
   registerIpcHandlers()
 

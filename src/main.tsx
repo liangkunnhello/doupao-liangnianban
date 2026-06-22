@@ -12,7 +12,7 @@ installMobileViewportGuards()
 installChunkLoadRecovery()
 
 // Electron 桌面端不需要 PWA Service Worker，避免 SW 更新/缓存导致页面刷新或请求异常
-const isElectronRuntime = isElectron()
+const isElectronRuntime = isElectron() || (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
 
 if ('serviceWorker' in navigator) {
   if (isElectronRuntime) {
