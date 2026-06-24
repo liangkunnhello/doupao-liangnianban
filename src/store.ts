@@ -3516,26 +3516,28 @@ export async function initStore() {
     currentTabs = [defaultTab]
   }
   if (currentTabs.length > 0 && galleryTasks.length > 0) {
-    const firstTab = currentTabs[0]
-    if (firstTab.tasks.length === 0) {
-      // First load: assign all gallery tasks to the first tab
-      const updatedTabs = currentTabs.map((tab, index) =>
-        index === 0 ? { ...tab, tasks: galleryTasks } : tab,
-      )
-      useStore.setState({ workspaceTabs: updatedTabs })
-    } else {
-      // Sync task state changes (e.g. interrupted tasks) to existing tab tasks
-      const taskMap = new Map(tasks.map((t) => [t.id, t]))
-      const updatedTabs = currentTabs.map((tab: any) => {
-        const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : tab.tasks.map((t: any) => t.id)
+    // Sync task state changes (e.g. interrupted tasks) to existing tab tasks
+    const taskMap = new Map(tasks.map((t) => [t.id, t]))
+    const updatedTabs = currentTabs.map((tab: any, index) => {
+      const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : tab.tasks.map((t: any) => t.id)
+      
+      // First load for a tab that has NO tasks but we have gallery tasks:
+      // We only do this for the VERY FIRST tab to migrate old non-tabbed data.
+      if (taskIds.length === 0 && index === 0 && !Array.isArray(tab._taskIds)) {
         return {
           ...tab,
-          tasks: taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined),
+          tasks: galleryTasks,
           _taskIds: undefined,
         }
-      })
-      useStore.setState({ workspaceTabs: updatedTabs })
-    }
+      }
+
+      return {
+        ...tab,
+        tasks: taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined),
+        _taskIds: undefined,
+      }
+    })
+    useStore.setState({ workspaceTabs: updatedTabs })
   }
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
