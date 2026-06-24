@@ -71,7 +71,7 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, formatFileDate, getBatchIndexInDir } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer } from './lib/localSave'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -114,6 +114,7 @@ type AgentInputDraft = {
   inputImageFolder: InputImageFolder | null
   maskDraft: MaskDraft | null
   maskEditorImageId: string | null
+  customOutputPath?: string
   updatedAt?: number
 }
 
@@ -191,17 +192,11 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
   const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
-  const imagesDir = task.scheduledOutputPath
-    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
-    : await getLocalImageSaveDirectory(subFolder)
-  const datePrefix = formatFileDate()
-  const batchIndex = imagesDir ? await getBatchIndexInDir(imagesDir, datePrefix) : 1
-
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
     const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
     if (dataUrl) {
-      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, batchIndex)
+      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
     }
   }
 }
@@ -213,7 +208,7 @@ async function saveTaskMetaToLocalFS(taskId: string) {
 
   const state = useStore.getState()
   const task = state.tasks.find((t) => t.id === taskId)
-  if (!task || !task.outputImages.length) return
+  if (!task || !task.outputImages?.length) return
 
   try {
     await saveTaskMetaToLocal(taskId, task)
@@ -235,19 +230,13 @@ async function saveTaskToLocalFS(taskId: string) {
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
   const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
 
-  const imagesDir = task.scheduledOutputPath
-    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
-    : await getLocalImageSaveDirectory(subFolder)
-  const datePrefix = formatFileDate()
-  const batchIndex = imagesDir ? await getBatchIndexInDir(imagesDir, datePrefix) : 1
-
   let imageFailCount = 0
   try {
-    for (let i = 0; i < task.outputImages.length; i++) {
+    for (let i = 0; i < (task.outputImages?.length ?? 0); i++) {
       const imageId = task.outputImages[i]
       const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
       if (dataUrl) {
-        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, batchIndex)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
         if (!saved) imageFailCount++
       } else {
         imageFailCount++
@@ -314,8 +303,27 @@ export async function ensureImageCached(id: string): Promise<string | undefined>
   if (cached) return cached
   const rec = await getImage(id)
   if (rec) {
-    cacheImage(id, rec.dataUrl)
-    return rec.dataUrl
+    if (!rec.dataUrl && rec.localPath && isElectronEnv()) {
+      try {
+        const fileResult = await readFileBuffer(rec.localPath)
+        if (fileResult) {
+          const mime = fileResult.name.endsWith('webp') ? 'image/webp' : fileResult.name.endsWith('jpg') || fileResult.name.endsWith('jpeg') ? 'image/jpeg' : 'image/png'
+          const blob = new Blob([fileResult.data], { type: mime })
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
+          })
+          cacheImage(id, dataUrl)
+          return dataUrl
+        }
+      } catch (err) {
+        console.error('Failed to read image from localPath', rec.localPath, err)
+      }
+    } else if (rec.dataUrl) {
+      cacheImage(id, rec.dataUrl)
+      return rec.dataUrl
+    }
   }
   return undefined
 }
@@ -481,7 +489,7 @@ function showTaskCompletionNotification(title: string, body: string) {
 }
 
 function countSuccessfulOutputImages(tasks: TaskRecord[]) {
-  return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages.length : 0), 0)
+  return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages?.length ?? 0 : 0), 0)
 }
 
 function skipSupportPromptForImportedData(tasks: TaskRecord[]) {
@@ -497,30 +505,13 @@ function skipSupportPromptForImportedData(tasks: TaskRecord[]) {
 }
 
 function showSupportPromptForExistingLocalData(tasks: TaskRecord[]) {
-  const count = countSuccessfulOutputImages(tasks)
-  useStore.setState((state) => {
-    if (state.supportPromptDismissed || state.supportPromptOpen) return {}
-    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-      return { supportPromptSkippedForImportedData: false }
-    }
-    if (state.supportPromptSkippedForImportedData) return {}
-    return { supportPromptOpen: true }
-  })
+  // 禁用赞助提示弹窗
+  return
 }
 
 function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskRecord[], taskId: string) {
-  const state = useStore.getState()
-  if (state.supportPromptDismissed || state.supportPromptOpen || state.supportPromptSkippedForImportedData) return
-
-  const previousTask = previousTasks.find((task) => task.id === taskId)
-  const nextTask = nextTasks.find((task) => task.id === taskId)
-  if (!nextTask || previousTask?.status === 'done' || nextTask.status !== 'done' || nextTask.outputImages.length === 0) return
-
-  const previousCount = countSuccessfulOutputImages(previousTasks)
-  const nextCount = countSuccessfulOutputImages(nextTasks)
-  if (previousCount <= SUPPORT_PROMPT_IMAGE_THRESHOLD && nextCount > SUPPORT_PROMPT_IMAGE_THRESHOLD) {
-    useStore.setState({ supportPromptOpen: true })
-  }
+  // 禁用赞助提示弹窗
+  return
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -725,7 +716,8 @@ export function migratePersistedState(persistedState: unknown): unknown {
       params: { ...DEFAULT_PARAMS, ...(isRecord(params) ? params : {}) },
       maskDraft: normalizeMaskDraft(galleryDraft?.maskDraft ?? persistedState.maskDraft),
       maskEditorImageId: typeof persistedState.maskEditorImageId === 'string' ? persistedState.maskEditorImageId : null,
-      tasks: [],
+    customOutputPath: typeof persistedState.customOutputPath === 'string' ? persistedState.customOutputPath : '',
+    tasks: [],
       createdAt: now,
       updatedAt: now,
       order: 0,
@@ -917,6 +909,7 @@ export function getPersistedState(state: AppState) {
   return {
     settings,
     params: state.params,
+    customOutputPath: state.customOutputPath,
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
           prompt: galleryInputDraft?.prompt ?? '',
@@ -954,7 +947,8 @@ export function getPersistedState(state: AppState) {
             ...tab,
             inputImages: tab.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
             inputImageFolder: tab.inputImageFolder,
-            tasks: tab.tasks,
+            tasks: [],
+            _taskIds: tab.tasks.map((t) => t.id),
           })),
           activeWorkspaceTabId: state.activeWorkspaceTabId,
           workspaceTabGroups: state.workspaceTabGroups,
@@ -973,6 +967,15 @@ async function replaceStoredAgentConversations(conversations: AgentConversation[
 
 function getPersistableAgentConversation(conversation: AgentConversation): AgentConversation {
   return getPersistableAgentConversations([conversation])[0]!
+}
+
+function normalizeTaskRecordFields(task: TaskRecord): TaskRecord {
+  return {
+    ...task,
+    params: task.params ? { ...DEFAULT_PARAMS, ...task.params } : { ...DEFAULT_PARAMS },
+    outputImages: Array.isArray(task.outputImages) ? task.outputImages : [],
+    inputImageIds: Array.isArray(task.inputImageIds) ? task.inputImageIds : [],
+  }
 }
 
 function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
@@ -1039,7 +1042,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
           : null,
         params: isRecord(tab.params) ? { ...DEFAULT_PARAMS, ...tab.params } : { ...DEFAULT_PARAMS },
         maskDraft: normalizeMaskDraft(tab.maskDraft),
-        tasks: Array.isArray(tab.tasks) ? tab.tasks : [],
+        customOutputPath: typeof tab.customOutputPath === 'string' ? tab.customOutputPath : '',
+        tasks: Array.isArray(tab.tasks) ? tab.tasks.filter((t: any) => typeof t !== 'string').map(normalizeTaskRecordFields) : [],
+        _taskIds: Array.isArray((tab as any)._taskIds) ? (tab as any)._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : t.id) : []),
       }))
     : currentState.workspaceTabs
   const persistedActiveWorkspaceTabId = typeof persisted.activeWorkspaceTabId === 'string' ? persisted.activeWorkspaceTabId : currentState.activeWorkspaceTabId
@@ -1052,6 +1057,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
   const restoredInputImageFolder = activeWorkspaceTabForRestore
     ? activeWorkspaceTabForRestore.inputImageFolder
     : (restoredAgentDraft ? restoredAgentDraft.inputImageFolder ?? null : galleryInputDraft?.inputImageFolder ?? null)
+  const restoredCustomOutputPath = activeWorkspaceTabForRestore
+    ? activeWorkspaceTabForRestore.customOutputPath
+    : (typeof persisted.customOutputPath === 'string' ? persisted.customOutputPath : currentState.customOutputPath)
   return {
     ...currentState,
     appMode,
@@ -1096,6 +1104,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     params: restoredParams,
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
     maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
+    customOutputPath: restoredCustomOutputPath,
   }
 }
 
@@ -1151,6 +1160,8 @@ interface AppState {
   maskEditorImageId: string | null
   setMaskEditorImageId: (id: string | null) => void
   galleryInputDraft: AgentInputDraft | null
+  customOutputPath: string
+  setCustomOutputPath: (path: string) => void
 
   // 参数
   params: TaskParams
@@ -1359,8 +1370,8 @@ function isImageReferencedByState(state: AppState, imageId: string) {
     tab.inputImages.some((img) => img.id === imageId) ||
     tab.maskDraft?.targetImageId === imageId ||
     tab.tasks.some((task) =>
-      task.inputImageIds.includes(imageId) ||
-      task.outputImages.includes(imageId) ||
+      task.inputImageIds?.includes(imageId) ||
+      task.outputImages?.includes(imageId) ||
       task.streamPartialImageIds?.includes(imageId) ||
       task.maskTargetImageId === imageId ||
       task.maskImageId === imageId
@@ -1503,6 +1514,7 @@ function createDefaultWorkspaceTab(options: {
     params: { ...DEFAULT_PARAMS, ...(isRecord(options.params) ? options.params : {}) },
     maskDraft: normalizeMaskDraft(options.maskDraft),
     maskEditorImageId: typeof options.maskEditorImageId === 'string' ? options.maskEditorImageId : null,
+    customOutputPath: typeof (options as any).customOutputPath === 'string' ? (options as any).customOutputPath : '',
     tasks: options.tasks ?? [],
     createdAt: now,
     updatedAt: now,
@@ -1664,7 +1676,7 @@ function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, co
   return restoreGalleryInputDraftState(draft ?? null)
 }
 
-function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageFolder?: import('./types').InputImageFolder | null; params?: Partial<TaskParams> }>(
+function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageFolder?: import('./types').InputImageFolder | null; params?: Partial<TaskParams>; customOutputPath?: string }>(
   state: AppState,
   patch: T,
 ): T & { agentInputDrafts?: Record<string, AgentInputDraft>; galleryInputDraft?: AgentInputDraft | null; workspaceTabs?: WorkspaceTab[] } {
@@ -1674,6 +1686,7 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
     inputImageFolder: patch.inputImageFolder !== undefined ? patch.inputImageFolder : state.inputImageFolder,
     maskDraft: patch.maskDraft !== undefined ? patch.maskDraft : state.maskDraft,
     maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
+    customOutputPath: patch.customOutputPath !== undefined ? patch.customOutputPath : state.customOutputPath,
   }
   if (state.appMode === 'gallery') {
     const activeTabId = state.activeWorkspaceTabId
@@ -1687,7 +1700,8 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
           (patch.inputImageFolder !== undefined && activeTab.inputImageFolder?.path !== patch.inputImageFolder?.path) ||
           (patch.params !== undefined && JSON.stringify(activeTab.params) !== JSON.stringify({ ...state.params, ...patch.params })) ||
           JSON.stringify(activeTab.maskDraft) !== JSON.stringify(draft.maskDraft) ||
-          activeTab.maskEditorImageId !== draft.maskEditorImageId
+          activeTab.maskEditorImageId !== draft.maskEditorImageId ||
+          (patch.customOutputPath !== undefined && activeTab.customOutputPath !== patch.customOutputPath)
 
         if (!tabHasChanges) {
           const existingDraft = state.galleryInputDraft
@@ -1698,7 +1712,8 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
             existingDraft.inputImages.some((img, idx) => img.id !== draft.inputImages[idx]?.id) ||
             existingDraft.inputImageFolder?.path !== draft.inputImageFolder?.path ||
             JSON.stringify(existingDraft.maskDraft) !== JSON.stringify(draft.maskDraft) ||
-            existingDraft.maskEditorImageId !== draft.maskEditorImageId
+            existingDraft.maskEditorImageId !== draft.maskEditorImageId ||
+            existingDraft.customOutputPath !== draft.customOutputPath
 
           if (!draftHasChanges) {
             return patch
@@ -1718,6 +1733,7 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft> & { inputImageF
                 params: patch.params !== undefined ? { ...state.params, ...patch.params } : t.params,
                 maskDraft: draft.maskDraft,
                 maskEditorImageId: draft.maskEditorImageId,
+                customOutputPath: patch.customOutputPath !== undefined ? patch.customOutputPath : t.customOutputPath,
                 updatedAt: Date.now(),
               }
             : t,
@@ -2008,9 +2024,12 @@ export const useStore = create<AppState>()(
       },
       galleryInputDraft: null,
 
+      customOutputPath: '',
+      setCustomOutputPath: (path) => set((s) => syncActiveInputDraft(s, { customOutputPath: path })),
+      
       // Params
       params: { ...DEFAULT_PARAMS },
-      setParams: (p) => set((s) => ({ params: { ...s.params, ...p } })),
+      setParams: (p) => set((s) => syncActiveInputDraft(s, { params: { ...s.params, ...p } })),
       reusedTaskApiProfileId: null,
       reusedTaskApiProfileName: null,
       reusedTaskApiProfileMissing: false,
@@ -2534,7 +2553,7 @@ export const useStore = create<AppState>()(
 
       // Random prompt generator
       randomPromptModalOpen: false,
-      setRandomPromptModalOpen: (open) => set({ randomPromptModalOpen: open }),
+      setRandomPromptModalOpen: (open) => set({ randomPromptModalOpen: open }), 
 
       // Word library sidebar
       wordLibrarySidebarOpen: false,
@@ -2608,9 +2627,10 @@ export const useStore = create<AppState>()(
                     inputImageFolder: state.inputImageFolder,
                     params: { ...state.params },
                     maskDraft: state.maskDraft,
-                    maskEditorImageId: state.maskEditorImageId,
-                    updatedAt: Date.now(),
-                  }
+                  maskEditorImageId: state.maskEditorImageId,
+                  customOutputPath: state.customOutputPath,
+                  updatedAt: Date.now(),
+                }
                 : t,
             )
           : state.workspaceTabs
@@ -2626,6 +2646,7 @@ export const useStore = create<AppState>()(
             params: { ...targetTab.params },
             maskDraft: targetTab.maskDraft,
             maskEditorImageId: targetTab.maskEditorImageId,
+            customOutputPath: targetTab.customOutputPath,
             galleryInputDraft: null,
           }
         }
@@ -2663,6 +2684,7 @@ export const useStore = create<AppState>()(
           params: sourceTab ? { ...sourceTab.params } : { ...state.params },
           maskDraft: sourceTab ? sourceTab.maskDraft : state.maskDraft,
           maskEditorImageId: sourceTab ? sourceTab.maskEditorImageId : state.maskEditorImageId,
+          customOutputPath: sourceTab ? sourceTab.customOutputPath : state.customOutputPath,
           tasks: [],
           createdAt: now,
           updatedAt: now,
@@ -2686,6 +2708,7 @@ export const useStore = create<AppState>()(
             params: { ...state.params },
             maskDraft: state.maskDraft,
             maskEditorImageId: state.maskEditorImageId,
+            customOutputPath: state.customOutputPath,
             tasks: [],
             createdAt: now,
             updatedAt: now,
@@ -2720,6 +2743,7 @@ export const useStore = create<AppState>()(
           name: `${tab.name} - 副本`,
           inputImages: tab.inputImages.map((img) => ({ ...img })),
           params: { ...tab.params },
+          customOutputPath: tab.customOutputPath,
           tasks: tab.tasks.map((t) => ({ ...t })),
           createdAt: now,
           updatedAt: now,
@@ -2783,12 +2807,13 @@ export const useStore = create<AppState>()(
                   params: { ...state.params },
                   maskDraft: state.maskDraft,
                   maskEditorImageId: state.maskEditorImageId,
+                  customOutputPath: state.customOutputPath,
                   updatedAt: Date.now(),
                 }
               : t,
           ),
-        }
-      }),
+      }
+    }),
 
       // 自动备份
       lastAutoBackupAt: 0,
@@ -2967,7 +2992,7 @@ function getPersistableTask(task: TaskRecord): TaskRecord {
   return rawResponsePayload === task.rawResponsePayload ? task : { ...task, rawResponsePayload }
 }
 
-function putTask(task: TaskRecord): Promise<IDBValidKey> {
+export function putTask(task: TaskRecord): Promise<IDBValidKey> {
   return dbPutTask(getPersistableTask(task))
 }
 
@@ -3382,6 +3407,14 @@ async function recoverFalTask(taskId: string) {
 export async function initStore() {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
+  // 确保所有任务都具有合法的 params 对象，以兼容旧版无参数记录的数据
+  for (const task of storedTasks) {
+    if (!task.params) {
+      task.params = { ...DEFAULT_PARAMS }
+    } else {
+      task.params = { ...DEFAULT_PARAMS, ...task.params }
+    }
+  }
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
   let loadedAgentConversations = mergeAgentConversationsForStorage(storedAgentConversations, legacyAgentConversations)
   const currentAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
@@ -3493,10 +3526,14 @@ export async function initStore() {
     } else {
       // Sync task state changes (e.g. interrupted tasks) to existing tab tasks
       const taskMap = new Map(tasks.map((t) => [t.id, t]))
-      const updatedTabs = currentTabs.map((tab) => ({
-        ...tab,
-        tasks: tab.tasks.map((t) => taskMap.get(t.id) ?? t),
-      }))
+      const updatedTabs = currentTabs.map((tab: any) => {
+        const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : tab.tasks.map((t: any) => t.id)
+        return {
+          ...tab,
+          tasks: taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined),
+          _taskIds: undefined,
+        }
+      })
       useStore.setState({ workspaceTabs: updatedTabs })
     }
   }
@@ -3540,6 +3577,12 @@ export async function initStore() {
   for (const t of tasks) {
     addTaskReferencedImageIds(referencedIds, t)
   }
+  for (const tab of state.workspaceTabs) {
+    for (const img of tab.inputImages) referencedIds.add(img.id)
+    if (tab.inputImageFolder) {
+      for (const id of tab.inputImageFolder.imageIds) referencedIds.add(id)
+    }
+  }
 
   // 只枚举 key 清理孤立图片，避免启动时把所有 4K 原图读进内存。
   const imageIds = await getAllImageIds()
@@ -3571,6 +3614,11 @@ export async function initStore() {
   }
   for (const round of agentConversations.flatMap(c => c.rounds)) {
     for (const id of round.inputImageIds) idsToFetch.add(id)
+  }
+  for (const tab of state.workspaceTabs) {
+    for (const img of tab.inputImages) {
+      if (!img.dataUrl) idsToFetch.add(img.id)
+    }
   }
   const imageMap = idsToFetch.size > 0 ? await batchGetImages([...idsToFetch]) : new Map<string, StoredImage>()
 
@@ -3823,8 +3871,25 @@ export async function submitTaskWithData(
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { prompt, inputImages, inputImageFolder, params, maskDraft } = useStore.getState()
-  await submitTaskWithData({ prompt, inputImages, inputImageFolder, params, maskDraft }, options)
+  const state = useStore.getState()
+  const { prompt, inputImages, inputImageFolder, params, maskDraft, customOutputPath } = state
+  
+  // 查找当前激活的标签页
+  const activeTab = state.workspaceTabs.find(tab => tab.id === state.activeWorkspaceTabId)
+  
+  // 优先级：1. 自定义输出路径 -> 2. 当前加载的文件夹路径 -> 3. 标签页名称（作为子文件夹）
+  const scheduledOutputPath = customOutputPath || (inputImageFolder ? inputImageFolder.path : undefined)
+  const scheduledOutputSubFolder = (!scheduledOutputPath && activeTab) ? activeTab.name : undefined
+
+  await submitTaskWithData({ 
+    prompt, 
+    inputImages, 
+    inputImageFolder, 
+    params, 
+    maskDraft, 
+    scheduledOutputPath,
+    scheduledOutputSubFolder 
+  }, options)
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -4222,6 +4287,26 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   }
 }
 
+export async function cleanupAllOrphanedImages(): Promise<number> {
+  const allImageIds = await getAllImageIds()
+  const { tasks, inputImages, galleryInputDraft } = useStore.getState()
+  const stillUsed = new Set<string>()
+  for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
+  addAgentReferencedImageIds(stillUsed)
+  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
+  for (const img of inputImages) stillUsed.add(img.id)
+
+  let deletedCount = 0
+  for (const imgId of allImageIds) {
+    if (stillUsed.has(imgId)) continue
+    await deleteImage(imgId)
+    imageCache.delete(imgId)
+    thumbnailCache.delete(imgId)
+    deletedCount++
+  }
+  return deletedCount
+}
+
 async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
   try {
     const imgId = await storeImage(dataUrl, 'generated')
@@ -4280,7 +4365,7 @@ async function createAgentGeneratedImagesInputItem(round: AgentRound, tasks: Tas
       imageIndex += 1
       continue
     }
-    for (const imageId of task.outputImages) {
+    for (const imageId of task.outputImages || []) {
       const dataUrl = await ensureImageCached(imageId)
       if (dataUrl) {
         contentParts.push({ type: 'input_image', image_url: dataUrl })
@@ -4303,7 +4388,7 @@ async function createAgentBatchImagesInputItem(round: AgentRound, tasks: TaskRec
   for (const taskId of round.outputTaskIds) {
     if (batchTaskIds.includes(taskId)) break
     const task = tasks.find((item) => item.id === taskId)
-    baseImageIndex += task ? task.outputImages.length : 1
+    baseImageIndex += task ? (task.outputImages?.length ?? 0) : 1
   }
   let imageIndex = baseImageIndex
   for (const taskId of batchTaskIds) {
@@ -4951,7 +5036,7 @@ async function executeAgentRound(
       const toolCallId = image.toolCallId ?? genId()
       const taskId = await ensureStreamingAgentTask(toolCallId)
       const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
-      if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
+      if (latestTask?.status === 'done' && (latestTask.outputImages?.length ?? 0) > 0) return taskId
 
       const stored = await processAndStoreGeneratedImage(image.dataUrl, params, image.actualParams)
       const imgId = stored.id
@@ -5740,8 +5825,15 @@ async function executeTask(taskId: string) {
             return
           }
 
+          if (!useFolderMode && allImages.length >= totalImages) {
+            return
+          }
+
           await acquire()
           try {
+            if (!useFolderMode && allImages.length >= totalImages) {
+              return
+            }
             const result = await retryItem(() => batchHandler(item, index))
             await storeBatchResult(result, item, index)
           } catch (err) {
@@ -6292,27 +6384,124 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
   const { tasks, workspaceTabs, setTasks, clearSelection, showToast } = useStore.getState()
   const idSet = new Set(uniqueTaskIds)
   const changedTaskIds = new Set<string>()
+  const newFavoriteTasks: TaskRecord[] = []
+
   const updated = tasks.map((task) => {
     if (!idSet.has(task.id)) return task
     if (sameFavoriteCollectionIds(getTaskFavoriteCollectionIds(task), ids)) return task
+    
+    const isFavorite = ids.length > 0
+    if (isFavorite && !task.isFavorite) {
+      // 收藏时复制一份作为收藏卡片，只保留第一张图
+      const duplicateTask: TaskRecord = {
+        ...task,
+        id: genId(),
+        outputImages: task.outputImages?.length > 0 ? [task.outputImages[0]] : [],
+        favoriteCollectionIds: ids,
+        isFavorite: true,
+        error: null,
+        status: 'done' as const,
+        elapsed: null,
+        progressStage: undefined,
+        progressMessage: undefined,
+        progressUpdatedAt: undefined,
+        batchItemStatuses: undefined,
+        batchItemErrors: undefined,
+        rawResponsePayload: undefined,
+        falRequestId: undefined,
+        falEndpoint: undefined,
+        falRecoverable: undefined,
+        customTaskId: undefined,
+        customRecoverable: undefined,
+        // 清理输出地址参数，保留提示词
+        favoriteOutputPath: undefined,
+        favoriteOutputUseDateVariable: undefined,
+        scheduledOutputPath: undefined,
+        scheduledOutputSubFolder: undefined,
+      }
+      newFavoriteTasks.push(duplicateTask)
+      return task // 原任务卡不会被改变
+    }
+    
     changedTaskIds.add(task.id)
-    return { ...task, favoriteCollectionIds: ids, isFavorite: ids.length > 0 }
+    return { ...task, favoriteCollectionIds: ids, isFavorite }
   })
-  if (!changedTaskIds.size) {
+
+  if (!changedTaskIds.size && !newFavoriteTasks.length) {
     clearSelection()
     return
   }
-  setTasks(updated)
-  const updatedTaskById = new Map(updated.filter((task) => changedTaskIds.has(task.id)).map((task) => [task.id, task]))
+  
+  const finalTasks = [...updated, ...newFavoriteTasks]
+  setTasks(finalTasks)
+  
+  const duplicateSourceMap = new Map<string, string>()
+  for (let i = 0; i < updated.length; i++) {
+    if (newFavoriteTasks.length > 0 && newFavoriteTasks[newFavoriteTasks.length - 1].id !== undefined) {
+      // Find matching duplicate source
+      const dup = newFavoriteTasks.find(d => 
+        d.createdAt === updated[i].createdAt && 
+        d.prompt === updated[i].prompt &&
+        d.apiProfileId === updated[i].apiProfileId
+      )
+      if (dup) {
+        duplicateSourceMap.set(dup.id, updated[i].id)
+      }
+    }
+  }
+
+  const updatedTaskById = new Map(finalTasks.filter((task) => changedTaskIds.has(task.id)).map((task) => [task.id, task]))
+  useStore.setState({
+    workspaceTabs: workspaceTabs.map((tab) => {
+      const newTasks: TaskRecord[] = []
+      for (const task of tab.tasks) {
+        newTasks.push(updatedTaskById.get(task.id) ?? task)
+        // 注意：不将 newFavoriteTasks 添加到 workspaceTabs 中，这样生图窗口就不会显示复制的收藏卡片
+      }
+      return { ...tab, tasks: newTasks }
+    }),
+  })
+  
+  const tasksToPut = [
+    ...finalTasks.filter((task) => changedTaskIds.has(task.id)),
+    ...newFavoriteTasks
+  ]
+  await Promise.all(tasksToPut.map((task) => putTask(task)))
+  
+  clearSelection()
+  showToast(ids.length ? '收藏夹已更新' : '已取消收藏', 'success')
+}
+
+export async function updateTaskPrompt(taskId: string, newPrompt: string) {
+  const { tasks, workspaceTabs, setTasks } = useStore.getState()
+  const updatedTasks = tasks.map((t) => t.id === taskId ? { ...t, prompt: newPrompt } : t)
+  setTasks(updatedTasks)
   useStore.setState({
     workspaceTabs: workspaceTabs.map((tab) => ({
       ...tab,
-      tasks: tab.tasks.map((task) => updatedTaskById.get(task.id) ?? task),
+      tasks: tab.tasks.map((t) => t.id === taskId ? { ...t, prompt: newPrompt } : t),
     })),
   })
-  await Promise.all(updated.filter((task) => changedTaskIds.has(task.id)).map((task) => putTask(task)))
-  clearSelection()
-  showToast(ids.length ? '收藏夹已更新' : '已取消收藏', 'success')
+  const task = updatedTasks.find((t) => t.id === taskId)
+  if (task) {
+    await dbPutTask(task)
+  }
+}
+
+export async function updateTaskParams(taskId: string, params: Partial<TaskParams>) {
+  const { tasks, workspaceTabs, setTasks } = useStore.getState()
+  const updatedTasks = tasks.map((t) => t.id === taskId ? { ...t, params: { ...t.params, ...params } } : t)
+  setTasks(updatedTasks)
+  useStore.setState({
+    workspaceTabs: workspaceTabs.map((tab) => ({
+      ...tab,
+      tasks: tab.tasks.map((t) => t.id === taskId ? { ...t, params: { ...t.params, ...params } } : t),
+    })),
+  })
+  const task = updatedTasks.find((t) => t.id === taskId)
+  if (task) {
+    await dbPutTask(task)
+  }
 }
 
 export async function deleteFavoriteCollection(collectionId: string, deleteTasks = false) {
@@ -6406,16 +6595,15 @@ export async function retryTask(task: TaskRecord) {
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { settings, setPrompt, setParams, setInputImages, setInputImageFolder, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
+  const { settings, setPrompt, setParams, setInputImages, setInputImageFolder, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile, setCustomOutputPath } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
   const matchedProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
   const shouldTemporarilyReuseProfile = Boolean(matchedProfile && matchedProfile.id !== currentProfile.id)
   const missingReusedProfile = normalizedSettings.reuseTaskApiProfileTemporarily && !matchedProfile
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
-  const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(normalizedSettings, matchedProfile) : normalizedSettings
 
-  setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
+  setParams(task.params)
   setReusedTaskApiProfile(
     shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.id : null,
     missingReusedProfile,
@@ -6439,6 +6627,12 @@ export async function reuseConfig(task: TaskRecord) {
   }
 
   setPrompt(task.prompt)
+  // 恢复输出地址
+  if (task.scheduledOutputPath) {
+    setCustomOutputPath(task.scheduledOutputPath)
+  } else {
+    setCustomOutputPath('')
+  }
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)
@@ -6804,7 +6998,10 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
 
   if (options.exportTasks) {
     for (const img of images) {
-      const { ext, bytes } = dataUrlToBytes(img.dataUrl)
+      const dataUrl = await ensureImageCached(img.id)
+      if (!dataUrl) continue
+
+      const { ext, bytes } = dataUrlToBytes(dataUrl)
       const path = `images/${img.id}.${ext}`
       const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
       imageFiles[img.id] = {
@@ -6896,7 +7093,10 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
 
     if (options.exportTasks) {
       for (const img of images) {
-        const { ext, bytes } = dataUrlToBytes(img.dataUrl)
+        const dataUrl = await ensureImageCached(img.id)
+        if (!dataUrl) continue
+
+        const { ext, bytes } = dataUrlToBytes(dataUrl)
         const path = `images/${img.id}.${ext}`
         const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
         imageFiles[img.id] = {
@@ -7001,7 +7201,10 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
 
   if (options.exportTasks) {
     for (const img of images) {
-      const { ext, bytes } = dataUrlToBytes(img.dataUrl)
+      const dataUrl = await ensureImageCached(img.id)
+      if (!dataUrl) continue
+
+      const { ext, bytes } = dataUrlToBytes(dataUrl)
       const path = `images/${img.id}.${ext}`
       const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
       imageFiles[img.id] = {
@@ -7087,15 +7290,25 @@ export async function importData(file: File, options: ImportOptions = { importCo
         const bytes = unzipped[info.path]
         if (!bytes) continue
         const dataUrl = bytesToDataUrl(bytes, info.path)
+        
+        let localPath: string | undefined
+        if (isElectronEnv()) {
+          const { saveRawCacheImageToLocal } = await import('./lib/localSave')
+          localPath = await saveRawCacheImageToLocal(id, dataUrl) || undefined
+        }
+
         await putImage({
           id,
-          dataUrl,
+          dataUrl: localPath ? undefined : dataUrl,
+          localPath,
           createdAt: info.createdAt,
           source: info.source,
           width: info.width,
           height: info.height,
         })
-        cacheImage(id, dataUrl)
+        if (!localPath) {
+          cacheImage(id, dataUrl)
+        }
         importedImageIds.push(id)
       }
 
