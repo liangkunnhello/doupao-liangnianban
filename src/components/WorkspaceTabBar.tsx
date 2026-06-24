@@ -27,7 +27,7 @@ function loadSavedWidth(): number | null {
 }
 
 function saveSharedWidth(w: number) {
-  try { localStorage.setItem(SHARED_WIDTH_KEY, JSON.stringify(Math.max(MIN_W, Math.min(MAX_W, w)))) } catch {}
+  localStorage.setItem(SHARED_WIDTH_KEY, JSON.stringify(Math.max(MIN_W, Math.min(MAX_W, w))))
 }
 
 function loadSavedSize() {
@@ -123,14 +123,12 @@ export default function WorkspaceTabBar() {
         pendingWidth.current = null
       }
       if (pendingPos.current) {
-        try { localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(pendingPos.current)) } catch {}
+        localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(pendingPos.current))
         pendingPos.current = null
       }
       if (pendingDock.current !== undefined) {
-        try {
-          if (pendingDock.current) localStorage.setItem(DOCK_STORAGE_KEY, pendingDock.current)
-          else localStorage.removeItem(DOCK_STORAGE_KEY)
-        } catch {}
+        if (pendingDock.current) localStorage.setItem(DOCK_STORAGE_KEY, pendingDock.current)
+        else localStorage.removeItem(DOCK_STORAGE_KEY)
         pendingDock.current = undefined as unknown as null
       }
     }
@@ -266,14 +264,14 @@ export default function WorkspaceTabBar() {
     if (!editingTabId) return
     const name = editingTabName.trim()
     if (!name) {
-      showToast('鍚嶇О涓嶈兘涓虹┖', 'error')
+      showToast('名称不能为空', 'error')
       return
     }
     renameWorkspaceTab(editingTabId, name)
     skipInlineRenameBlurRef.current = true
     setEditingTabId(null)
     setEditingTabName('')
-    showToast('宸查噸鍛藉悕', 'success')
+    showToast('已重命名', 'success')
   }, [editingTabId, editingTabName, renameWorkspaceTab, showToast])
 
   const handleRename = useCallback((id: string) => {

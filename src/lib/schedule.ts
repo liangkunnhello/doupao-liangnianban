@@ -54,7 +54,7 @@ export function getScheduleCompletionAction(item: ScheduleItem, relatedTasks: Sc
   if (relatedTasks.length === 0) return { type: 'waiting' }
   if (relatedTasks.some((task) => task.status !== 'done' && task.status !== 'error')) return { type: 'waiting' }
 
-  const outputCount = relatedTasks.reduce((count, task) => count + task.outputImages.length, 0)
+  const outputCount = relatedTasks.reduce((count, task) => count + (task.outputImages?.length ?? 0), 0)
   const requestedCount = Math.max(1, Math.floor(item.count || 1))
   if (outputCount >= requestedCount) return { type: 'done' }
 

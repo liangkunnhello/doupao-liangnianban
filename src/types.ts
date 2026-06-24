@@ -387,7 +387,12 @@ export interface AgentConversation {
 
 export interface StoredImage {
   id: string
-  dataUrl: string
+  /** 
+   * 图片的 Base64 数据或 Blob URL。
+   * 当使用本地文件系统存储时，数据库中此字段可为空或保留为 Blob URL（不存入DB），
+   * 但为了兼容 Web 版本和内存缓存，保持该字段可选。
+   */
+  dataUrl?: string
   /** 图片首次存储时间（ms） */
   createdAt?: number
   /** 图片来源：用户上传 / API 生成 / 遮罩 */
@@ -396,6 +401,8 @@ export interface StoredImage {
   width?: number
   /** 原图高度 */
   height?: number
+  /** 本地文件绝对路径（仅 Electron 环境下存在） */
+  localPath?: string
 }
 
 export interface StoredImageThumbnail {
@@ -588,6 +595,7 @@ export interface WorkspaceTab {
   params: TaskParams
   maskDraft: MaskDraft | null
   maskEditorImageId: string | null
+  customOutputPath: string
   tasks: TaskRecord[]
   createdAt: number
   updatedAt: number

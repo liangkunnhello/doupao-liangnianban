@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { useStore, exportData, exportDataToPath, importData, clearData, type SettingsTab } from '../store'
+import { useStore, exportData, exportDataToPath, importData, clearData, type SettingsTab, cleanupAllOrphanedImages, getErrorToastMessage } from '../store'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_FAL_BASE_URL,
@@ -364,10 +364,10 @@ export default function SettingsModal() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('api')
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
-  const [exportWordLibrary, setExportWordLibrary] = useState(true)
+  const [exportImages, setExportImages] = useState(true)
   const [importConfig, setImportConfig] = useState(true)
   const [importTasks, setImportTasks] = useState(true)
-  const [importWordLibrary, setImportWordLibrary] = useState(true)
+  const [importImages, setImportImages] = useState(true)
   const [localSavePath, setLocalSavePath] = useState<string | null>(null)
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
@@ -378,6 +378,20 @@ export default function SettingsModal() {
   const [backupPath, setBackupPath] = useState<string>('')
   const [isSelectingPath, setIsSelectingPath] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
+  const [isCleaningData, setIsCleaningData] = useState(false)
+
+  const handleCleanupOrphaned = async () => {
+    setIsCleaningData(true)
+    try {
+      const deletedCount = await cleanupAllOrphanedImages()
+      showToast(`清理完成，共删除了 ${deletedCount} 张无用图片`, 'success')
+    } catch (err) {
+      console.error(err)
+      showToast(getErrorToastMessage(err instanceof Error ? err.message : '清理失败'), 'error')
+    } finally {
+      setIsCleaningData(false)
+    }
+  }
   const [isImportingJson, setIsImportingJson] = useState(false)
 
   const aboutReleaseVersion = autoUpdate.version || latestRelease?.tag || `v${__APP_VERSION__}`
@@ -876,7 +890,7 @@ export default function SettingsModal() {
     if (file) {
       setIsImportingData(true)
       try {
-        const imported = await importData(file, { importConfig, importTasks, importWordLibrary })
+        const imported = await importData(file, { importConfig, importTasks, importImages })
         if (imported) {
           const nextDraft = normalizeSettings(useStore.getState().settings)
           setDraft(nextDraft)
@@ -2310,22 +2324,22 @@ export default function SettingsModal() {
                     <Checkbox
                       checked={exportConfig}
                       onChange={setExportConfig}
-                      label="包含配置"
+                      label="包含配置和词条库"
                     />
                     <Checkbox
                       checked={exportTasks}
                       onChange={setExportTasks}
-                      label="包含任务和图片"
+                      label="包含任务和预览图"
                     />
                     <Checkbox
-                      checked={exportWordLibrary}
-                      onChange={setExportWordLibrary}
-                      label="包含词条库"
+                      checked={exportImages}
+                      onChange={setExportImages}
+                      label="包含原始图片"
                     />
                   </div>
                   <button
-                    onClick={() => exportData({ exportConfig, exportTasks, exportWordLibrary })}
-                    disabled={!exportConfig && !exportTasks && !exportWordLibrary}
+                    onClick={() => exportData({ exportConfig, exportTasks, exportImages })}
+                    disabled={!exportConfig && !exportTasks && !exportImages}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     导出所选数据
@@ -2341,22 +2355,22 @@ export default function SettingsModal() {
                     <Checkbox
                       checked={importConfig}
                       onChange={setImportConfig}
-                      label="包含配置"
+                      label="包含配置和词条库"
                     />
                     <Checkbox
                       checked={importTasks}
                       onChange={setImportTasks}
-                      label="包含任务和图片"
+                      label="包含任务和预览图"
                     />
                     <Checkbox
-                      checked={importWordLibrary}
-                      onChange={setImportWordLibrary}
-                      label="包含词条库"
+                      checked={importImages}
+                      onChange={setImportImages}
+                      label="包含原始图片"
                     />
                   </div>
                   <button
                     onClick={() => importInputRef.current?.click()}
-                    disabled={(!importConfig && !importTasks && !importWordLibrary) || isImportingData}
+                    disabled={(!importConfig && !importTasks && !importImages) || isImportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isImportingData ? (
@@ -2378,6 +2392,33 @@ export default function SettingsModal() {
                     className="hidden"
                     onChange={handleImport}
                   />
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <TrashIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">清理工具</h4>
+                  </div>
+                  <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                    应用可能会遗留一些没有被任何任务或历史对话引用的“孤立图片”，导致存储占用过大。您可以通过一键清理来释放磁盘空间。
+                  </div>
+                  <button
+                    onClick={handleCleanupOrphaned}
+                    disabled={isCleaningData}
+                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                  >
+                    {isCleaningData ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        清理中...
+                      </>
+                    ) : (
+                      '清理孤立图片'
+                    )}
+                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-red-100/50 bg-red-50/30 p-4 dark:border-red-500/10 dark:bg-red-500/5 space-y-4 shadow-sm">
@@ -2570,7 +2611,7 @@ export default function SettingsModal() {
                             const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
                             const fileName = `doupao_backup_${ts}.zip`
                             const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
-                            const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true })
+                            const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true })
                             if (success) {
                               showToast(`备份已保存到桌面：${fileName}`, 'success')
                             } else {
@@ -2599,9 +2640,46 @@ export default function SettingsModal() {
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-xs text-gray-400 dark:text-gray-500">共 {backups.length} 个备份</span>
-                        {backups.length > 0 && (
-                          <div className="flex items-center gap-2">
-                            {!isSelectMode ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              const input = document.createElement('input')
+                              input.type = 'file'
+                              input.accept = '.json'
+                              input.onchange = async (e) => {
+                                const file = (e.target as HTMLInputElement).files?.[0]
+                                if (!file) return
+                                try {
+                                  const text = await file.text()
+                                  JSON.parse(text) // Validate JSON
+                                  const backupPath = await getBackupPath()
+                                  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+                                  const fileName = `doupao_backup_imported_${ts}.json`
+                                  const targetPath = backupPath + '/' + fileName
+                                  const { saveText } = window.electronAPI as any
+                                  if (saveText) {
+                                    const success = await saveText(targetPath, text)
+                                    if (success) {
+                                      showToast('外部备份已导入', 'success')
+                                      setBackups(await getBackupList())
+                                    } else {
+                                      showToast('导入失败，无法保存到备份目录', 'error')
+                                    }
+                                  } else {
+                                    showToast('导入失败，当前环境不支持', 'error')
+                                  }
+                                } catch (err) {
+                                  showToast('无效的 JSON 备份文件', 'error')
+                                }
+                              }
+                              input.click()
+                            }}
+                            className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-100 dark:bg-white/[0.08] hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors"
+                          >
+                            导入外部 JSON
+                          </button>
+                          {backups.length > 0 && (
+                            !isSelectMode ? (
                               <button
                                 onClick={() => {
                                   setIsSelectMode(true)
@@ -2659,9 +2737,9 @@ export default function SettingsModal() {
                                   取消
                                 </button>
                               </>
-                            )}
-                          </div>
-                        )}
+                            )
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -2726,12 +2804,14 @@ export default function SettingsModal() {
                                     onClick={() =>
                                       setConfirmDialog({
                                         title: '恢复备份',
-                                        message: `确定要恢复到「${displayDate}」的备份吗？当前数据将被覆盖，此操作不可撤销。`,
+                                        message: `确定要恢复到「${displayDate}」的备份吗？当前数据将被覆盖，应用将重启，此操作不可撤销。`,
                                         action: async () => {
                                           const success = await restoreFromBackupFile(backupPath)
                                           if (success) {
-                                            showToast('备份已恢复，请刷新页面以生效', 'success')
-                                            setBackups(await getBackupList())
+                                            showToast('备份已恢复，即将重启应用...', 'success')
+                                            setTimeout(() => {
+                                              window.location.reload()
+                                            }, 1000)
                                           } else {
                                             showToast('恢复备份失败', 'error')
                                           }

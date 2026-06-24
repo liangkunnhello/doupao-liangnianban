@@ -15,7 +15,7 @@ export default function UpdateReleaseNotesModal() {
     if (!isElectronEnv()) return
     if (autoUpdate.status !== 'downloaded' || !autoUpdate.version) return
 
-    const dismissedVersion = (() => { try { return window.sessionStorage.getItem(DISMISSED_VERSION_KEY) } catch { return null } })()
+    const dismissedVersion = window.sessionStorage.getItem(DISMISSED_VERSION_KEY)
     if (dismissedVersion === autoUpdate.version) return
 
     setVisibleVersion(autoUpdate.version)
@@ -29,7 +29,7 @@ export default function UpdateReleaseNotesModal() {
   if (!visibleVersion || autoUpdate.status !== 'downloaded') return null
 
   const close = () => {
-    try { window.sessionStorage.setItem(DISMISSED_VERSION_KEY, visibleVersion) } catch {}
+    window.sessionStorage.setItem(DISMISSED_VERSION_KEY, visibleVersion)
     setVisibleVersion(null)
   }
 

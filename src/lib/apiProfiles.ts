@@ -67,7 +67,13 @@ export const DEFAULT_MAX_RETRIES = 3
 export const API_IMAGES_MODE_MAX_N = 10
 
 export function getApiMaxN(profile: ApiProfile): number {
-  if (profile.apiMode === 'images') return API_IMAGES_MODE_MAX_N
+  if (profile.provider === 'fal') return 4
+  if (profile.apiMode === 'responses') return 1
+  // DALL-E 3 only supports n=1
+  if (profile.model.toLowerCase().includes('dall-e-3')) return 1
+  // For other OpenAI compatible models, we default to 1 because many proxies silently drop n>1
+  // If we want to allow more, we could make it configurable, but 1 is safest.
+  if (profile.provider === 'openai') return 1
   return 1
 }
 

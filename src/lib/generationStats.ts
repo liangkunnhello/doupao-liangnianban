@@ -110,7 +110,7 @@ function getTaskFailureCount(task: TaskRecord) {
   if (task.batchItemStatuses?.length) {
     return task.batchItemStatuses.filter((status) => status === 'error').length
   }
-  if (task.status === 'error' && task.outputImages.length === 0 && !task.falRecoverable && !task.customRecoverable) {
+  if (task.status === 'error' && (task.outputImages?.length ?? 0) === 0 && !task.falRecoverable && !task.customRecoverable) {
     return 1
   }
   return 0

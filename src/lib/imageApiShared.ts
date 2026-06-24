@@ -199,14 +199,14 @@ export function isRetryableError(err: unknown): boolean {
   return false
 }
 
-export async function runWithConcurrencyAndRetry<T>(
+export async function runWithConcurrencyAndRetry<T, R>(
   items: T[],
   concurrency: number,
   maxRetries: number,
-  handler: (item: T, index: number) => Promise<CallApiResult>,
-): Promise<PromiseSettledResult<CallApiResult>[]> {
+  handler: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
   if (items.length === 0) return []
-  const results: PromiseSettledResult<CallApiResult>[] = new Array(items.length)
+  const results: PromiseSettledResult<R>[] = new Array(items.length)
   let nextIndex = 0
 
   const worker = async () => {

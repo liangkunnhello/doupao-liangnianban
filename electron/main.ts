@@ -1,21 +1,9 @@
-import { app, BrowserWindow, ipcMain, nativeImage, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { registerIpcHandlers, initLocalSavePath } from './ipc-handlers'
-
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: 'app',
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-    },
-  },
-])
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -144,19 +132,11 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   } else {
-    mainWindow.loadURL('app://./index.html')
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
   mainWindow.webContents.on('preload-error', (_event, preloadPath, err) => {
     console.error('[preload-error] 加载失败:', preloadPath, err)
-  })
-
-  mainWindow.webContents.on('dom-ready', () => {
-    mainWindow?.webContents.executeJavaScript(`
-      if (!window.electronAPI) {
-        console.error('[critical] preload failed to inject electronAPI - environment detection will use userAgent fallback')
-      }
-    `).catch(() => {})
   })
 
   mainWindow.webContents.on('console-message', (_event, level, message) => {
@@ -166,9 +146,10 @@ function createWindow() {
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[renderer-crash] reason=${details.reason} exitCode=${details.exitCode}`)
-    // 不再自动 reload，避免刷新打断生图任务
-    // 如果渲染进程崩溃，用户可手动重启应用
+    console.error('[renderer-crash]', details.reason, details.exitCode)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.reload()
+    }
   })
 
   mainWindow.on('unresponsive', () => {
@@ -189,14 +170,6 @@ process.on('unhandledRejection', (reason) => {
 })
 
 app.whenReady().then(() => {
-  if (!process.env.VITE_DEV_SERVER_URL) {
-    protocol.handle('app', (request) => {
-      const url = new URL(request.url)
-      const filePath = path.join(__dirname, '../dist', url.pathname)
-      return net.fetch('file:///' + path.normalize(filePath).replace(/\\/g, '/'))
-    })
-  }
-
   initLocalSavePath()
   registerIpcHandlers()
 

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteBackup: (backupPath) => ipcRenderer.invoke('fs:delete-backup', { backupPath }),
   saveZipBuffer: (filePath, buffer) => ipcRenderer.invoke('fs:save-zip-buffer', { filePath, buffer }),
   getDesktopPath: () => ipcRenderer.invoke('fs:get-desktop-path'),
+  addAllowedRoot: (dirPath) => ipcRenderer.invoke('fs:add-allowed-root', { dirPath }),
   onUpdateStatus: (callback) => {
     const handler = (_event, ...args) => callback(...args)
     ipcRenderer.on('update:status', handler)

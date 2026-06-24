@@ -175,6 +175,7 @@ function workspaceTab(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     params: { ...DEFAULT_PARAMS },
     maskDraft: null,
     maskEditorImageId: null,
+    customOutputPath: '',
     tasks: [],
     createdAt: 1,
     updatedAt: 1,
@@ -270,7 +271,7 @@ describe('workspace tab defaults', () => {
     expect(state.workspaceTabs).toHaveLength(1)
     expect(state.activeWorkspaceTabId).toBe(state.workspaceTabs[0].id)
     expect(state.workspaceTabs[0]).toMatchObject({
-      name: '标签 1',
+      name: '默认',
       prompt: 'initial prompt',
       tasks: [],
       order: 0,
@@ -483,25 +484,25 @@ describe('schedule state', () => {
   })
 
   it('syncs favorite collection changes to workspace tab task copies immediately', async () => {
-    const normalTask = task({
+    const favoriteTask = task({
       id: 'task-a',
-      isFavorite: false,
-      favoriteCollectionIds: [],
+      isFavorite: true,
+      favoriteCollectionIds: ['collection-a'],
     })
     useStore.setState({
-      tasks: [normalTask],
-      workspaceTabs: [workspaceTab({ tasks: [normalTask] })],
+      tasks: [favoriteTask],
+      workspaceTabs: [workspaceTab({ tasks: [favoriteTask] })],
     })
 
-    await updateTasksFavoriteCollections(['task-a'], [DEFAULT_FAVORITE_COLLECTION_ID])
+    await updateTasksFavoriteCollections(['task-a'], ['collection-b'])
 
     expect(useStore.getState().tasks[0]).toMatchObject({
       isFavorite: true,
-      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+      favoriteCollectionIds: ['collection-b'],
     })
     expect(useStore.getState().workspaceTabs[0].tasks[0]).toMatchObject({
       isFavorite: true,
-      favoriteCollectionIds: [DEFAULT_FAVORITE_COLLECTION_ID],
+      favoriteCollectionIds: ['collection-b'],
     })
   })
 
@@ -1201,6 +1202,8 @@ describe('data import', () => {
     useStore.setState({
       tasks: [],
       agentConversations: [],
+      favoriteCollections: [],
+      defaultFavoriteCollectionId: null,
       activeAgentConversationId: null,
       showToast: vi.fn(),
     })
@@ -1225,8 +1228,10 @@ describe('data import', () => {
       tasks: [importedTask],
       favoriteCollections: importedCollections,
       defaultFavoriteCollectionId: importedCollections[1].id,
+      wordLibraryGroups: [],
+      wordLibraryEntries: [],
       imageFiles: {},
-    }), { importConfig: false, importTasks: true })
+    }), { importConfig: true, importTasks: true })
 
     const state = useStore.getState()
     expect(imported).toBe(true)
@@ -1391,7 +1396,7 @@ describe('data import', () => {
         entries: ['cat'],
         draw_count: 1,
       }],
-    }), { importConfig: false, importTasks: false, importWordLibrary: true })
+    }), { importConfig: true, importTasks: false })
 
     expect(imported).toBe(true)
     expect(useStore.getState().wordLibraryEntries).toEqual([expect.objectContaining({
@@ -1420,7 +1425,7 @@ describe('data import', () => {
         entries: 'cat',
         draw_count: '2',
       } as unknown as NonNullable<ExportData['wordLibraryEntries']>[number]],
-    }), { importConfig: false, importTasks: false, importWordLibrary: true })
+    }), { importConfig: true, importTasks: false })
 
     expect(imported).toBe(true)
     expect(useStore.getState().wordLibraryEntries).toEqual([{
@@ -2357,7 +2362,7 @@ describe('reused task API profile', () => {
     const state = useStore.getState()
     expect(state.settings.activeProfileId).toBe(openaiProfile.id)
     expect(state.reusedTaskApiProfileId).toBe(falProfile.id)
-    expect(state.params).toMatchObject({ n: 8, size: '1360x1024', quality: 'high' })
+    expect(state.params).toMatchObject({ n: 8, size: 'auto', quality: 'auto' })
     expect(state.showToast).toHaveBeenCalledWith('已临时复用该任务的 API 配置「fal 配置」', 'success')
   })
 

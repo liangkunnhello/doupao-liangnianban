@@ -1,4 +1,5 @@
 import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
+import { isElectron, saveRawCacheImageToLocal } from './localSave'
 
 const DB_NAME = 'gpt-image-playground'
 const DB_VERSION = 4
@@ -176,7 +177,28 @@ export async function getImageThumbnail(id: string): Promise<StoredImageThumbnai
     return thumbnail
   }
 
-  const metadata = await safeCreateImageThumbnail(image.dataUrl)
+  // Fallback to reading actual image data if localPath is used instead of dataUrl
+  let dataUrlToHash = image.dataUrl
+  if (!dataUrlToHash && image.localPath && isElectron()) {
+    try {
+      const fileResult = await window.electronAPI?.readFileBuffer(image.localPath)
+      if (fileResult) {
+        const mime = fileResult.name.endsWith('webp') ? 'image/webp' : fileResult.name.endsWith('jpg') || fileResult.name.endsWith('jpeg') ? 'image/jpeg' : 'image/png'
+        const blob = new Blob([fileResult.data], { type: mime })
+        dataUrlToHash = await new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.readAsDataURL(blob)
+        })
+      }
+    } catch (e) {
+      console.error('Failed to read local file for thumbnail generation:', e)
+    }
+  }
+
+  if (!dataUrlToHash) return undefined
+
+  const metadata = await safeCreateImageThumbnail(dataUrlToHash)
   if (!metadata.thumbnailDataUrl) return undefined
   const thumbnail: StoredImageThumbnail = {
     id,
@@ -268,11 +290,18 @@ function hashDataUrlFallback(dataUrl: string): string {
 export async function storeImage(dataUrl: string, source: NonNullable<StoredImage['source']> = 'upload'): Promise<string> {
   const id = await hashDataUrl(dataUrl)
   const existing = await getImage(id)
+  
+  let localPath: string | undefined
+  if (isElectron()) {
+    localPath = await saveRawCacheImageToLocal(id, dataUrl) || undefined
+  }
+
   if (!existing) {
     const thumbnail = await safeCreateImageThumbnail(dataUrl)
     await putImage({
       id,
-      dataUrl,
+      dataUrl: localPath ? undefined : dataUrl,
+      localPath,
       createdAt: Date.now(),
       source,
       width: thumbnail.width,
@@ -287,10 +316,19 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
         thumbnailVersion: THUMBNAIL_VERSION,
       })
     }
-  } else if ((await getStoredImageThumbnail(id))?.thumbnailVersion !== THUMBNAIL_VERSION) {
-    const thumbnail = await safeCreateImageThumbnail(existing.dataUrl)
+  } else if ((await getStoredImageThumbnail(id))?.thumbnailVersion !== THUMBNAIL_VERSION || (!existing.localPath && localPath)) {
+    const thumbnail = await safeCreateImageThumbnail(dataUrl)
+    const updates: Partial<StoredImage> = {}
     if (thumbnail.width && thumbnail.height && (existing.width !== thumbnail.width || existing.height !== thumbnail.height)) {
-      await putImage({ ...existing, width: thumbnail.width, height: thumbnail.height })
+      updates.width = thumbnail.width
+      updates.height = thumbnail.height
+    }
+    if (!existing.localPath && localPath) {
+      updates.localPath = localPath
+      updates.dataUrl = undefined // Clear dataUrl from DB if we successfully saved to localPath
+    }
+    if (Object.keys(updates).length > 0) {
+      await putImage({ ...existing, ...updates })
     }
     if (thumbnail.thumbnailDataUrl) {
       await putImageThumbnail({

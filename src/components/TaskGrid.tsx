@@ -49,7 +49,11 @@ export default function TaskGrid() {
       if (filterFavorite) {
         if (!t.isFavorite) return false
         if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t).includes(activeFavoriteCollectionId)) return false
+      } else {
+        // 在普通生图界面（非收藏夹模式下），不显示已收藏的专用收藏卡片
+        if (t.isFavorite) return false
       }
+      
       if (filterStatus !== 'all') {
         if (filterStatus === 'error') {
           if (t.status !== 'error' && !(t.status === 'done' && t.batchItemStatuses?.some((s) => s === 'error'))) return false

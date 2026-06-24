@@ -20,7 +20,7 @@ function getSuccessCount(task: TaskRecord): number {
   if (task.batchItemStatuses?.length) {
     return task.batchItemStatuses.filter((status) => status === 'done').length
   }
-  return task.outputImages.length
+  return task.outputImages?.length ?? 0
 }
 
 function getTaskSourceLabel(task: TaskRecord): string {
@@ -67,14 +67,14 @@ function hasPartialFailure(task: TaskRecord): boolean {
   return Boolean(
     task.batchItemStatuses?.some((status) => status === 'error') ||
     task.batchItemErrors?.length ||
-    (task.status === 'done' && task.params.n > task.outputImages.length),
+    (task.status === 'done' && task.params.n > (task.outputImages?.length ?? 0)),
   )
 }
 
 function getRunningStage(task: TaskRecord): TaskProgressStage {
   if (task.progressStage) return task.progressStage
   if (task.falRequestId || task.customTaskId) return 'relay-received'
-  if (task.outputImages.length > 0) return 'generating'
+  if ((task.outputImages?.length ?? 0) > 0) return 'generating'
   return 'requesting'
 }
 

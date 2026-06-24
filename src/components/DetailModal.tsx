@@ -11,10 +11,14 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
-import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
+import { replaceImageMentionsForApi, getPromptMentionParts } from '../lib/promptImageMentions'
 import { getHoverPreviewPosition, getHoverPreviewSize } from '../lib/hoverPreviewPosition'
 import { getLocalImageSaveDirectory, isElectron as isElectronEnv, openInExplorer } from '../lib/localSave'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, FolderOpenIcon, LinkIcon, TrashIcon } from './icons'
+import Select from './Select'
+import SizePickerModal from './SizePickerModal'
+import { type TaskParams, DEFAULT_PARAMS } from '../types'
+import { updateTaskInStore } from '../store'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -69,6 +73,42 @@ export default function DetailModal() {
   const downloadAllTooltip = useTooltip()
   const openImageDirectoryTooltip = useTooltip()
 
+  const task = useMemo(
+    () => tasks.find((t) => t.id === detailTaskId) ?? null,
+    [tasks, detailTaskId],
+  )
+
+  const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
+  
+  const VAR_COLOR_MAP = useMemo(() => {
+    const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
+    const map: Record<string, string> = {}
+    const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
+    sorted.forEach((entry, i) => {
+      map[entry.key] = colors[i % colors.length]
+    })
+    return map
+  }, [wordLibraryEntries])
+
+  const promptParts = useMemo(() => task ? getPromptMentionParts(task.prompt || '', []) : [], [task?.prompt])
+
+  const [isEditingParams, setIsEditingParams] = useState(false)
+  const [editPrompt, setEditPrompt] = useState('')
+  const editPromptParts = useMemo(() => getPromptMentionParts(editPrompt || '', []), [editPrompt])
+  const [editParams, setEditParams] = useState<TaskParams>(DEFAULT_PARAMS)
+  const [showSizePicker, setShowSizePicker] = useState(false)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  
+  useEffect(() => {
+    if (task && task.isFavorite) {
+      setIsEditingParams(true)
+      setEditPrompt(task.prompt)
+      setEditParams(task.params)
+    } else {
+      setIsEditingParams(false)
+    }
+  }, [task?.id]) // Run once when the modal opens for a task
+
   const clearTextSelection = () => {
     const selection = window.getSelection()
     if (selection && !selection.isCollapsed) selection.removeAllRanges()
@@ -97,14 +137,11 @@ export default function DetailModal() {
     setHoverPreview({ imageId, src, ...position, ...size })
   }
 
-  const task = useMemo(
-    () => tasks.find((t) => t.id === detailTaskId) ?? null,
-    [tasks, detailTaskId],
-  )
   const containingTab = useMemo(
     () => detailTaskId ? workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === detailTaskId)) : undefined,
     [detailTaskId, workspaceTabs],
   )
+
   const streamPreviewItems = useMemo(() => {
     const slotEntries = streamPreviewSlots
       ? Object.entries(streamPreviewSlots)
@@ -268,7 +305,7 @@ export default function DetailModal() {
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
-  const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
+  const hasPartialSuccess = task.status === 'error' && (task.outputImages?.length ?? 0) > 0 && !isFalReconnecting && !isCustomReconnecting
   const progressDisplay = getTaskProgressDisplay(task)
   const showProgressDetails = task.status !== 'done' || progressDisplay.cardLabel === '数量不够'
   const rawImageUrls = task.rawImageUrls ?? []
@@ -361,8 +398,41 @@ export default function DetailModal() {
       showToast('参考图已复制', 'success')
     } catch (err) {
       console.error(err)
-      showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')
+      showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')     
     }
+  }
+
+  const handleStartEdit = () => {
+    if (!task) return
+    setEditPrompt(task.prompt)
+    setEditParams(task.params)
+    setIsEditingParams(true)
+  }
+
+  const handleSaveEdit = () => {
+    if (!task) return
+    updateTaskInStore(task.id, { prompt: editPrompt, params: editParams })
+    setIsEditingParams(false)
+  }
+
+  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value
+    setEditPrompt(val)
+    if (task && task.isFavorite) {
+      updateTaskInStore(task.id, { prompt: val })
+    }
+  }
+
+  const handleParamChange = (newParams: Partial<TaskParams>) => {
+    const updated = { ...editParams, ...newParams }
+    setEditParams(updated)
+    if (task && task.isFavorite) {
+      updateTaskInStore(task.id, { params: updated })
+    }
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditingParams(false)
   }
 
   const handleDownloadCurrentOutput = async (e: React.MouseEvent) => {
@@ -491,7 +561,7 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-1/2 w-full h-72 md:h-auto bg-gray-100 dark:bg-black/20 relative flex flex-col flex-shrink-0 min-h-[18rem]">
-          {outputLen > 0 && (
+          {!task.isFavorite && outputLen > 0 && (
             <div className="flex items-center justify-between gap-3 border-b border-black/5 px-4 py-3 dark:border-white/[0.06]">
               <div data-selectable-text className="min-w-0 flex items-center gap-1.5">
                 {currentImageRatio && currentImageSize ? (
@@ -546,6 +616,16 @@ export default function DetailModal() {
           )}
 
           {outputLen > 0 ? (
+            task.isFavorite ? (
+              <div className="flex-1 w-full h-full p-4 flex items-center justify-center bg-black/5">
+                <img 
+                  src={outputPreviewSrcs[task.outputImages[0]] || ''} 
+                  className="max-w-full max-h-full object-contain drop-shadow-md rounded-md" 
+                  alt="Preview"
+                  onClick={() => setLightboxImageId(task.outputImages[0], task.outputImages)}
+                />
+              </div>
+            ) : (
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {task.outputImages.map((imageId, index) => {
@@ -567,6 +647,7 @@ export default function DetailModal() {
                 })}
               </div>
             </div>
+            )
           ) : task.status === 'running' ? (
             <div className="m-auto flex flex-col items-center gap-3 text-blue-400"><svg className="h-10 w-10 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{formatDuration() && <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white">{formatDuration()}</span>}</div>
           ) : task.status === 'error' ? (
@@ -614,7 +695,7 @@ export default function DetailModal() {
               <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                 输入内容
               </h3>
-              {task.prompt && !showPendingPrompt && (
+              {!isEditingParams && task.prompt && !showPendingPrompt && (
                 <button
                   onClick={handleCopyPrompt}
                   className="p-1 rounded text-gray-400 hover:bg-gray-100 dark:text-gray-500 dark:hover:bg-white/[0.06] transition"
@@ -623,7 +704,7 @@ export default function DetailModal() {
                   <CopyIcon className="h-4 w-4" />
                 </button>
               )}
-              {showPromptWarning && (
+              {!isEditingParams && showPromptWarning && (
                 <span className="relative inline-flex">
                   <button
                     type="button"
@@ -638,17 +719,86 @@ export default function DetailModal() {
                 </span>
               )}
             </div>
-            {showPendingPrompt ? (
+            {isEditingParams ? (
+              <div className="relative w-full h-32 mb-4 bg-gray-50 dark:bg-black/20 rounded-xl border border-gray-200 dark:border-white/10 focus-within:ring-2 focus-within:ring-blue-500/50">
+                <div 
+                  ref={overlayRef}
+                  className="absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden text-gray-700 dark:text-gray-300"
+                  aria-hidden="true"
+                >
+                  {editPrompt ? (
+                    editPromptParts.map((part, index) => {
+                      if (part.type === 'variable') {
+                        const color = VAR_COLOR_MAP[part.varName] ?? ''
+                        return (
+                          <span key={index}
+                            className="inline-flex items-center px-1 rounded text-xs font-medium"
+                            style={{
+                              backgroundColor: color ? `${color}18` : 'rgba(156,163,175,0.1)',
+                              color: color || '#9ca3af',
+                              borderColor: color ? color : 'rgba(156,163,175,0.2)',
+                              borderWidth: '1px',
+                              borderStyle: 'solid'
+                            }}
+                          >
+                            {part.text}
+                          </span>
+                        )
+                      } else {
+                        return <span key={index}>{part.text}</span>
+                      }
+                    })
+                  ) : (
+                    <span className="text-gray-400">输入提示词（可包含词条）...</span>
+                  )}
+                  {/* Invisible character at the end to ensure height matches if ending with newline */}
+                  {editPrompt.endsWith('\n') && <br />}
+                </div>
+                <textarea
+                  value={editPrompt}
+                  onChange={handlePromptChange}
+                  onScroll={(e) => {
+                    if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop
+                  }}
+                  className="absolute inset-0 w-full h-full px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words bg-transparent outline-none resize-none custom-scrollbar text-transparent caret-gray-800 dark:caret-gray-200"
+                  spellCheck="false"
+                />
+              </div>
+            ) : showPendingPrompt ? (
               <div className="mb-4 leading-relaxed">
                 <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
             ) : (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-4">
-                {task.prompt || '(无提示词)'}
+                {task.prompt ? (
+                  promptParts.map((part, index) => {
+                    if (part.type === 'variable') {
+                      const color = VAR_COLOR_MAP[part.varName] ?? ''
+                      return (
+                        <span key={index}
+                          className="inline-flex items-center px-1 rounded text-xs font-medium"
+                          style={{
+                            backgroundColor: color ? `${color}18` : 'rgba(156,163,175,0.1)',
+                            color: color || '#9ca3af',
+                            borderColor: color ? color : 'rgba(156,163,175,0.2)',
+                            borderWidth: '1px',
+                            borderStyle: 'solid'
+                          }}
+                        >
+                          {part.text}
+                        </span>
+                      )
+                    } else {
+                      return <span key={index}>{part.text}</span>
+                    }
+                  })
+                ) : (
+                  '(无提示词)'
+                )}
               </p>
             )}
-            {showRevisedPrompt && currentRevisedPrompt && (
+            {!isEditingParams && showRevisedPrompt && currentRevisedPrompt && (
               <div className="mb-4">
                 <ActualValueBadge
                   value={currentRevisedPrompt}
@@ -724,52 +874,149 @@ export default function DetailModal() {
             <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
               参数配置
             </h3>
-            {showSourceInfo && (
+            {!isEditingParams && showSourceInfo && (
               <div className="mb-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
-                <span className="text-gray-400 dark:text-gray-500">来源</span>
+                <span className="text-gray-400 dark:text-gray-500">来源</span>  
                 <br />
                 <span className="font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</span>
                 <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · {taskModel}</span>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">尺寸</span>
+            {!isEditingParams && (task.scheduledOutputPath || task.scheduledOutputSubFolder) && (   
+              <div className="mb-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
+                <span className="text-gray-400 dark:text-gray-500">输出地址</span>
                 <br />
-                <DetailParamValue task={task} paramKey="size" className="font-medium" actualParams={currentActualParams} />
+                <span className="font-medium text-gray-700 dark:text-gray-200 break-all select-text">
+                  {task.scheduledOutputPath || task.scheduledOutputSubFolder}   
+                </span>
               </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">质量</span>
-                <br />
-                <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">格式</span>
-                <br />
-                <DetailParamValue task={task} paramKey="output_format" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                <span className="text-gray-400 dark:text-gray-500">审核</span>
-                <br />
-                <DetailParamValue task={task} paramKey="moderation" className="font-medium" actualParams={currentActualParams} />
-              </div>
-              {!isAgentTask && (
-                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                  <span className="text-gray-400 dark:text-gray-500">数量</span>
-                  <br />
-                  <DetailParamValue task={task} paramKey="n" className="font-medium" />
+            )}
+            
+            {isEditingParams && task.isFavorite ? (
+              <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 flex flex-col justify-center">
+                  <span className="text-gray-400 dark:text-gray-500 mb-1">尺寸</span>
+                  <Select
+                    value={editParams.size || DEFAULT_PARAMS.size}
+                    onChange={(val) => handleParamChange({ size: val as string })}
+                    options={[
+                      { label: 'auto', value: 'auto' },
+                      { label: '1024x1024 (1:1 推荐)', value: '1024x1024' },
+                      { label: '1536x1024 (3:2 推荐)', value: '1536x1024' },
+                      { label: '1024x1536 (2:3 推荐)', value: '1024x1536' },
+                      { label: '1280x720 (16:9 推荐)', value: '1280x720' },
+                      { label: '720x1280 (9:16 推荐)', value: '720x1280' },
+                      { label: '1024x768 (4:3)', value: '1024x768' },
+                      { label: '768x1024 (3:4)', value: '768x1024' },
+                      { label: '2048x2048 (1:1 推荐)', value: '2048x2048' },
+                      { label: '2160x1440 (3:2)', value: '2160x1440' },
+                      { label: '1440x2160 (2:3)', value: '1440x2160' },
+                      { label: '2560x1440 (16:9)', value: '2560x1440' },
+                      { label: '1440x2560 (9:16)', value: '1440x2560' },
+                      { label: '3840x2160 (16:9 推荐)', value: '3840x2160' },
+                      { label: '2160x3840 (9:16 推荐)', value: '2160x3840' }
+                    ]}
+                    className="w-full font-medium text-gray-700 dark:text-gray-200 px-2 py-1 rounded bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10"
+                  />
                 </div>
-              )}
-              {task.params.output_compression != null && (
-                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                  <span className="text-gray-400 dark:text-gray-500">压缩率</span>
-                  <br />
-                  <DetailParamValue task={task} paramKey="output_compression" className="font-medium" actualParams={currentActualParams} />
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 flex flex-col justify-center">
+                  <span className="text-gray-400 dark:text-gray-500 mb-1">质量</span>
+                  <Select
+                    value={editParams.quality}
+                    onChange={(val) => handleParamChange({ quality: val as any })}
+                    options={[
+                      { label: 'auto', value: 'auto' },
+                      { label: 'low', value: 'low' },
+                      { label: 'medium', value: 'medium' },
+                      { label: 'high', value: 'high' }
+                    ]}
+                    className="w-full font-medium text-gray-700 dark:text-gray-200 px-2 py-1 rounded bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10"
+                  />
                 </div>
-              )}
-            </div>
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 flex flex-col justify-center">
+                  <span className="text-gray-400 dark:text-gray-500 mb-1">格式</span>
+                  <Select
+                    value={editParams.output_format}
+                    onChange={(val) => handleParamChange({ output_format: val as any })}
+                    options={[
+                      { label: 'png', value: 'png' },
+                      { label: 'jpeg', value: 'jpeg' },
+                      { label: 'webp', value: 'webp' }
+                    ]}
+                    className="w-full font-medium text-gray-700 dark:text-gray-200 px-2 py-1 rounded bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10"
+                  />
+                </div>
+                {!isAgentTask && (
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 flex flex-col justify-center">
+                    <span className="text-gray-400 dark:text-gray-500 mb-1">数量</span>
+                    <input
+                      type="number"
+                      value={editParams.n}
+                      onChange={(e) => handleParamChange({ n: Math.max(1, parseInt(e.target.value) || 1) })}
+                      min={1}
+                      className="w-full font-medium text-gray-700 dark:text-gray-200 px-2 py-1 rounded bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10 focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                    />
+                  </div>
+                )}
+                {task.isFavorite && (
+                  <div className="col-span-2 bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 flex flex-col justify-center">
+                    <span className="text-gray-400 dark:text-gray-500 mb-1">输出地址</span>
+                    <input
+                      type="text"
+                      value={task.scheduledOutputPath || task.scheduledOutputSubFolder || ''}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        updateTaskInStore(task.id, { 
+                          scheduledOutputPath: val,
+                          scheduledOutputSubFolder: val 
+                        })
+                      }}
+                      placeholder="输入保存路径..."
+                      className="w-full font-medium text-gray-700 dark:text-gray-200 px-2 py-1 rounded bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10 focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">尺寸</span> 
+                  <br />
+                  <DetailParamValue task={task} paramKey="size" className="font-medium" actualParams={currentActualParams} />
+                </div>
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">质量</span>
+                  <br />
+                  <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
+                </div>
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">格式</span>
+                  <br />
+                  <DetailParamValue task={task} paramKey="output_format" className="font-medium" actualParams={currentActualParams} />
+                </div>
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">审核</span> 
+                  <br />
+                  <DetailParamValue task={task} paramKey="moderation" className="font-medium" actualParams={currentActualParams} />
+                </div>
+                {!isAgentTask && (
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">数量</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="n" className="font-medium" />
+                  </div>
+                )}
+                {task.params.output_compression != null && (
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">压缩率</span>
+                    <br />
+                    <DetailParamValue task={task} paramKey="output_compression" className="font-medium" actualParams={currentActualParams} />
+                  </div>
+                )}
+              </div>
+            )}
 
-            {showProgressDetails && (
+            {!isEditingParams && showProgressDetails && (
               <div className="mb-4 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
                 <div className="mb-1 text-gray-400 dark:text-gray-500">进度情况</div>
                 <div className="font-medium text-gray-700 dark:text-gray-200">{progressDisplay.detailTitle}</div>
@@ -787,18 +1034,37 @@ export default function DetailModal() {
             )}
 
             {/* 时间 */}
-            <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              <span>创建于 {formatTime(task.createdAt)}</span>
-              {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
-            </div>
+            {!task.isFavorite && (
+              <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+                <span>创建于 {formatTime(task.createdAt)}</span>
+                {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
+              </div>
+            )}
           </div>
 
           {/* 操作按钮 */}
           <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
-            <button
-              onClick={handleReuse}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
-            >
+            {isEditingParams && !task.isFavorite ? (
+              <div className="col-span-4 sm:flex-1 flex gap-2 w-full justify-end">
+                <button
+                  onClick={handleCancelEdit}
+                  className="flex-1 sm:flex-none px-6 py-2 flex items-center justify-center rounded-xl transition bg-gray-50 text-gray-700 hover:bg-gray-100 dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/10 text-sm font-medium"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  className="flex-1 sm:flex-none px-6 py-2 flex items-center justify-center rounded-xl transition bg-blue-500 text-white hover:bg-blue-600 shadow-sm text-sm font-medium"
+                >
+                  保存修改
+                </button>
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={handleReuse}
+                  className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+                >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
               </svg>
@@ -819,22 +1085,33 @@ export default function DetailModal() {
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
               删除任务
             </button>
-            <button
-              onClick={handleToggleFavorite}
-              className={`col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition ${
-                task.isFavorite
-                  ? 'bg-yellow-50 text-yellow-500 hover:bg-yellow-100 dark:bg-yellow-500/10 dark:hover:bg-yellow-500/20'
-                  : 'bg-gray-50 text-gray-400 hover:bg-yellow-50 hover:text-yellow-500 dark:bg-white/[0.04] dark:hover:bg-yellow-500/10'
-              }`}
-              title={task.isFavorite ? '编辑收藏夹' : '收藏任务'}
-            >
-              <svg className="w-5 h-5" fill={task.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-              </svg>
-            </button>
+            {!task.isFavorite && (
+              <button
+                onClick={handleToggleFavorite}
+                className="col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition bg-gray-50 text-gray-400 hover:bg-yellow-50 hover:text-yellow-500 dark:bg-white/[0.04] dark:hover:bg-yellow-500/10"
+                title="收藏任务"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
+              </button>
+            )}
+            </>
+            )}
           </div>
         </div>
       </div>
+
+      {showSizePicker && (
+        <SizePickerModal
+          currentSize={editParams.size}
+          onSelect={(size) => {
+            handleParamChange({ size })
+            setShowSizePicker(false)
+          }}
+          onClose={() => setShowSizePicker(false)}
+        />
+      )}
 
       {hoverPreview && (
         <div

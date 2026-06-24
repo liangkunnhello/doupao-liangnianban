@@ -13,12 +13,12 @@ import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { useTooltip } from '../hooks/useTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
-import { selectLocalSaveDirectory, readDirectory, readFileBuffer, joinPath } from '../lib/localSave'
+import { selectLocalSaveDirectory, readDirectory, readFileBuffer, joinPath, checkPathExists } from '../lib/localSave'
 import { storeImage, hashDataUrl } from '../lib/db'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
-import { CloseIcon } from './icons'
+import { CloseIcon, FolderOpenIcon } from './icons'
 
 
 function getMentionTagTextLength(el: Element) {
@@ -466,6 +466,8 @@ export default function InputBar() {
   const setInputImageFolder = useStore((s) => s.setInputImageFolder)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
+  const customOutputPath = useStore((s) => s.customOutputPath)
+  const setCustomOutputPath = useStore((s) => s.setCustomOutputPath)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
@@ -1087,17 +1089,7 @@ export default function InputBar() {
     setNInput(agentAutoImageCount ? 'auto' : String(params.n))
   }, [agentAutoImageCount, params.n])
 
-  const prevParamsRef = useRef(params)
-  useEffect(() => {
-    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, { hasInputImages: inputImages.length > 0 })
-    const patch = getChangedParams(params, normalizedParams)
-    if (Object.keys(patch).length) {
-      prevParamsRef.current = { ...params, ...patch }
-      setParams(patch)
-    } else {
-      prevParamsRef.current = params
-    }
-  }, [inputImages.length, effectiveSettings, setParams])
+  // 移除自动规范化参数的功能，让用户设置的参数保持不变
 
   useEffect(() => () => {
     if (imageHintTimerRef.current != null) {
@@ -1352,11 +1344,8 @@ export default function InputBar() {
     e.target.value = ''
   }
 
-  const handleSelectFolder = async () => {
+  const loadFolderImages = async (folderPath: string, isReload = false) => {
     try {
-      const folderPath = await selectLocalSaveDirectory()
-      if (!folderPath) return
-
       const files = await readDirectory(folderPath)
       const imageFiles = files
         .filter((f) => /\.(jpe?g|png|gif|webp|bmp)$/i.test(f))
@@ -1402,11 +1391,34 @@ export default function InputBar() {
       if (imageFiles.length > MAX_FOLDER_IMAGES) {
         showToast(`文件夹图片过多，已读取前 ${MAX_FOLDER_IMAGES} 张`, 'info')
       } else {
-        showToast(`已读取 ${imageIds.length} 张图片`, 'success')
+        showToast(isReload ? `已重新读取 ${imageIds.length} 张图片` : `已读取 ${imageIds.length} 张图片`, 'success')
       }
+    } catch (err) {
+      showToast(`${isReload ? '重新加载' : '选择'}文件夹失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  }
+
+  const handleSelectFolder = async () => {
+    try {
+      const folderPath = await selectLocalSaveDirectory()
+      if (!folderPath) return
+      await loadFolderImages(folderPath)
     } catch (err) {
       showToast(`选择文件夹失败：${err instanceof Error ? err.message : String(err)}`, 'error')
     }
+  }
+
+  const handlePickOutputPath = async () => {
+    try {
+      const dir = await selectLocalSaveDirectory()
+      if (dir) setCustomOutputPath(dir)
+    } catch (err) {
+      showToast(`选择输出目录失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  }
+
+  const handleValidateOutputPath = async (path: string) => {
+    // 简化验证，避免误报
   }
 
   const handleReplaceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2300,6 +2312,20 @@ export default function InputBar() {
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
         <ButtonTooltip visible={streamConcurrentByN && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
       </label>
+      <label className="relative flex flex-col gap-0.5 col-span-2">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">输出地址</span>
+        <div className="flex items-center gap-1">
+          <input
+            value={customOutputPath}
+            onChange={(e) => setCustomOutputPath(e.target.value)}
+            onBlur={(e) => void handleValidateOutputPath(e.target.value)}
+            onDoubleClick={handlePickOutputPath}
+            placeholder={customOutputPath ? "" : "留空按标签页文件夹"}
+            title="双击选择文件夹"
+            className="min-w-0 flex-1 px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm focus:ring-1 focus:ring-blue-500/40"
+          />
+        </div>
+      </label>
     </div>
   )
 
@@ -2345,14 +2371,19 @@ export default function InputBar() {
       {showSizePicker && (
         <SizePickerModal
           currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
-          onSelect={(size, postprocessSize) => setParams({
-            ...(params.postprocess_resize_enabled && size !== 'auto'
-              ? { postprocess_size: postprocessSize ?? size }
-              : {
-                  size,
-                  postprocess_resize_enabled: size !== 'auto' ? params.postprocess_resize_enabled : false,
-                }),
-          })}
+          onSelect={(size, postprocessSize) => {
+            const updates: Partial<typeof params> = {}
+            if (size !== 'auto') {
+              updates.size = size
+              if (params.postprocess_resize_enabled && postprocessSize) {
+                updates.postprocess_size = postprocessSize
+              }
+            } else {
+              updates.size = size
+              updates.postprocess_resize_enabled = false
+            }
+            setParams(updates)
+          }}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
           postprocessSettings={{
@@ -2530,6 +2561,15 @@ export default function InputBar() {
                 <span className="text-xs text-blue-600 dark:text-blue-400 shrink-0">
                   {inputImageFolder.imageIds.length} 张
                 </span>
+                <button
+                  onClick={() => loadFolderImages(inputImageFolder.path, true)}
+                  className="shrink-0 p-1 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-500/20 text-blue-500 dark:text-blue-400 transition-colors"
+                  title="重新加载文件夹"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
                 <button
                   onClick={() => setInputImageFolder(null)}
                   className="shrink-0 p-1 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-500/20 text-blue-500 dark:text-blue-400 transition-colors"
@@ -2715,7 +2755,7 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-6')}
+              {renderParams('grid-cols-8')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
                 {/* 转换为变量按钮 */}

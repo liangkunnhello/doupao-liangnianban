@@ -28,6 +28,7 @@ type ElectronAPI = {
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>
   installUpdate: () => Promise<{ success: boolean }>
   getAppVersion: () => Promise<string>
+  addAllowedRoot?: (dirPath: string) => Promise<void>
   isElectron: boolean
 }
 
@@ -98,6 +99,9 @@ export async function readDirectory(dirPath: string): Promise<string[]> {
 export async function checkPathExists(filePath: string): Promise<boolean | null> {
   const api = getAPI()
   if (!api) return null
+  if (api.addAllowedRoot) {
+    await api.addAllowedRoot(filePath)
+  }
   return api.checkExists(filePath)
 }
 
@@ -151,33 +155,6 @@ function getDirectoryBaseName(dirPath: string): string {
   return sanitizeFolderName(parts[parts.length - 1] || 'images')
 }
 
-export function formatFileDate(date = new Date()): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}${month}${day}`
-}
-
-export function getBatchIndexInDir(imagesDir: string, datePrefix: string): Promise<number> {
-  const api = getAPI()
-  if (!api) return Promise.resolve(1)
-  return api.readDir(imagesDir).then((files) => {
-    let maxBatch = 0
-    for (const file of files) {
-      const match = file.match(new RegExp(`^${escapeRegExp(datePrefix)}-(\\d+)-`))
-      if (match) {
-        const batch = parseInt(match[1], 10)
-        if (batch > maxBatch) maxBatch = batch
-      }
-    }
-    return maxBatch + 1
-  }).catch(() => 1)
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 export async function getLocalImageSaveDirectory(subFolder?: string): Promise<string | null> {
   const api = getAPI()
   const basePath = await getLocalSavePath()
@@ -195,8 +172,28 @@ export async function getExplicitImageSaveDirectory(outputDirectory: string): Pr
   if (!api) return null
   const trimmed = resolveOutputDirectoryVariables(outputDirectory.trim())
   if (!trimmed) return null
+  if (api.addAllowedRoot) {
+    await api.addAllowedRoot(trimmed)
+  }
   const ok = await api.ensureDir(trimmed)
   return ok ? trimmed : null
+}
+
+export async function saveRawCacheImageToLocal(id: string, dataUrl: string): Promise<string | null> {
+  const api = getAPI()
+  const basePath = await getLocalSavePath()
+  if (!api || !basePath) return null
+
+  const cacheDir = await ensureSubDir(basePath, 'cache-images')
+  const ext = getImageExtensionFromDataUrl(dataUrl)
+  const filePath = await api.pathJoin(cacheDir, `${id}.${ext}`)
+  
+  const success = await api.saveImage(filePath, dataUrl)
+  return success ? filePath : null
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export async function saveImageToLocal(
@@ -206,7 +203,6 @@ export async function saveImageToLocal(
   ext: string = 'png',
   subFolder?: string,
   outputDirectory?: string,
-  batchIndex?: number,
 ): Promise<string | null> {
   const api = getAPI()
   if (!api) return null
@@ -216,11 +212,38 @@ export async function saveImageToLocal(
     : await getLocalImageSaveDirectory(subFolder)
   if (!imagesDir) return null
   const fileExt = EXT_MAP[ext] || 'png'
-  const datePrefix = formatFileDate()
-  const batch = batchIndex ?? await getBatchIndexInDir(imagesDir, datePrefix)
-  const seq = String(imageIndex + 1).padStart(2, '0')
-  const fileName = `${datePrefix}-${batch}-${seq}.${fileExt}`
-  const filePath = await api.pathJoin(imagesDir, fileName)
+  const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
+  let fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
+  let filePath = await api.pathJoin(imagesDir, fileName)
+
+  // 避免覆盖：如果文件已存在，则自动查找当前目录下的最大序号并递增
+  if (await api.checkExists(filePath)) {
+    let maxIndex = 0
+    try {
+      const files = await api.readDir(imagesDir)
+      const regex = new RegExp(`^${escapeRegExp(fileBaseName)}-(\\d+)\\.`)
+      for (const file of files) {
+        const match = file.match(regex)
+        if (match) {
+          const idx = parseInt(match[1], 10)
+          if (idx > maxIndex) maxIndex = idx
+        }
+      }
+    } catch (err) {
+      console.error('Failed to read directory for sequential naming', err)
+    }
+    
+    let nextIndex = Math.max(maxIndex + 1, imageIndex + 1)
+    fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
+    filePath = await api.pathJoin(imagesDir, fileName)
+    
+    // 终极防冲突（应对并发写入）
+    while (await api.checkExists(filePath)) {
+      nextIndex++
+      fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
+      filePath = await api.pathJoin(imagesDir, fileName)
+    }
+  }
 
   const success = await api.saveImage(filePath, dataUrl)
   return success ? filePath : null

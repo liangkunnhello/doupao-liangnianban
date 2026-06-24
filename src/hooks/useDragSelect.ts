@@ -27,12 +27,6 @@ export function useDragSelect({
   const startedOnItem = useRef(false)
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
-  const initialSelectedIdsRef = useRef(initialSelectedIds)
-  initialSelectedIdsRef.current = initialSelectedIds
-  const onSelectionChangeRef = useRef(onSelectionChange)
-  onSelectionChangeRef.current = onSelectionChange
-  const onSuppressClickRef = useRef(onSuppressClick)
-  onSuppressClickRef.current = onSuppressClick
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const getPagePoint = useCallback((clientX: number, clientY: number) => ({
@@ -45,7 +39,7 @@ export function useDragSelect({
 
     startedOnItem.current = Boolean(target.closest(itemSelector))
     startedWithCtrl.current = isCtrl
-    initialSelection.current = [...initialSelectedIdsRef.current]
+    initialSelection.current = [...initialSelectedIds]
 
     isDragging.current = true
     hasDragged.current = false
@@ -59,7 +53,7 @@ export function useDragSelect({
       currentPageX: point.pageX,
       currentPageY: point.pageY,
     })
-  }, [getPagePoint, itemSelector])
+  }, [getPagePoint, initialSelectedIds, itemSelector])
 
   const updateSelectionFromPoint = useCallback((pageX: number, pageY: number) => {
     const start = dragStart.current
@@ -101,8 +95,8 @@ export function useDragSelect({
       })
     })
 
-    onSelectionChangeRef.current(Array.from(newSelected))
-  }, [containerSelector, getItemId, itemSelector])
+    onSelectionChange(Array.from(newSelected))
+  }, [containerSelector, getItemId, itemSelector, onSelectionChange])
 
   useEffect(() => {
     const stopDragScroll = () => {
@@ -128,9 +122,9 @@ export function useDragSelect({
         document.body.classList.remove('drag-selecting')
       }
       if (isDragging.current && clearEmptySurfaceClick && !hasDragged.current && !startedOnItem.current && !startedWithCtrl.current) {
-        onSelectionChangeRef.current([])
+        onSelectionChange([])
       }
-      if (suppressClick && hasDragged.current) onSuppressClickRef.current?.()
+      if (suppressClick && hasDragged.current) onSuppressClick?.()
       stopDragScroll()
       isDragging.current = false
       dragStart.current = null
@@ -241,7 +235,7 @@ export function useDragSelect({
       document.removeEventListener('wheel', handleDocumentWheel, true)
       window.removeEventListener('scroll', handleDocumentScroll, true)
     }
-  }, [beginSelection, containerSelector, isMac, itemSelector, updateSelectionFromPoint])
+  }, [beginSelection, containerSelector, isMac, itemSelector, onSelectionChange, onSuppressClick, updateSelectionFromPoint])
 
   return { selectionBox, isDragging: isDragging.current }
 }

@@ -9,10 +9,6 @@ interface State {
   error: Error | null
 }
 
-const isElectronRuntime = (typeof (window as unknown as Record<string, unknown>).electronAPI !== 'undefined'
-  && ((window as unknown as Record<string, { isElectron?: boolean }>).electronAPI?.isElectron === true))
-  || (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
-
 export default class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props)
@@ -43,13 +39,11 @@ export default class ErrorBoundary extends Component<Props, State> {
               type="button"
               onClick={() => {
                 this.setState({ hasError: false, error: null })
-                if (!isElectronRuntime) {
-                  window.location.reload()
-                }
+                window.location.reload()
               }}
               className="px-5 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium transition-colors"
             >
-              {isElectronRuntime ? '重试' : '重新加载'}
+              重新加载
             </button>
           </div>
         </div>

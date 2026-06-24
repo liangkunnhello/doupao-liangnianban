@@ -15,18 +15,10 @@ export function isChunkLoadFailure(error: unknown): boolean {
 }
 
 export function installChunkLoadRecovery(win: Window = window) {
-  const isElectronRuntime = (typeof (win as unknown as Record<string, unknown>).electronAPI !== 'undefined'
-    && ((win as unknown as Record<string, { isElectron?: boolean }>).electronAPI?.isElectron === true))
-    || (typeof win.navigator !== 'undefined' && win.navigator.userAgent.includes('Electron'))
-
-  if (isElectronRuntime) return
-
   const reloadOnce = () => {
     const key = 'chunk-load-recovery-reloaded'
-    try {
-      if (win.sessionStorage.getItem(key) === '1') return
-      win.sessionStorage.setItem(key, '1')
-    } catch { return }
+    if (win.sessionStorage.getItem(key) === '1') return
+    win.sessionStorage.setItem(key, '1')
     win.location.reload()
   }
 
@@ -37,6 +29,6 @@ export function installChunkLoadRecovery(win: Window = window) {
     if (isChunkLoadFailure(event.reason)) reloadOnce()
   })
   win.addEventListener('load', () => {
-    try { win.sessionStorage.removeItem('chunk-load-recovery-reloaded') } catch {}
+    win.sessionStorage.removeItem('chunk-load-recovery-reloaded')
   })
 }

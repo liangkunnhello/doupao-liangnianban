@@ -29,6 +29,7 @@ function tab(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     params: DEFAULT_PARAMS,
     maskDraft: null,
     maskEditorImageId: null,
+    customOutputPath: '',
     tasks: [],
     createdAt: new Date(2026, 5, 18).getTime(),
     updatedAt: new Date(2026, 5, 18).getTime(),

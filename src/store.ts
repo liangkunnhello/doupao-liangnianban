@@ -63,7 +63,7 @@ import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { IMAGE_FETCH_CORS_HINT, isRetryableError } from './lib/imageApiShared'
+import { IMAGE_FETCH_CORS_HINT, isRetryableError, runWithConcurrencyAndRetry } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -708,7 +708,7 @@ export function migratePersistedState(persistedState: unknown): unknown {
     const now = Date.now()
     const defaultTab: WorkspaceTab = {
       id: Math.random().toString(36).slice(2, 9),
-      name: '标签 1',
+      name: '默认',
       groupId: null,
       prompt: String(prompt),
       inputImages: normalizeInputImages(inputImages),
@@ -1506,7 +1506,7 @@ function createDefaultWorkspaceTab(options: {
   const now = options.now ?? Date.now()
   return {
     id: Math.random().toString(36).slice(2, 9),
-    name: '标签 1',
+    name: '默认',
     groupId: null,
     prompt: typeof options.prompt === 'string' ? options.prompt : '',
     inputImages: normalizeInputImages(options.inputImages),
@@ -2674,9 +2674,17 @@ export const useStore = create<AppState>()(
         const sourceTab = state.activeWorkspaceTabId
           ? state.workspaceTabs.find((t) => t.id === state.activeWorkspaceTabId)
           : null
+        
+        let newName = '默认'
+        let counter = 1
+        while (state.workspaceTabs.some((t) => t.name === newName)) {
+          counter++
+          newName = `默认 ${counter}`
+        }
+
         const newTab: WorkspaceTab = {
           id: Math.random().toString(36).slice(2, 9),
-          name: `标签 ${state.workspaceTabs.length + 1}`,
+          name: newName,
           groupId: null,
           prompt: sourceTab ? sourceTab.prompt : state.prompt,
           inputImages: sourceTab ? sourceTab.inputImages.map((img) => ({ ...img })) : state.inputImages.map((img) => ({ ...img })),
@@ -2700,7 +2708,7 @@ export const useStore = create<AppState>()(
           const now = Date.now()
           const defaultTab: WorkspaceTab = {
             id: Math.random().toString(36).slice(2, 9),
-            name: '标签 1',
+            name: '默认',
             groupId: null,
             prompt: state.prompt,
             inputImages: state.inputImages.map((img) => ({ ...img })),
@@ -3058,9 +3066,10 @@ function failOpenAITaskIfStillRunning(taskId: string, error: string, now = Date.
     const batchItemStatuses: BatchItemStatus[] = Array.from({ length: totalRequested }, (_, i) =>
       i < successCount ? 'done' : 'error'
     )
-    const batchItemErrors: BatchItemError[] = failCount > 0
-      ? [{ index: successCount, error }]
-      : []
+    const batchItemErrors: BatchItemError[] = []
+    for (let j = 0; j < failCount; j++) {
+      batchItemErrors.push({ index: successCount + j, error })
+    }
 
     updateTaskInStore(taskId, {
       status: 'done',
@@ -3091,12 +3100,11 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   if (!task || !isRunningOpenAITask(task)) return
 
   const timeoutMs = Math.max(0, timeoutSeconds * 1000)
-  const remainingMs = Math.max(0, timeoutMs - (Date.now() - task.createdAt))
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
     if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
-  }, remainingMs)
+  }, timeoutMs)
   openAIWatchdogTimers.set(taskId, timer)
 }
 
@@ -3522,10 +3530,12 @@ export async function initStore() {
       // _taskIds 是新版字段；如果不存在，说明是未初始化的标签或者是刚才出 bug 时的旧状态
       // 这里增加回退：如果既没有 _taskIds 也没有 tasks（或里面全是 undefined），
       // 而此时又不是空状态（galleryTasks > 0），则第一标签页会吃下所有的 galleryTasks 作为兜底
-      const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? '')) : [])
+      // _taskIds 是新版字段；如果存在，说明已经迁移过
+      const hasTaskIdsField = Array.isArray(tab._taskIds)
+      const taskIds = hasTaskIdsField ? tab._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? '')) : [])
       
-      // 修复刚才的兜底逻辑，使得当遇到彻底没有 id 的旧版标签页时，首个标签能正确回退承接旧数据
-      if ((taskIds.length === 0 || taskIds.every((id: string) => !id)) && index === 0) {
+      // 如果没有 _taskIds 字段（旧数据或刚迁移），且提取不到有效的任务 ID，且是第一个标签页，才作为兜底承接所有任务
+      if (!hasTaskIdsField && (taskIds.length === 0 || taskIds.every((id: string) => !id)) && index === 0) {
         return {
           ...tab,
           tasks: galleryTasks,
@@ -3864,6 +3874,17 @@ export async function submitTaskWithData(
         t.id === tabIdToUpdate ? { ...t, tasks: [task, ...t.tasks] } : t,
       ),
     }))
+  } else {
+    // If no tab is active, try to add to the first tab (usually "默认" / "标签 1")
+    useStore.setState((state) => {
+      if (state.workspaceTabs.length === 0) return state
+      const firstTabId = state.workspaceTabs[0].id
+      return {
+        workspaceTabs: state.workspaceTabs.map((t) =>
+          t.id === firstTabId ? { ...t, tasks: [task, ...t.tasks] } : t,
+        ),
+      }
+    })
   }
   await putTask(task)
   useStore.getState().showToast('任务已提交', 'success')
@@ -5159,87 +5180,88 @@ async function executeAgentRound(
       }
 
       // Fire all batch items concurrently after all cards are visible.
-      const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds }) => {
-
-        const batchResult = await callBatchImageSingle({
-          profile: activeProfile,
-          params,
-          batchItemId: item.id,
-          prompt: item.prompt,
-          referenceImageDataUrls: references.dataUrls,
-          referenceIds,
-          signal: controller.signal,
-          onImageToolStarted: shouldStreamAssistantMessage
-            ? async () => {
-                if (controller.signal.aborted) return
-              }
-            : undefined,
-          onPartialImage: shouldStreamAssistantMessage
-            ? async ({ image, partialImageIndex }) => {
-                if (controller.signal.aborted) return
-                const taskId = taskIdByToolCallId.get(batchToolCallId)
-                if (taskId) {
-                  useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
-                  if (partialImageIndex === 0 || partialImageIndex == null) {
-                    void persistTaskStreamPartialImage(taskId, image)
+      const batchResults = await runWithConcurrencyAndRetry(
+        batchExecutionItems,
+        activeProfile.maxConcurrent ?? 1,
+        activeProfile.maxRetries ?? 0,
+        async ({ item, batchToolCallId, references, referenceIds }) => {
+          const batchResult = await callBatchImageSingle({
+            profile: activeProfile,
+            params,
+            batchItemId: item.id,
+            prompt: item.prompt,
+            referenceImageDataUrls: references.dataUrls,
+            referenceIds,
+            signal: controller.signal,
+            onImageToolStarted: shouldStreamAssistantMessage
+              ? async () => {
+                  if (controller.signal.aborted) return
+                }
+              : undefined,
+            onPartialImage: shouldStreamAssistantMessage
+              ? async ({ image, partialImageIndex }) => {
+                  if (controller.signal.aborted) return
+                  const taskId = taskIdByToolCallId.get(batchToolCallId)
+                  if (taskId) {
+                    useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+                    if (partialImageIndex === 0 || partialImageIndex == null) {
+                      void persistTaskStreamPartialImage(taskId, image)
+                    }
                   }
                 }
-              }
-            : undefined,
-          onImageToolCompleted: shouldStreamAssistantMessage
-            ? async (image) => {
-                if (controller.signal.aborted) return
-                await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
-              }
-            : undefined,
-        })
+              : undefined,
+            onImageToolCompleted: shouldStreamAssistantMessage
+              ? async (image) => {
+                  if (controller.signal.aborted) return
+                  await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
+                }
+              : undefined,
+          })
 
-        if (!shouldStreamAssistantMessage) {
-          if (batchResult.image) {
-            await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
-          } else if (batchResult.error) {
-            const taskId = taskIdByToolCallId.get(batchToolCallId)
-            if (taskId) {
-              const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
-              if (latestTask && latestTask.status === 'running') {
-                updateTaskInStore(taskId, {
-                  status: 'error',
-                  error: batchResult.error,
-                  rawResponsePayload: batchResult.rawResponsePayload,
-                  finishedAt: Date.now(),
-                  elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
-                })
-                useStore.getState().setTaskStreamPreview(taskId)
-                void saveTaskToLocalFS(taskId)
-              }
-            }
+          if (batchResult.error) {
+            throw new Error(batchResult.error)
           }
+
+          if (!shouldStreamAssistantMessage && batchResult.image) {
+            await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
+          }
+
+          return batchResult
         }
-
-        return batchResult
-      })
-
-      const batchResults = await Promise.allSettled(batchPromises)
+      )
 
       for (let i = 0; i < batchResults.length; i++) {
         const settled = batchResults[i]
-        if (settled.status !== 'fulfilled') continue
-        const r = settled.value
-        if (r.image || !r.error) continue
         const { batchToolCallId } = batchExecutionItems[i]
         const taskId = taskIdByToolCallId.get(batchToolCallId)
         if (!taskId) continue
-        const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
-        if (latestTask && latestTask.status === 'running') {
-          updateTaskInStore(taskId, {
-            status: 'error',
-            error: r.error,
-            rawResponsePayload: r.rawResponsePayload,
-            finishedAt: Date.now(),
-            elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
-          })
-          useStore.getState().setTaskStreamPreview(taskId)
-          void saveTaskToLocalFS(taskId)
+        
+        let errorMsg: string | undefined
+        let rawPayload: string | undefined
+        
+        if (settled.status === 'fulfilled') {
+          const r = settled.value
+          if (!r.image && r.error) {
+            errorMsg = r.error
+            rawPayload = r.rawResponsePayload
+          }
+        } else {
+          errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason)
+        }
+
+        if (errorMsg) {
+          const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+          if (latestTask && latestTask.status === 'running') {
+            updateTaskInStore(taskId, {
+              status: 'error',
+              error: errorMsg,
+              rawResponsePayload: rawPayload,
+              finishedAt: Date.now(),
+              elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
+            })
+            useStore.getState().setTaskStreamPreview(taskId)
+            void saveTaskToLocalFS(taskId)
+          }
         }
       }
 
@@ -5805,6 +5827,7 @@ async function executeTask(taskId: string) {
             outputImages: [...existingOutputIds, ...newOutputIds],
           })
           void saveTaskImagesToLocalFS(taskId, newOutputIds, existingOutputIds.length)
+          scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
         }
       }
 
@@ -5897,6 +5920,7 @@ async function executeTask(taskId: string) {
             updateTaskProgress(taskId, 'previewing')
             useStore.getState().setTaskStreamPreview(taskId, partial.image, i)
             void persistTaskStreamPartialImage(taskId, partial.image)
+            scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
           },
         })
       })
@@ -6025,6 +6049,7 @@ async function executeTask(taskId: string) {
             const baseIndex = batchIndex * requestN + (partial.requestIndex ?? 0)
             useStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
             void persistTaskStreamPartialImage(taskId, partial.image)
+            scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
           },
         })
       }, (currentN) => currentN)
@@ -6056,6 +6081,7 @@ async function executeTask(taskId: string) {
           updateTaskProgress(taskId, 'previewing')
           useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
+          scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
         },
       })
     }
@@ -6592,6 +6618,30 @@ export async function retryTask(task: TaskRecord) {
 
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([newTask, ...latestTasks])
+  
+  // 查找原任务所在的标签页，或者使用当前激活的标签页
+  const { workspaceTabs, activeWorkspaceTabId } = useStore.getState()
+  const sourceTabId = workspaceTabs.find((t) => t.tasks.some((rt) => rt.id === task.id))?.id
+  const tabIdToUpdate = sourceTabId ?? activeWorkspaceTabId
+  if (tabIdToUpdate) {
+    useStore.setState((state) => ({
+      workspaceTabs: state.workspaceTabs.map((t) =>
+        t.id === tabIdToUpdate ? { ...t, tasks: [newTask, ...t.tasks] } : t,
+      ),
+    }))
+  } else {
+    // 兜底：如果没有激活的标签页，尝试加到第一个标签页
+    useStore.setState((state) => {
+      if (state.workspaceTabs.length === 0) return state
+      const firstTabId = state.workspaceTabs[0].id
+      return {
+        workspaceTabs: state.workspaceTabs.map((t) =>
+          t.id === firstTabId ? { ...t, tasks: [newTask, ...t.tasks] } : t,
+        ),
+      }
+    })
+  }
+
   await putTask(newTask)
 
   executeTask(taskId)
@@ -7039,18 +7089,20 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
     exportedAt: new Date(exportedAt).toISOString(),
   }
 
-  if (options.exportConfig) manifest.settings = settings
+  if (options.exportConfig) {
+      manifest.settings = settings
+      manifest.favoriteCollections = favoriteCollections
+      manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
+      manifest.wordLibraryGroups = wordLibraryGroups
+      manifest.wordLibraryEntries = wordLibraryEntries
+    }
   if (options.exportTasks) {
     manifest.tasks = tasks
-    manifest.favoriteCollections = favoriteCollections
-    manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
     manifest.agentConversations = getPersistableAgentConversations(agentConversations)
-    manifest.imageFiles = imageFiles
     manifest.thumbnailFiles = thumbnailFiles
   }
-  if (options.exportWordLibrary) {
-    manifest.wordLibraryGroups = wordLibraryGroups
-    manifest.wordLibraryEntries = wordLibraryEntries
+  if (options.exportImages) {
+    manifest.imageFiles = imageFiles
   }
 
   zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
@@ -7063,19 +7115,19 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
 export interface ExportOptions {
   exportConfig?: boolean
   exportTasks?: boolean
-  exportWordLibrary?: boolean
+  exportImages?: boolean
 }
 
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
   try {
     const tasks = options.exportTasks ? await getAllTasks() : []
-    const images = options.exportTasks ? await getAllImages() : []
+    const images = options.exportTasks || options.exportImages ? await getAllImages() : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
     const exportedAt = Date.now()
     const imageCreatedAtFallback = new Map<string, number>()
 
-    if (options.exportTasks) {
+    if (options.exportTasks || options.exportImages) {
       for (const task of tasks) {
         for (const id of [
           ...(task.inputImageIds || []),
@@ -7095,7 +7147,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
     const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
 
-    if (options.exportTasks) {
+    if (options.exportTasks || options.exportImages) {
       for (const img of images) {
         const dataUrl = await ensureImageCached(img.id)
         if (!dataUrl) continue
@@ -7103,34 +7155,41 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
         const { ext, bytes } = dataUrlToBytes(dataUrl)
         const path = `images/${img.id}.${ext}`
         const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
-        imageFiles[img.id] = {
-          path,
-          createdAt,
-          source: img.source,
-          width: img.width,
-          height: img.height,
-        }
-        zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
-
-        const thumbnail = await getImageThumbnail(img.id)
-        if (thumbnail?.thumbnailDataUrl) {
-          const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
-          const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
-          imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
-          imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
-          thumbnailFiles[img.id] = {
-            path: thumbnailPath,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            thumbnailVersion: thumbnail.thumbnailVersion,
+        
+        if (options.exportImages) {
+          imageFiles[img.id] = {
+            path,
+            createdAt,
+            source: img.source,
+            width: img.width,
+            height: img.height,
           }
-          zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
-          cacheThumbnail(img.id, {
-            dataUrl: thumbnail.thumbnailDataUrl,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            thumbnailVersion: thumbnail.thumbnailVersion,
-          })
+          zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
+        }
+
+        if (options.exportTasks) {
+          const thumbnail = await getImageThumbnail(img.id)
+          if (thumbnail?.thumbnailDataUrl) {
+            const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
+            const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
+            if (options.exportImages) {
+              imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
+              imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
+            }
+            thumbnailFiles[img.id] = {
+              path: thumbnailPath,
+              width: thumbnail.width,
+              height: thumbnail.height,
+              thumbnailVersion: thumbnail.thumbnailVersion,
+            }
+            zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
+            cacheThumbnail(img.id, {
+              dataUrl: thumbnail.thumbnailDataUrl,
+              width: thumbnail.width,
+              height: thumbnail.height,
+              thumbnailVersion: thumbnail.thumbnailVersion,
+            })
+          }
         }
       }
     }
@@ -7140,18 +7199,20 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       exportedAt: new Date(exportedAt).toISOString(),
     }
 
-    if (options.exportConfig) manifest.settings = settings
-    if (options.exportTasks) {
-      manifest.tasks = tasks
+    if (options.exportConfig) {
+      manifest.settings = settings
       manifest.favoriteCollections = favoriteCollections
       manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
-      manifest.agentConversations = getPersistableAgentConversations(agentConversations)
-      manifest.imageFiles = imageFiles
-      manifest.thumbnailFiles = thumbnailFiles
-    }
-    if (options.exportWordLibrary) {
       manifest.wordLibraryGroups = wordLibraryGroups
       manifest.wordLibraryEntries = wordLibraryEntries
+    }
+    if (options.exportTasks) {
+      manifest.tasks = tasks
+      manifest.agentConversations = getPersistableAgentConversations(agentConversations)
+      manifest.thumbnailFiles = thumbnailFiles
+    }
+    if (options.exportImages) {
+      manifest.imageFiles = imageFiles
     }
 
     zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
@@ -7178,12 +7239,12 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
 /** 导出数据到指定路径 */
 export async function exportDataToPath(filePath: string, options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<boolean> {
   const tasks = options.exportTasks ? await getAllTasks() : []
-  const images = options.exportTasks ? await getAllImages() : []
+  const images = options.exportTasks || options.exportImages ? await getAllImages() : []
   const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
   const exportedAt = Date.now()
   const imageCreatedAtFallback = new Map<string, number>()
 
-  if (options.exportTasks) {
+  if (options.exportTasks || options.exportImages) {
     for (const task of tasks) {
       for (const id of [
         ...(task.inputImageIds || []),
@@ -7203,7 +7264,7 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
   const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
   const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
 
-  if (options.exportTasks) {
+  if (options.exportTasks || options.exportImages) {
     for (const img of images) {
       const dataUrl = await ensureImageCached(img.id)
       if (!dataUrl) continue
@@ -7211,34 +7272,41 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
       const { ext, bytes } = dataUrlToBytes(dataUrl)
       const path = `images/${img.id}.${ext}`
       const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
-      imageFiles[img.id] = {
-        path,
-        createdAt,
-        source: img.source,
-        width: img.width,
-        height: img.height,
-      }
-      zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
-
-      const thumbnail = await getImageThumbnail(img.id)
-      if (thumbnail?.thumbnailDataUrl) {
-        const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
-        const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
-        imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
-        imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
-        thumbnailFiles[img.id] = {
-          path: thumbnailPath,
-          width: thumbnail.width,
-          height: thumbnail.height,
-          thumbnailVersion: thumbnail.thumbnailVersion,
+      
+      if (options.exportImages) {
+        imageFiles[img.id] = {
+          path,
+          createdAt,
+          source: img.source,
+          width: img.width,
+          height: img.height,
         }
-        zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
-        cacheThumbnail(img.id, {
-          dataUrl: thumbnail.thumbnailDataUrl,
-          width: thumbnail.width,
-          height: thumbnail.height,
-          thumbnailVersion: thumbnail.thumbnailVersion,
-        })
+        zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
+      }
+
+      if (options.exportTasks) {
+        const thumbnail = await getImageThumbnail(img.id)
+        if (thumbnail?.thumbnailDataUrl) {
+          const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
+          const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
+          if (options.exportImages) {
+            imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
+            imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
+          }
+          thumbnailFiles[img.id] = {
+            path: thumbnailPath,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            thumbnailVersion: thumbnail.thumbnailVersion,
+          }
+          zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
+          cacheThumbnail(img.id, {
+            dataUrl: thumbnail.thumbnailDataUrl,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            thumbnailVersion: thumbnail.thumbnailVersion,
+          })
+        }
       }
     }
   }
@@ -7248,18 +7316,20 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
     exportedAt: new Date(exportedAt).toISOString(),
   }
 
-  if (options.exportConfig) manifest.settings = settings
-  if (options.exportTasks) {
-    manifest.tasks = tasks
+  if (options.exportConfig) {
+    manifest.settings = settings
     manifest.favoriteCollections = favoriteCollections
     manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
-    manifest.agentConversations = getPersistableAgentConversations(agentConversations)
-    manifest.imageFiles = imageFiles
-    manifest.thumbnailFiles = thumbnailFiles
-  }
-  if (options.exportWordLibrary) {
     manifest.wordLibraryGroups = wordLibraryGroups
     manifest.wordLibraryEntries = wordLibraryEntries
+  }
+  if (options.exportTasks) {
+    manifest.tasks = tasks
+    manifest.agentConversations = getPersistableAgentConversations(agentConversations)
+    manifest.thumbnailFiles = thumbnailFiles
+  }
+  if (options.exportImages) {
+    manifest.imageFiles = imageFiles
   }
 
   zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
@@ -7273,7 +7343,7 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
 export interface ImportOptions {
   importConfig?: boolean
   importTasks?: boolean
-  importWordLibrary?: boolean
+  importImages?: boolean
 }
 
 /** 导入 ZIP 数据 */
@@ -7288,7 +7358,9 @@ export async function importData(file: File, options: ImportOptions = { importCo
     const data: ExportData = JSON.parse(strFromU8(manifestBytes))
 
     const importedImageIds: string[] = []
-    if (options.importTasks && data.tasks && data.imageFiles) {
+    
+    // Import Images
+    if (options.importImages && data.imageFiles) {
       // 还原图片
       for (const [id, info] of Object.entries(data.imageFiles)) {
         const bytes = unzipped[info.path]
@@ -7315,7 +7387,9 @@ export async function importData(file: File, options: ImportOptions = { importCo
         }
         importedImageIds.push(id)
       }
+    }
 
+    if (options.importTasks) {
       for (const [id, info] of Object.entries(data.thumbnailFiles ?? {})) {
         const bytes = unzipped[info.path]
         if (!bytes) continue
@@ -7335,27 +7409,16 @@ export async function importData(file: File, options: ImportOptions = { importCo
         })
       }
 
-      for (const task of data.tasks) {
-        await putTask(task)
+      if (data.tasks) {
+        for (const task of data.tasks) {
+          await putTask(task)
+        }
       }
 
       const tasks = await getAllTasks()
       const state = useStore.getState()
-      const importedCollections = normalizeFavoriteCollections(data.favoriteCollections)
-      const favoriteCollections = importedCollections.length
-        ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections([...state.favoriteCollections, ...importedCollections]))
-        : state.favoriteCollections
-      const defaultFavoriteCollectionId = importedCollections.length
-        ? resolveDefaultFavoriteCollectionId(favoriteCollections, data.defaultFavoriteCollectionId)
-        : state.defaultFavoriteCollectionId
-      const normalizedFavorites = normalizeLoadedFavoriteState(tasks, favoriteCollections, defaultFavoriteCollectionId)
-      useStore.setState({
-        tasks: normalizedFavorites.tasks,
-        favoriteCollections: normalizedFavorites.collections,
-        defaultFavoriteCollectionId: normalizedFavorites.defaultFavoriteCollectionId,
-      })
-      if (normalizedFavorites.changed) await Promise.all(normalizedFavorites.tasks.map((task) => putTask(task)))
-      const importedAgentConversations = normalizeAgentConversations(data.agentConversations)
+      
+      const importedAgentConversations = normalizeAgentConversations(data.agentConversations ?? [])
         .filter((conversation) => !isEmptyAgentConversation(conversation))
       useStore.setState((state) => {
         const agentConversations = mergeImportedAgentConversations(state.agentConversations, importedAgentConversations)
@@ -7372,65 +7435,83 @@ export async function importData(file: File, options: ImportOptions = { importCo
       scheduleThumbnailBackfill(importedImageIds)
     }
 
-    if (options.importWordLibrary && data.wordLibraryGroups && data.wordLibraryEntries) {
+    if (options.importConfig) {
       const state = useStore.getState()
-      // 合并分组：去重，以导入数据中的分组为准（同名覆盖）
-      const existingGroupMap = new Map(state.wordLibraryGroups.map(g => [g.name, g]))
-      const mergedGroups = [...existingGroupMap.values()]
-      const groupIdMap = new Map<string, string>()
-      for (const importedGroup of data.wordLibraryGroups) {
-        if (!importedGroup || typeof importedGroup.id !== 'string' || typeof importedGroup.name !== 'string') continue
-        const existing = existingGroupMap.get(importedGroup.name)
-        if (!existing) {
-          mergedGroups.push(importedGroup)
-          groupIdMap.set(importedGroup.id, importedGroup.id)
-        } else {
-          groupIdMap.set(importedGroup.id, existing.id)
-        }
+      
+      if (data.settings) {
+        state.setSettings(mergeImportedSettings(state.settings, data.settings))
       }
-      const remappedImportedEntries = Array.isArray(data.wordLibraryEntries)
-        ? data.wordLibraryEntries.map((entry) => {
-            if (!isRecord(entry) || typeof entry.groupId !== 'string') return entry
-            return { ...entry, groupId: groupIdMap.get(entry.groupId) ?? entry.groupId }
-          })
-        : []
-      const normalizedImportedEntries = normalizeWordLibraryEntries(remappedImportedEntries, mergedGroups)
-      // 合并词条：去重（按 key + groupId），以导入数据为准
-      const mergedEntries = [...state.wordLibraryEntries]
-      for (const importedEntry of normalizedImportedEntries) {
-        const entryKey = `${importedEntry.key}:${importedEntry.groupId}`
-        const existingIndex = mergedEntries.findIndex(e => `${e.key}:${e.groupId}` === entryKey)
-        if (existingIndex >= 0) {
-          // 覆盖现有词条
-          mergedEntries[existingIndex] = importedEntry
-        } else {
-          // 确保 groupId 在合并后的分组中存在，如果不存在则分配到第一个分组
-          const groupExists = mergedGroups.some(g => g.id === importedEntry.groupId)
-          if (groupExists) {
-            mergedEntries.push(importedEntry)
-          } else if (mergedGroups.length > 0) {
-            mergedEntries.push({ ...importedEntry, groupId: mergedGroups[0].id })
+
+      const importedCollections = normalizeFavoriteCollections(data.favoriteCollections ?? [])
+      const favoriteCollections = importedCollections.length
+        ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections([...state.favoriteCollections, ...importedCollections]))
+        : state.favoriteCollections
+      const defaultFavoriteCollectionId = importedCollections.length
+        ? resolveDefaultFavoriteCollectionId(favoriteCollections, data.defaultFavoriteCollectionId)
+        : state.defaultFavoriteCollectionId
+      const tasks = await getAllTasks()
+      const normalizedFavorites = normalizeLoadedFavoriteState(tasks, favoriteCollections, defaultFavoriteCollectionId)
+      useStore.setState({
+        tasks: normalizedFavorites.tasks,
+        favoriteCollections: normalizedFavorites.collections,
+        defaultFavoriteCollectionId: normalizedFavorites.defaultFavoriteCollectionId,
+      })
+      if (normalizedFavorites.changed) await Promise.all(normalizedFavorites.tasks.map((task) => putTask(task)))
+
+      if (data.wordLibraryGroups && data.wordLibraryEntries) {
+        // 合并分组：去重，以导入数据中的分组为准（同名覆盖）
+        const existingGroupMap = new Map(state.wordLibraryGroups.map(g => [g.name, g]))
+        const mergedGroups = [...existingGroupMap.values()]
+        const groupIdMap = new Map<string, string>()
+        for (const importedGroup of data.wordLibraryGroups) {
+          if (!importedGroup || typeof importedGroup.id !== 'string' || typeof importedGroup.name !== 'string') continue
+          const existing = existingGroupMap.get(importedGroup.name)
+          if (!existing) {
+            mergedGroups.push(importedGroup)
+            groupIdMap.set(importedGroup.id, importedGroup.id)
+          } else {
+            groupIdMap.set(importedGroup.id, existing.id)
           }
         }
+        const remappedImportedEntries = Array.isArray(data.wordLibraryEntries)
+          ? data.wordLibraryEntries.map((entry) => {
+              if (!isRecord(entry) || typeof entry.groupId !== 'string') return entry
+              return { ...entry, groupId: groupIdMap.get(entry.groupId) ?? entry.groupId }
+            })
+          : []
+        const normalizedImportedEntries = normalizeWordLibraryEntries(remappedImportedEntries, mergedGroups)
+        // 合并词条：去重（按 key + groupId），以导入数据为准
+        const mergedEntries = [...state.wordLibraryEntries]
+        for (const importedEntry of normalizedImportedEntries) {
+          const entryKey = `${importedEntry.key}:${importedEntry.groupId}`
+          const existingIndex = mergedEntries.findIndex(e => `${e.key}:${e.groupId}` === entryKey)
+          if (existingIndex >= 0) {
+            // 覆盖现有词条
+            mergedEntries[existingIndex] = importedEntry
+          } else {
+            // 确保 groupId 在合并后的分组中存在，如果不存在则分配到第一个分组
+            const groupExists = mergedGroups.some(g => g.id === importedEntry.groupId)
+            if (groupExists) {
+              mergedEntries.push(importedEntry)
+            } else if (mergedGroups.length > 0) {
+              mergedEntries.push({ ...importedEntry, groupId: mergedGroups[0].id })
+            }
+          }
+        }
+        useStore.setState({
+          wordLibraryGroups: mergedGroups,
+          wordLibraryEntries: mergedEntries,
+        })
       }
-      useStore.setState({
-        wordLibraryGroups: mergedGroups,
-        wordLibraryEntries: mergedEntries,
-      })
-    }
-
-    if (options.importConfig && data.settings) {
-      const state = useStore.getState()
-      state.setSettings(mergeImportedSettings(state.settings, data.settings))
     }
 
     let msg = '数据已成功导入'
     if (options.importTasks && data.tasks) {
       msg = `已导入 ${data.tasks.length} 个任务`
+    } else if (options.importImages && data.imageFiles) {
+      msg = `已导入 ${Object.keys(data.imageFiles).length} 张图片`
     } else if (options.importConfig && data.settings) {
       msg = '配置已成功导入'
-    } else if (options.importWordLibrary && data.wordLibraryEntries) {
-      msg = `已导入 ${data.wordLibraryEntries.length} 个词条`
     }
 
     useStore.getState().showToast(msg, 'success')

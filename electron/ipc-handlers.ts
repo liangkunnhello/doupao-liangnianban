@@ -85,6 +85,10 @@ function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
 }
 
 export function registerIpcHandlers(): void {
+  ipcMain.handle('fs:add-allowed-root', async (_event, { dirPath }: { dirPath: string }) => {
+    addAllowedRoot(dirPath)
+  })
+
   ipcMain.handle('fs:select-directory', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     const result = await dialog.showOpenDialog(win!, {

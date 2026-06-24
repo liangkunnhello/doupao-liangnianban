@@ -417,7 +417,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                     disabled={!postprocessResizeAvailable && !postprocessSettings.resizeEnabled}
                     onClick={() => postprocessSettings.onResizeEnabledChange(!postprocessSettings.resizeEnabled, postprocessPreviewSize)}
                     className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs transition ${
-                      postprocessSettings.resizeEnabled && postprocessResizeAvailable
+                      postprocessSettings.resizeEnabled
                         ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
                         : 'border-gray-200/70 bg-white/60 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'
                     } disabled:cursor-not-allowed disabled:opacity-50`}

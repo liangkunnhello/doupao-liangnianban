@@ -31,9 +31,9 @@ export interface LatestRelease {
  */
 export function useVersionCheck() {
   const [latestRelease, setLatestRelease] = useState<LatestRelease | null>(null)
-  const [dismissed, setDismissed] = useState(() => {
-    try { return sessionStorage.getItem('version-dismissed') === 'true' } catch { return false }
-  })
+  const [dismissed, setDismissed] = useState(() =>
+    sessionStorage.getItem('version-dismissed') === 'true',
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -66,7 +66,7 @@ export function useVersionCheck() {
 
   const dismiss = () => {
     setDismissed(true)
-    try { sessionStorage.setItem('version-dismissed', 'true') } catch {}
+    sessionStorage.setItem('version-dismissed', 'true')
   }
 
   const hasUpdate = latestRelease?.isNewer === true && !dismissed

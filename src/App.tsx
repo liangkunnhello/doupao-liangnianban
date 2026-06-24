@@ -24,7 +24,7 @@ const DetailModal = React.lazy(() => import('./components/DetailModal'))
 const Lightbox = React.lazy(() => import('./components/Lightbox'))
 const SettingsModal = React.lazy(() => import('./components/SettingsModal'))
 const MaskEditorModal = React.lazy(() => import('./components/MaskEditorModal'))
-const SupportPromptModal = React.lazy(() => import('./components/SupportPromptModal'))
+
 const FavoriteCollectionPickerModal = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.FavoriteCollectionPickerModal })))
 const FavoriteCollectionsView = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.FavoriteCollectionsView })))
 const ManageCollectionsModal = React.lazy(() => import('./components/FavoriteCollections').then(m => ({ default: m.ManageCollectionsModal })))
@@ -146,7 +146,7 @@ export default function App() {
               const bkFileName = `doupao_backup_${ts}.zip`
               const filePath = desktop.replace(/\\/g, '/') + '/' + bkFileName
               useStore.getState().showToast('正在生成备份...', 'info')
-              const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true })
+              const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true })
               if (success) {
                 useStore.getState().showToast(`备份已保存到桌面：${bkFileName}`, 'success')
               } else {
@@ -168,7 +168,7 @@ export default function App() {
           const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
           const fileName = `doupao_backup_${ts}.zip`
           const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
-          exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportWordLibrary: true }).then((success) => {
+          exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true }).then((success) => {
             if (success) {
               useStore.getState().setLastAutoBackupAt(Date.now())
               useStore.getState().showToast('每周自动备份已保存到桌面', 'success')
@@ -215,7 +215,7 @@ export default function App() {
       <SettingsModal />
       <ConfirmDialog />
       <PromptInputDialog />
-      <SupportPromptModal />
+
       <FavoriteCollectionPickerModal />
       <ManageCollectionsModal />
       <Toast />

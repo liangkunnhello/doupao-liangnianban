@@ -1,11 +1,13 @@
-import { memo, useEffect, useState, useRef, type ReactNode } from 'react'
+import { memo, useEffect, useState, useRef, useMemo, type ReactNode, type KeyboardEvent } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask, removeMultipleTasks } from '../store'
+import { updateTaskPrompt } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
+import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -297,7 +299,7 @@ function TaskCard({
   const showSwipeAction = swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
-  const hasPartialSuccess = task.status === 'error' && task.outputImages.length > 0 && !isFalReconnecting && !isCustomReconnecting
+  const hasPartialSuccess = task.status === 'error' && (task.outputImages?.length ?? 0) > 0 && !isFalReconnecting && !isCustomReconnecting
   const progressDisplay = getTaskProgressDisplay(task)
   const hasPartialFailure = progressDisplay.cardLabel === '数量不够'
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
@@ -307,16 +309,16 @@ function TaskCard({
       : 'bg-blue-500'
     : 'bg-gray-200 dark:bg-gray-700'
 
-  const qualityDisplay = getParamDisplay(task, 'quality')
+  const qualityDisplay = getParamDisplay(task, 'quality', undefined, task.isFavorite)
   const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
 
-  const sizeDisplay = getParamDisplay(task, 'size')
+  const sizeDisplay = getParamDisplay(task, 'size', undefined, task.isFavorite)
   const showSize = task.params.size !== 'auto' || sizeDisplay.isMismatch
 
-  const formatDisplay = getParamDisplay(task, 'output_format')
+  const formatDisplay = getParamDisplay(task, 'output_format', undefined, task.isFavorite)
   const showFormat = task.params.output_format !== 'png' || formatDisplay.isMismatch
 
-  const nDisplay = getParamDisplay(task, 'n')
+  const nDisplay = getParamDisplay(task, 'n', undefined, task.isFavorite)
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
   const showPendingPrompt = isAgentTaskPromptPending(task)
   const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
@@ -324,6 +326,40 @@ function TaskCard({
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
   const isInterrupted = progressDisplay.cardLabel === '已停止'
+
+  const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
+  
+  const VAR_COLOR_MAP = useMemo(() => {
+    const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
+    const map: Record<string, string> = {}
+    const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
+    sorted.forEach((entry, i) => {
+      map[entry.key] = colors[i % colors.length]
+    })
+    return map
+  }, [wordLibraryEntries])
+
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false)
+  const [editingPrompt, setEditingPrompt] = useState(task.prompt)
+  const editingPromptParts = useMemo(() => getPromptMentionParts(editingPrompt || '', []), [editingPrompt])
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  const handlePromptEditSubmit = () => {
+    if (editingPrompt !== task.prompt) {
+      updateTaskPrompt(task.id, editingPrompt)
+    }
+    setIsEditingPrompt(false)
+  }
+
+  const handlePromptEditKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handlePromptEditSubmit()
+    } else if (e.key === 'Escape') {
+      setEditingPrompt(task.prompt)
+      setIsEditingPrompt(false)
+    }
+  }
 
   return (
     <div className="relative rounded-xl">
@@ -416,7 +452,7 @@ function TaskCard({
               )}
             </>
           )}
-          {task.status === 'running' && !streamPreviewSrc && task.outputImages.length > 0 && thumbSrc && (
+          {task.status === 'running' && !streamPreviewSrc && (task.outputImages?.length ?? 0) > 0 && thumbSrc && (
             <>
               <img
                 src={thumbSrc}
@@ -426,14 +462,14 @@ function TaskCard({
                 loading="lazy"
                 alt=""
               />
-              {task.outputImages.length > 1 && (
+              {(task.outputImages?.length ?? 0) > 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
                   {task.batchItemStatuses
                     ? `${task.batchItemStatuses.filter((s) => s === 'done').length}/${task.batchItemStatuses.length}`
-                    : task.outputImages.length}
+                    : task.outputImages?.length ?? 0}
                 </span>
               )}
-              {task.batchItemStatuses && task.batchItemStatuses.some((s) => s === 'error') && task.outputImages.length <= 1 && (
+              {task.batchItemStatuses && task.batchItemStatuses.some((s) => s === 'error') && (task.outputImages?.length ?? 0) <= 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-yellow-300 text-xs px-1.5 py-0.5 rounded">
                   {task.batchItemStatuses.filter((s) => s === 'done').length}/{task.batchItemStatuses.length}
                 </span>
@@ -447,7 +483,7 @@ function TaskCard({
               </span>
             </>
           )}
-          {task.status === 'running' && !streamPreviewSrc && !(task.outputImages.length > 0 && thumbSrc) && (
+          {task.status === 'running' && !streamPreviewSrc && !((task.outputImages?.length ?? 0) > 0 && thumbSrc) && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -521,11 +557,11 @@ function TaskCard({
                 loading="lazy"
                 alt=""
               />
-              {task.outputImages.length > 1 && (
+              {(task.outputImages?.length ?? 0) > 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
                   {task.batchItemStatuses
                     ? `${task.batchItemStatuses.filter((s) => s === 'done').length}/${task.batchItemStatuses.length}`
-                    : task.outputImages.length}
+                    : task.outputImages?.length ?? 0}
                 </span>
               )}
               {hasPartialFailure && (
@@ -560,12 +596,12 @@ function TaskCard({
                 loading="lazy"
                 alt=""
               />
-              {task.outputImages.length > 1 && (
+              {!task.isFavorite && (task.outputImages?.length ?? 0) > 1 && (
                 <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {task.outputImages.length}
+                  {task.outputImages?.length ?? 0}
                 </span>
               )}
-              {hasPartialFailure && (
+              {!task.isFavorite && hasPartialFailure && (
                 <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-yellow-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
                   {progressDisplay.cardLabel}
                 </span>
@@ -588,25 +624,27 @@ function TaskCard({
             </svg>
           )}
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
-          <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
-              <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                {duration}
-              </span>
-            ) : (
-              <>
-                <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
-                  {coverRatio}
+          {!task.isFavorite && (
+            <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+              {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
+                <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {duration}
                 </span>
-                <span className="bg-black/50 text-white/90 text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
-                  {coverSize}
-                </span>
-              </>
-            )}
-          </div>
+              ) : (
+                <>
+                  <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                    {coverRatio}
+                  </span>
+                  <span className="bg-black/50 text-white/90 text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
+                    {coverSize}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 右侧信息区域 */}
@@ -617,10 +655,74 @@ function TaskCard({
                 <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
+            ) : task.isFavorite && isEditingPrompt ? (
+              <div className="relative w-full h-full min-h-[3rem] bg-gray-50 dark:bg-black/20 rounded border border-blue-400/50 focus-within:border-blue-500 dark:focus-within:border-blue-400">
+                <div 
+                  ref={overlayRef}
+                  className="absolute inset-0 p-1 text-sm leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden text-gray-700 dark:text-gray-300"
+                  aria-hidden="true"
+                >
+                  {editingPrompt ? (
+                    editingPromptParts.map((part, index) => {
+                      if (part.type === 'variable') {
+                        const color = VAR_COLOR_MAP[part.varName] ?? ''
+                        return (
+                          <span key={index}
+                            className="inline-flex items-center px-1 rounded text-xs font-medium"
+                            style={{
+                              backgroundColor: color ? `${color}18` : 'rgba(156,163,175,0.1)',
+                              color: color || '#9ca3af',
+                              borderColor: color ? color : 'rgba(156,163,175,0.2)',
+                              borderWidth: '1px',
+                              borderStyle: 'solid'
+                            }}
+                          >
+                            {part.text}
+                          </span>
+                        )
+                      } else {
+                        return <span key={index}>{part.text}</span>
+                      }
+                    })
+                  ) : null}
+                  {/* Invisible character at the end to ensure height matches if ending with newline */}
+                  {editingPrompt.endsWith('\n') && <br />}
+                </div>
+                <textarea
+                  className="absolute inset-0 w-full h-full p-1 text-sm leading-relaxed whitespace-pre-wrap break-words bg-transparent outline-none resize-none custom-scrollbar text-transparent caret-gray-800 dark:caret-gray-200"
+                  value={editingPrompt}
+                  onChange={(e) => setEditingPrompt(e.target.value)}
+                  onScroll={(e) => {
+                    if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop
+                  }}
+                  onKeyDown={handlePromptEditKeyDown}
+                  onBlur={handlePromptEditSubmit}
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                  onFocus={(e) => e.target.select()}
+                  spellCheck="false"
+                />
+              </div>
             ) : (
-              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
+              <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3 group/prompt relative cursor-default">
                 {task.prompt || '(无提示词)'}
-              </p>
+                {task.isFavorite && (
+                  <div 
+                    className="absolute inset-0 bg-gray-100/50 dark:bg-white/[0.04] opacity-0 group-hover/prompt:opacity-100 transition-opacity flex items-center justify-center rounded cursor-text"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setIsEditingPrompt(true)
+                    }}
+                  >
+                    <span className="bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded text-xs text-gray-600 dark:text-gray-300 shadow-sm border border-gray-200 dark:border-gray-700 flex items-center gap-1 backdrop-blur-sm">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                      点击编辑提示词
+                    </span>
+                  </div>
+                )}
+              </div>
             )}
           </div>
           <div className="mt-auto flex flex-col gap-1.5">
@@ -634,7 +736,7 @@ function TaskCard({
               onTouchCancel={(e) => e.stopPropagation()}
             >
               {/* API Name */}
-              {(task.apiProfileName || task.apiProvider) && (
+              {!task.isFavorite && (task.apiProfileName || task.apiProvider) && (
                 <span 
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
                   title={task.apiProfileName || task.apiProvider}
@@ -646,7 +748,7 @@ function TaskCard({
                 </span>
               )}
               {/* Model */}
-              {showModel && (
+              {!task.isFavorite && showModel && (
                 <span 
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
                   title={task.apiModel}
@@ -660,7 +762,7 @@ function TaskCard({
                 </span>
               )}
               {/* Mask */}
-              {task.maskImageId && (
+              {!task.isFavorite && task.maskImageId && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -687,7 +789,7 @@ function TaskCard({
                   {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{formatDisplay.displayValue}</span>}
                 </span>
               )}
-              {showN && (
+              {!task.isFavorite && showN && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
                   <span className="text-gray-400 dark:text-gray-500">数量</span>
                   {hasPartialSuccess && task.batchItemStatuses ? (
@@ -726,27 +828,35 @@ function TaskCard({
                 </TaskActionButton>
               )}
               <TaskActionButton
-                tooltip={task.isFavorite ? '编辑收藏夹' : '收藏任务'}
-                onClick={() => openFavoritePicker([task.id])}
+                tooltip={task.isFavorite ? '取消收藏' : '收藏任务'}
+                onClick={() => {
+                  if (task.isFavorite) {
+                    useStore.getState().setConfirmDialog({
+                      title: '取消收藏',
+                      message: '确定要取消收藏吗？这会删除这个收藏卡片。',
+                      action: () => {
+                        removeMultipleTasks([task.id])
+                      }
+                    })
+                  } else {
+                    openFavoritePicker([task.id])
+                  }
+                }}
                 className={`p-1.5 rounded-md transition ${
                   task.isFavorite
                     ? 'text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-500/10'
                     : 'text-gray-400 hover:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-500/10'
                 }`}
               >
-                <svg
-                  className="w-4 h-4"
-                  fill={task.isFavorite ? 'currentColor' : 'none'}
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
-                  />
-                </svg>
+                {task.isFavorite ? (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                  </svg>
+                )}
               </TaskActionButton>
               <TaskActionButton
                 tooltip="复用配置"
