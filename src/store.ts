@@ -1044,7 +1044,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
         maskDraft: normalizeMaskDraft(tab.maskDraft),
         customOutputPath: typeof tab.customOutputPath === 'string' ? tab.customOutputPath : '',
         tasks: Array.isArray(tab.tasks) ? tab.tasks.filter((t: any) => typeof t !== 'string').map(normalizeTaskRecordFields) : [],
-        _taskIds: Array.isArray((tab as any)._taskIds) ? (tab as any)._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : t.id) : []),
+        _taskIds: Array.isArray((tab as any)._taskIds) ? (tab as any)._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? '')) : []),
       }))
     : currentState.workspaceTabs
   const persistedActiveWorkspaceTabId = typeof persisted.activeWorkspaceTabId === 'string' ? persisted.activeWorkspaceTabId : currentState.activeWorkspaceTabId
@@ -3519,11 +3519,13 @@ export async function initStore() {
     // Sync task state changes (e.g. interrupted tasks) to existing tab tasks
     const taskMap = new Map(tasks.map((t) => [t.id, t]))
     const updatedTabs = currentTabs.map((tab: any, index) => {
-      const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : tab.tasks.map((t: any) => t.id)
+      // _taskIds 是新版字段；如果不存在，说明是未初始化的标签或者是刚才出 bug 时的旧状态
+      // 这里增加回退：如果既没有 _taskIds 也没有 tasks（或里面全是 undefined），
+      // 而此时又不是空状态（galleryTasks > 0），则第一标签页会吃下所有的 galleryTasks 作为兜底
+      const taskIds = Array.isArray(tab._taskIds) && tab._taskIds.length > 0 ? tab._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? '')) : [])
       
-      // First load for a tab that has NO tasks but we have gallery tasks:
-      // We only do this for the VERY FIRST tab to migrate old non-tabbed data.
-      if (taskIds.length === 0 && index === 0 && !Array.isArray(tab._taskIds)) {
+      // 修复刚才的兜底逻辑，使得当遇到彻底没有 id 的旧版标签页时，首个标签能正确回退承接旧数据
+      if ((taskIds.length === 0 || taskIds.every((id: string) => !id)) && index === 0) {
         return {
           ...tab,
           tasks: galleryTasks,
