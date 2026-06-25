@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useRef, useMemo, type ReactNode, type KeyboardEvent } from 'react'
+import { memo, useEffect, useState, useRef, type ReactNode, type KeyboardEvent } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask, removeMultipleTasks } from '../store'
 import { updateTaskPrompt } from '../store'
@@ -7,9 +7,9 @@ import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
-import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
+import PromptVariableEditor from './PromptVariableEditor'
 
 interface Props {
   task: TaskRecord
@@ -327,22 +327,8 @@ function TaskCard({
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
   const isInterrupted = progressDisplay.cardLabel === '已停止'
 
-  const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
-  
-  const VAR_COLOR_MAP = useMemo(() => {
-    const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
-    const map: Record<string, string> = {}
-    const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
-    sorted.forEach((entry, i) => {
-      map[entry.key] = colors[i % colors.length]
-    })
-    return map
-  }, [wordLibraryEntries])
-
   const [isEditingPrompt, setIsEditingPrompt] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState(task.prompt)
-  const editingPromptParts = useMemo(() => getPromptMentionParts(editingPrompt || '', []), [editingPrompt])
-  const overlayRef = useRef<HTMLDivElement>(null)
 
   const handlePromptEditSubmit = () => {
     if (editingPrompt !== task.prompt) {
@@ -351,7 +337,7 @@ function TaskCard({
     setIsEditingPrompt(false)
   }
 
-  const handlePromptEditKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handlePromptEditKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handlePromptEditSubmit()
@@ -656,53 +642,21 @@ function TaskCard({
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
             ) : task.isFavorite && isEditingPrompt ? (
-              <div className="relative w-full h-full min-h-[3rem] bg-gray-50 dark:bg-black/20 rounded border border-blue-400/50 focus-within:border-blue-500 dark:focus-within:border-blue-400">
-                <div 
-                  ref={overlayRef}
-                  className="absolute inset-0 p-1 text-sm leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden text-gray-700 dark:text-gray-300"
-                  aria-hidden="true"
-                >
-                  {editingPrompt ? (
-                    editingPromptParts.map((part, index) => {
-                      if (part.type === 'variable') {
-                        const color = VAR_COLOR_MAP[part.varName] ?? ''
-                        return (
-                          <span key={index}
-                            className="inline-flex items-center px-1 rounded text-xs font-medium"
-                            style={{
-                              backgroundColor: color ? `${color}18` : 'rgba(156,163,175,0.1)',
-                              color: color || '#9ca3af',
-                              borderColor: color ? color : 'rgba(156,163,175,0.2)',
-                              borderWidth: '1px',
-                              borderStyle: 'solid'
-                            }}
-                          >
-                            {part.text}
-                          </span>
-                        )
-                      } else {
-                        return <span key={index}>{part.text}</span>
-                      }
-                    })
-                  ) : null}
-                  {/* Invisible character at the end to ensure height matches if ending with newline */}
-                  {editingPrompt.endsWith('\n') && <br />}
-                </div>
-                <textarea
-                  className="absolute inset-0 w-full h-full p-1 text-sm leading-relaxed whitespace-pre-wrap break-words bg-transparent outline-none resize-none custom-scrollbar text-transparent caret-gray-800 dark:caret-gray-200"
-                  value={editingPrompt}
-                  onChange={(e) => setEditingPrompt(e.target.value)}
-                  onScroll={(e) => {
-                    if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop
-                  }}
-                  onKeyDown={handlePromptEditKeyDown}
-                  onBlur={handlePromptEditSubmit}
-                  autoFocus
-                  onClick={(e) => e.stopPropagation()}
-                  onFocus={(e) => e.target.select()}
-                  spellCheck="false"
-                />
-              </div>
+              <PromptVariableEditor
+                value={editingPrompt}
+                onChange={setEditingPrompt}
+                onVariablePromptChange={(nextPrompt) => {
+                  setEditingPrompt(nextPrompt)
+                  updateTaskPrompt(task.id, nextPrompt)
+                }}
+                onKeyDown={handlePromptEditKeyDown}
+                onBlur={handlePromptEditSubmit}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+                selectOnFocus
+                spellCheck={false}
+                className="h-full min-h-[3rem] w-full overflow-y-auto rounded border border-blue-400/50 bg-gray-50 p-1 text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-700 outline-none transition focus:border-blue-500 dark:border-blue-400/50 dark:bg-black/20 dark:text-gray-300 dark:focus:border-blue-400"
+              />
             ) : (
               <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3 group/prompt relative cursor-default">
                 {task.prompt || '(无提示词)'}

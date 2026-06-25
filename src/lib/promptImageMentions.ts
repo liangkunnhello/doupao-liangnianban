@@ -33,6 +33,19 @@ export function stripImageMentionMarkers(prompt: string): string {
   return prompt.replace(/[\u2060\u2061\u2063\u2064]/g, '')
 }
 
+export function escapePromptHtmlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+export function escapePromptHtmlAttribute(value: string): string {
+  return escapePromptHtmlText(value)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function getPromptIndexFromVisibleIndex(prompt: string, visibleIndex: number): number {
   let visible = 0
   for (let i = 0; i < prompt.length; i++) {

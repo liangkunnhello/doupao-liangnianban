@@ -17,6 +17,7 @@ import { getLocalImageSaveDirectory, isElectron as isElectronEnv, openInExplorer
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, FolderOpenIcon, LinkIcon, TrashIcon } from './icons'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
+import PromptVariableEditor from './PromptVariableEditor'
 import { type TaskParams, DEFAULT_PARAMS } from '../types'
 import { updateTaskInStore } from '../store'
 
@@ -94,10 +95,8 @@ export default function DetailModal() {
 
   const [isEditingParams, setIsEditingParams] = useState(false)
   const [editPrompt, setEditPrompt] = useState('')
-  const editPromptParts = useMemo(() => getPromptMentionParts(editPrompt || '', []), [editPrompt])
   const [editParams, setEditParams] = useState<TaskParams>(DEFAULT_PARAMS)
   const [showSizePicker, setShowSizePicker] = useState(false)
-  const overlayRef = useRef<HTMLDivElement>(null)
   
   useEffect(() => {
     if (task && task.isFavorite) {
@@ -237,6 +236,27 @@ export default function DetailModal() {
       return
     }
 
+    // 从任务参数预先推断图片比例
+    const initialRatios: Record<string, string> = {}
+    const initialSizes: Record<string, string> = {}
+    
+    if (task && task.actualParamsByImage) {
+      for (const imageId of outputImageIds) {
+        const params = task.actualParamsByImage[imageId]
+        if (params?.size && typeof params.size === 'string') {
+          const [w, h] = params.size.split('x').map(Number)
+          if (w && h) {
+            initialRatios[imageId] = formatImageRatio(w, h)
+            initialSizes[imageId] = `${w}×${h}`
+          }
+        }
+      }
+    }
+    if (Object.keys(initialRatios).length > 0) {
+      setImageRatios((prev) => ({ ...prev, ...initialRatios }))
+      setImageSizes((prev) => ({ ...prev, ...initialSizes }))
+    }
+
     let cancelled = false
     const setOutputImage = (imageId: string, dataUrl: string) => {
       if (!cancelled) setOutputPreviewSrcs((prev) => ({ ...prev, [imageId]: dataUrl }))
@@ -258,7 +278,7 @@ export default function DetailModal() {
     return () => {
       cancelled = true
     }
-  }, [task?.outputImages])
+  }, [task?.outputImages, task?.actualParamsByImage])
 
   useEffect(() => {
     let cancelled = false
@@ -415,8 +435,7 @@ export default function DetailModal() {
     setIsEditingParams(false)
   }
 
-  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
+  const updateEditPromptValue = (val: string) => {
     setEditPrompt(val)
     if (task && task.isFavorite) {
       updateTaskInStore(task.id, { prompt: val })
@@ -632,8 +651,66 @@ export default function DetailModal() {
                   const src = outputPreviewSrcs[imageId] || ''
                   const itemStatus = task.batchItemStatuses?.[index]
                   const isSelected = imageId === currentOutputImageId
+                  
+                  // 尝试从多个来源获取尺寸信息
+                  let width: number | null = null
+                  let height: number | null = null
+                  
+                  // 1. 先从已有的 imageSizes/imageRatios 获取
+                  const currentRatio = imageRatios[imageId]
+                  const currentSize = imageSizes[imageId]
+                  if (currentSize) {
+                    const [w, h] = currentSize.split('×').map(Number)
+                    if (w && h) {
+                      width = w
+                      height = h
+                    }
+                  }
+                  
+                  // 2. 从任务的 actualParamsByImage 获取
+                  if ((width === null || height === null) && task.actualParamsByImage) {
+                    const params = task.actualParamsByImage[imageId]
+                    if (params?.size && typeof params.size === 'string') {
+                      const [w, h] = params.size.split('x').map(Number)
+                      if (w && h) {
+                        width = w
+                        height = h
+                      }
+                    }
+                  }
+                  
+                  // 3. 从任务的 actualParams 获取
+                  if ((width === null || height === null) && task.actualParams?.size) {
+                    const [w, h] = task.actualParams.size.split('x').map(Number)
+                    if (w && h) {
+                      width = w
+                      height = h
+                    }
+                  }
+                  
+                  // 4. 从任务的 params 获取
+                  if ((width === null || height === null) && task.params.size !== 'auto') {
+                    const [w, h] = task.params.size.split('x').map(Number)
+                    if (w && h) {
+                      width = w
+                      height = h
+                    }
+                  }
+                  
+                  // 根据尺寸确定比例
+                  let aspectClass = 'aspect-video' // 默认回到横版，确保不会都是方形
+                  if (width && height) {
+                    if (width > height) {
+                      aspectClass = 'aspect-video' // 横版 (16:9)
+                    } else if (height > width) {
+                      aspectClass = 'aspect-[9/16]' // 竖版 (9:16)
+                    } else {
+                      aspectClass = 'aspect-square' // 方形
+                    }
+                  }
+                  
                   return (
-                    <div key={imageId} className={['group relative aspect-video overflow-hidden rounded-lg border bg-black/20 transition', isSelected ? 'border-blue-400 shadow-[0_0_0_1px_rgba(96,165,250,0.75)]' : itemStatus === 'error' ? 'border-red-400/60' : 'border-white/10 hover:border-white/40'].join(' ')} onPointerEnter={(e) => { setImageIndex(index); updateHoverPreviewPosition(imageId, src, e) }} onPointerMove={(e) => updateHoverPreviewPosition(imageId, src, e)} onPointerLeave={() => setHoverPreview((preview) => preview?.imageId === imageId ? null : preview)}>
+                    <div key={imageId} className={['group relative overflow-hidden rounded-lg border bg-black/20 transition', aspectClass, isSelected ? 'border-blue-400 shadow-[0_0_0_1px_rgba(96,165,250,0.75)]' : itemStatus === 'error' ? 'border-red-400/60' : 'border-white/10 hover:border-white/40'].join(' ')} onPointerEnter={(e) => { setImageIndex(index); updateHoverPreviewPosition(imageId, src, e) }} onPointerMove={(e) => updateHoverPreviewPosition(imageId, src, e)} onPointerLeave={() => setHoverPreview((preview) => preview?.imageId === imageId ? null : preview)}>
                       {src ? (
                         <img src={src} data-image-id={imageId} className="saveable-image h-full w-full cursor-pointer object-cover transition duration-150 group-hover:scale-[1.03]" onLoad={(e) => { const image = e.currentTarget; if (image.naturalWidth > 0 && image.naturalHeight > 0) { setImageRatios((prev) => ({ ...prev, [imageId]: formatImageRatio(image.naturalWidth, image.naturalHeight) })); setImageSizes((prev) => ({ ...prev, [imageId]: image.naturalWidth + '×' + image.naturalHeight })) } }} onClick={() => { setImageIndex(index); setLightboxImageId(imageId, task.outputImages) }} alt="" />
                       ) : (
@@ -720,50 +797,12 @@ export default function DetailModal() {
               )}
             </div>
             {isEditingParams ? (
-              <div className="relative w-full h-32 mb-4 bg-gray-50 dark:bg-black/20 rounded-xl border border-gray-200 dark:border-white/10 focus-within:ring-2 focus-within:ring-blue-500/50">
-                <div 
-                  ref={overlayRef}
-                  className="absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden text-gray-700 dark:text-gray-300"
-                  aria-hidden="true"
-                >
-                  {editPrompt ? (
-                    editPromptParts.map((part, index) => {
-                      if (part.type === 'variable') {
-                        const color = VAR_COLOR_MAP[part.varName] ?? ''
-                        return (
-                          <span key={index}
-                            className="inline-flex items-center px-1 rounded text-xs font-medium"
-                            style={{
-                              backgroundColor: color ? `${color}18` : 'rgba(156,163,175,0.1)',
-                              color: color || '#9ca3af',
-                              borderColor: color ? color : 'rgba(156,163,175,0.2)',
-                              borderWidth: '1px',
-                              borderStyle: 'solid'
-                            }}
-                          >
-                            {part.text}
-                          </span>
-                        )
-                      } else {
-                        return <span key={index}>{part.text}</span>
-                      }
-                    })
-                  ) : (
-                    <span className="text-gray-400">输入提示词（可包含词条）...</span>
-                  )}
-                  {/* Invisible character at the end to ensure height matches if ending with newline */}
-                  {editPrompt.endsWith('\n') && <br />}
-                </div>
-                <textarea
-                  value={editPrompt}
-                  onChange={handlePromptChange}
-                  onScroll={(e) => {
-                    if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop
-                  }}
-                  className="absolute inset-0 w-full h-full px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words bg-transparent outline-none resize-none custom-scrollbar text-transparent caret-gray-800 dark:caret-gray-200"
-                  spellCheck="false"
-                />
-              </div>
+              <PromptVariableEditor
+                value={editPrompt}
+                onChange={updateEditPromptValue}
+                spellCheck={false}
+                className="mb-4 h-32 w-full overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-700 outline-none transition focus:ring-2 focus:ring-blue-500/50 dark:border-white/10 dark:bg-black/20 dark:text-gray-300"
+              />
             ) : showPendingPrompt ? (
               <div className="mb-4 leading-relaxed">
                 <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>

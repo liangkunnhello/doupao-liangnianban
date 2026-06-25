@@ -766,11 +766,12 @@ export async function generateDerivedWordEntries(opts: {
   settings: AppSettings
   profile: ApiProfile
   seedEntry: string
+  contextEntries?: string[]
   similarity: number
   count: number
   signal?: AbortSignal
 }): Promise<string[]> {
-  const { settings, profile, seedEntry, similarity, count, signal } = opts
+  const { settings, profile, seedEntry, contextEntries = [], similarity, count, signal } = opts
   const normalizedCount = Math.max(1, Math.min(100, Math.trunc(count)))
   const normalizedSimilarity = Math.max(0, Math.min(100, Math.trunc(similarity)))
   const proxyConfig = readClientDevProxyConfig()
@@ -781,15 +782,33 @@ export async function generateDerivedWordEntries(opts: {
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
 
-  try {
-    const derivativeRule = getEnabledDerivativeRuleText(settings)
-    const prompt = [
-      `Seed entry: ${seedEntry.trim()}`,
-      `Derivative rule:\n${derivativeRule}`,
-      `Similarity: ${normalizedSimilarity}/100. 100 means very close variants; 0 means broadly divergent but still useful for image prompts.`,
-      `Count: ${normalizedCount}`,
-      'Generate entries in the same language as the seed entry when possible.',
-    ].join('\n')
+    try {
+      const derivativeRule = getEnabledDerivativeRuleText(settings)
+      
+      const promptLines = [
+        `Derivative rule:\n${derivativeRule}`,
+        `Seed entry: ${seedEntry.trim()}`,
+      ]
+      
+      if (contextEntries.length > 0) {
+        // 过滤掉与种子词条相同的词条，最多提供 20 个上下文词条避免 token 过多
+        const uniqueContext = contextEntries
+          .filter(e => e.trim() && e.trim() !== seedEntry.trim())
+          .slice(0, 20)
+        
+        if (uniqueContext.length > 0) {
+          promptLines.push(`Existing context entries:`)
+          uniqueContext.forEach(e => promptLines.push(`- ${e}`))
+        }
+      }
+  
+      promptLines.push(
+        `Similarity: ${normalizedSimilarity}/100. 100 means very close variants; 0 means broadly divergent but still useful for image prompts.`,
+        `Count: ${normalizedCount}`,
+        'Generate entries in the same language as the seed entry when possible.'
+      )
+      
+      const prompt = promptLines.join('\n')
 
     const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
       method: 'POST',

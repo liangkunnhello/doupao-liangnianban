@@ -28,7 +28,6 @@ type ElectronAPI = {
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>
   installUpdate: () => Promise<{ success: boolean }>
   getAppVersion: () => Promise<string>
-  addAllowedRoot?: (dirPath: string) => Promise<void>
   isElectron: boolean
 }
 
@@ -99,9 +98,6 @@ export async function readDirectory(dirPath: string): Promise<string[]> {
 export async function checkPathExists(filePath: string): Promise<boolean | null> {
   const api = getAPI()
   if (!api) return null
-  if (api.addAllowedRoot) {
-    await api.addAllowedRoot(filePath)
-  }
   return api.checkExists(filePath)
 }
 
@@ -172,9 +168,6 @@ export async function getExplicitImageSaveDirectory(outputDirectory: string): Pr
   if (!api) return null
   const trimmed = resolveOutputDirectoryVariables(outputDirectory.trim())
   if (!trimmed) return null
-  if (api.addAllowedRoot) {
-    await api.addAllowedRoot(trimmed)
-  }
   const ok = await api.ensureDir(trimmed)
   return ok ? trimmed : null
 }

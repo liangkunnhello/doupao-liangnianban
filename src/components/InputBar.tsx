@@ -4,7 +4,7 @@ import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteC
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { convertVariableMentionAtVisibleOffsetToText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -1678,16 +1678,17 @@ export default function InputBar() {
     const html = prompt
       ? parts.map((part) => {
           if (part.type === 'mention') {
-            return `<span contenteditable="false" class="mention-tag" data-mention-text="${part.mentionText ?? getSelectedImageMentionLabel(part.imageIndex ?? 0)}">${part.text}</span>`
+            const mentionText = part.mentionText ?? getSelectedImageMentionLabel(part.imageIndex ?? 0)
+            return `<span contenteditable="false" class="mention-tag" data-mention-text="${escapePromptHtmlAttribute(mentionText)}">${escapePromptHtmlText(part.text)}</span>`
           }
           if (part.type === 'variable') {
             const color = currentColorMap[part.varName] ?? ''
             const style = color
               ? `style="background:${color}18;color:${color};border-color:${color};--var-bg:${color}18;--var-text:${color};--var-border:${color};--var-bg-hover:${color}28;--var-bg-selected:${color};--var-text-selected:#fff;--var-border-selected:${color}"`
               : ''
-            return `<span contenteditable="false" draggable="true" class="wildcard-var" data-var-name="${part.varName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" ${style}>${part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`
+            return `<span contenteditable="false" draggable="true" class="wildcard-var" data-var-name="${escapePromptHtmlAttribute(part.varName)}" ${style}>${escapePromptHtmlText(part.text)}</span>`
           }
-          return part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          return escapePromptHtmlText(part.text)
         }).join('')
       : ''
     if (el.innerHTML !== html) {

@@ -1,7 +1,7 @@
 import { useStore } from '../store'
 import { clearFailedTasks } from '../store'
 import Select from './Select'
-import { ChevronLeftIcon, FavoriteIcon, CollectionManageIcon, TrashIcon } from './icons'
+import { FavoriteIcon, CollectionManageIcon, TrashIcon } from './icons'
 
 export default function SearchBar() {
   const searchQuery = useStore((s) => s.searchQuery)
@@ -10,16 +10,10 @@ export default function SearchBar() {
   const setFilterStatus = useStore((s) => s.setFilterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
-  const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
-  const setActiveFavoriteCollectionId = useStore((s) => s.setActiveFavoriteCollectionId)
   const openManageCollectionsModal = useStore((s) => s.openManageCollectionsModal)
   const hasFailedTasks = useStore((s) => s.tasks.some((t) => t.status === 'error'))
 
   const handleFavoriteClick = () => {
-    if (activeFavoriteCollectionId) {
-      setActiveFavoriteCollectionId(null)
-      return
-    }
     setFilterFavorite(!filterFavorite)
   }
 
@@ -33,9 +27,9 @@ export default function SearchBar() {
               ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-500'
               : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
           }`}
-          title={activeFavoriteCollectionId ? '显示全部收藏' : filterFavorite ? '退出收藏夹视图' : '收藏夹'}
+          title={filterFavorite ? '退出收藏夹视图' : '收藏夹'}
         >
-          {activeFavoriteCollectionId ? <ChevronLeftIcon className="w-5 h-5" /> : <FavoriteIcon filled={filterFavorite} className="w-5 h-5" />}
+          <FavoriteIcon filled={filterFavorite} className="w-5 h-5" />
         </button>
         {filterFavorite && (
           <button

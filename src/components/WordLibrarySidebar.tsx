@@ -307,10 +307,14 @@ export default function WordLibrarySidebar() {
     setDerivedClosing(false)
     setDerivedEntries([])
     try {
+      // 获取当前词库中所有的词条作为上下文
+      const contextEntries = activeEntry ? activeEntry.entries : []
+      
       const generated = await generateDerivedWordEntries({
         settings,
         profile,
         seedEntry,
+        contextEntries,
         similarity: deriveSimilarity,
         count,
       })

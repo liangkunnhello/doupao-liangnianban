@@ -19,7 +19,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import VarEntryEditor from './components/VarEntryEditor'
 import WorkspaceTabBar from './components/WorkspaceTabBar'
 const AgentWorkspace = React.lazy(() => import('./components/AgentWorkspace'))
-const PostprocessWorkspace = React.lazy(() => import('./components/PostprocessWorkspace'))
+const PostprocessV2Workspace = React.lazy(() => import('./components/PostprocessV2Workspace'))
 const DetailModal = React.lazy(() => import('./components/DetailModal'))
 const Lightbox = React.lazy(() => import('./components/Lightbox'))
 const SettingsModal = React.lazy(() => import('./components/SettingsModal'))
@@ -198,7 +198,7 @@ export default function App() {
         {appMode === 'agent' ? (
           <React.Suspense fallback={null}><AgentWorkspace /></React.Suspense>
         ) : appMode === 'postprocess' ? (
-          <React.Suspense fallback={null}><PostprocessWorkspace /></React.Suspense>
+          <React.Suspense fallback={null}><PostprocessV2Workspace /></React.Suspense>
         ) : (
           <main data-home-main data-drag-select-surface className="pb-48">
             <div className="safe-area-x max-w-7xl mx-auto">

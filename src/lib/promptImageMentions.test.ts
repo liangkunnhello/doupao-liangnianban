@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InputImage } from '../types'
-import { convertVariableMentionAtVisibleOffsetToText, getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, remapImageMentionsForOrder, replaceImageMentionsForApi, VAR_END, VAR_START } from './promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, remapImageMentionsForOrder, replaceImageMentionsForApi, VAR_END, VAR_START } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
@@ -86,6 +86,11 @@ describe('prompt image mentions', () => {
     expect(isCursorInSelectedImageMention(prompt, 9)).toBe(true)
     expect(isCursorInSelectedImageMention(prompt, 3)).toBe(false)
     expect(isCursorInSelectedImageMention(prompt, 10)).toBe(false)
+  })
+
+  it('escapes prompt HTML text and attributes before contentEditable rendering', () => {
+    expect(escapePromptHtmlText(`<img src=x onerror="alert('x')">&`)).toBe('&lt;img src=x onerror="alert(\'x\')"&gt;&amp;')
+    expect(escapePromptHtmlAttribute(`" data-x='1' & <tag>`)).toBe('&quot; data-x=&#39;1&#39; &amp; &lt;tag&gt;')
   })
 
   describe('remapImageMentionsForOrder', () => {

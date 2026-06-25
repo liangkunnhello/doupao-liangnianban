@@ -38,6 +38,7 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
+import { shouldCopyProfileImportUrl } from '../lib/profileImportUrl'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
@@ -761,6 +762,8 @@ export default function SettingsModal() {
   }
 
   const copyProfileImportUrl = async (profile: ApiProfile, options: CopyImportUrlOptions) => {
+    if (!shouldCopyProfileImportUrl(options.includeApiKey, (message) => window.confirm(message))) return
+
     try {
       await copyTextToClipboard(createProfileImportUrl(profile, options))
       showToast(options.includeApiKey ? '导入 URL 已复制（包含 API Key）' : '导入 URL 已复制', 'success')

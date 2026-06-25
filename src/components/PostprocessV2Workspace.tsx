@@ -47,10 +47,10 @@ export default function PostprocessV2Workspace() {
       
       try {
         let ruleToUse = activeRule
-        let templateToUse = activeTemplate
+        let templateToUse: typeof activeTemplate | null = activeTemplate ?? null
         
         if (activeTab === 'rules' && activeRule) {
-          templateToUse = templates.find(t => t.id === activeRule.templateId)
+          templateToUse = templates.find(t => t.id === activeRule.templateId) || null
         } else if (activeTab === 'templates' && activeTemplate) {
           // Create a mock rule for previewing template
           ruleToUse = {

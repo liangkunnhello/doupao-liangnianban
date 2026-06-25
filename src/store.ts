@@ -3522,33 +3522,67 @@ export async function initStore() {
       selectedWorkspaceTabIds: [],
     })
     currentTabs = [defaultTab]
-  }
-  if (currentTabs.length > 0 && galleryTasks.length > 0) {
+  } else {
     // Sync task state changes (e.g. interrupted tasks) to existing tab tasks
     const taskMap = new Map(tasks.map((t) => [t.id, t]))
-    const updatedTabs = currentTabs.map((tab: any, index) => {
-      // _taskIds 是新版字段；如果不存在，说明是未初始化的标签或者是刚才出 bug 时的旧状态
-      // 这里增加回退：如果既没有 _taskIds 也没有 tasks（或里面全是 undefined），
-      // 而此时又不是空状态（galleryTasks > 0），则第一标签页会吃下所有的 galleryTasks 作为兜底
-      // _taskIds 是新版字段；如果存在，说明已经迁移过
-      const hasTaskIdsField = Array.isArray(tab._taskIds)
-      const taskIds = hasTaskIdsField ? tab._taskIds : (Array.isArray(tab.tasks) ? tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? '')) : [])
+    const claimedTaskIds = new Set<string>()
+    
+    // 我们必须非常小心：
+    // _taskIds 是持久化时保存的任务ID列表。
+    // 但是，如果没有持久化 _taskIds（旧版本或者刚从 IndexedDB 恢复但还没触发持久化），
+    // 那么 tab.tasks 里面可能包含了它应该有的任务。
+    // 注意：Zustand Persist 会从 localStorage 读取 workspaceTabs，里面的 tab.tasks 可能是空数组（因为在 persist 阶段被置空了）
+    // 所以，如果在 localStorage 里的 `_taskIds` 是一个空数组，这说明用户主动清空了该标签页的任务。
+    
+    // 首先恢复各个标签页的任务
+    const updatedTabs = currentTabs.map((tab: any) => {
+      let taskIds: string[] = []
       
-      // 如果没有 _taskIds 字段（旧数据或刚迁移），且提取不到有效的任务 ID，且是第一个标签页，才作为兜底承接所有任务
-      if (!hasTaskIdsField && (taskIds.length === 0 || taskIds.every((id: string) => !id)) && index === 0) {
-        return {
-          ...tab,
-          tasks: galleryTasks,
-          _taskIds: undefined,
-        }
+      // 检查持久化状态中是否有 _taskIds
+      if (Array.isArray(tab._taskIds)) {
+        taskIds = tab._taskIds
+      } else if (Array.isArray(tab.tasks)) {
+        // 如果没有 _taskIds 但有 tasks，可能是旧数据或尚未初始化的状态
+        taskIds = tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? ''))
       }
+      
+      // 尝试恢复任务：只有在 IndexedDB 中存在的任务才会被恢复
+      const tabTasks = taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined)
+      
+      // 记录已经被分配给某个标签页的任务 ID
+      tabTasks.forEach((t: TaskRecord) => claimedTaskIds.add(t.id))
 
       return {
         ...tab,
-        tasks: taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined),
-        _taskIds: undefined,
+        tasks: tabTasks,
+        _taskIds: undefined, // 恢复完毕，清除中间字段
       }
     })
+    
+    // 找出所有画廊任务中没有被任何标签页认领的“孤儿任务”
+    // 这些任务可能是因为版本升级、HMR 热更新导致 localStorage 保存失败、或者旧版本残留导致的
+    const orphanTasks = galleryTasks.filter(t => !claimedTaskIds.has(t.id))
+    
+    if (orphanTasks.length > 0) {
+      // 为了不打乱用户当前的标签页，我们把这些丢失的任务放进一个专门的“恢复的历史任务”标签页
+      let recoveryTab = updatedTabs.find((t: any) => t.name === '恢复的历史任务')
+      if (recoveryTab) {
+        recoveryTab.tasks = [...orphanTasks, ...recoveryTab.tasks]
+      } else {
+        const newTab = createDefaultWorkspaceTab({
+          prompt: '',
+          inputImages: [],
+          inputImageFolder: null,
+          params: { ...DEFAULT_PARAMS },
+          maskDraft: null,
+          maskEditorImageId: null,
+          tasks: orphanTasks,
+        })
+        newTab.name = '恢复的历史任务'
+        updatedTabs.push(newTab)
+      }
+    }
+    
     useStore.setState({ workspaceTabs: updatedTabs })
   }
   showSupportPromptForExistingLocalData(tasks)
@@ -3902,9 +3936,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   // 查找当前激活的标签页
   const activeTab = state.workspaceTabs.find(tab => tab.id === state.activeWorkspaceTabId)
   
-  // 优先级：1. 自定义输出路径 -> 2. 当前加载的文件夹路径 -> 3. 标签页名称（作为子文件夹）
-  const scheduledOutputPath = customOutputPath || (inputImageFolder ? inputImageFolder.path : undefined)
-  const scheduledOutputSubFolder = (!scheduledOutputPath && activeTab) ? activeTab.name : undefined
+  // 修复：只有自定义输出路径被设置时才使用，否则使用标签页名称作为子文件夹
+  const scheduledOutputPath = customOutputPath.trim() ? customOutputPath : undefined
+  const scheduledOutputSubFolder = activeTab ? activeTab.name : undefined
 
   await submitTaskWithData({ 
     prompt, 

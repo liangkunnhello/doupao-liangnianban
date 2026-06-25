@@ -396,7 +396,7 @@ export default function Header() {
               onClick={() => setAppMode('postprocess')}
               className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'postprocess' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              后期
+              自动化分发
             </button>
             <button
               type="button"
