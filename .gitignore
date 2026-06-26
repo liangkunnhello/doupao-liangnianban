@@ -13,3 +13,4 @@ release-v2/
 latest.yml
 *.asar
 .superpowers/
+.worktrees/
