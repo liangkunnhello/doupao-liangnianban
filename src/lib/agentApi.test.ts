@@ -229,6 +229,7 @@ describe('callAgentResponsesApi', () => {
 
 describe('generateDerivedWordEntries', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -375,5 +376,35 @@ describe('generateDerivedWordEntries', () => {
     expect(body.input[0].content[0].text).toContain('Rule: 风格替换')
     expect(body.input[0].content[0].text).toContain('Replace style adjectives.')
     expect(body.input[0].content[0].text).not.toContain('Do not include this.')
+  })
+
+  it('reports a clear timeout error when derived word generation times out', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      const signal = (init as RequestInit | undefined)?.signal
+      if (signal instanceof AbortSignal) {
+        signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        }, { once: true })
+      }
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      model: 'gpt-5.5',
+      timeout: 1,
+    })
+
+    const promise = generateDerivedWordEntries({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      seedEntry: '红色背景',
+      similarity: 85,
+      count: 3,
+    })
+    const assertion = expect(promise).rejects.toThrow('词条生成超时')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    await assertion
   })
 })

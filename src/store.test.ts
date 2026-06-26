@@ -738,6 +738,47 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().tasks[0].batchItemErrors).toHaveLength(9)
   })
 
+  it('does not save batch-generated images again when the task finishes', async () => {
+    const savedImages: Array<{ filePath: string; dataUrl: string }> = []
+    const electronAPI = {
+      isElectron: true,
+      getLocalSavePath: vi.fn(async () => 'D:\\LocalSaves'),
+      getDefaultPath: vi.fn(async () => 'D:\\LocalSaves'),
+      setLocalSavePath: vi.fn(async () => {}),
+      ensureDir: vi.fn(async () => true),
+      pathJoin: vi.fn(async (...parts: string[]) => parts.join('\\')),
+      saveImage: vi.fn(async (filePath: string, dataUrl: string) => {
+        savedImages.push({ filePath, dataUrl })
+        return true
+      }),
+      saveJson: vi.fn(async () => true),
+      saveText: vi.fn(async () => true),
+      checkExists: vi.fn(async () => false),
+      readDir: vi.fn(async () => []),
+    }
+    Object.defineProperty(globalThis, 'window', {
+      value: { electronAPI },
+      configurable: true,
+    })
+    vi.mocked(callImageApi).mockImplementation(async (opts) => ({
+      images: [`data:image/png;base64,${opts.params.n}-${savedImages.length}`],
+      actualParams: { n: opts.params.n },
+      actualParamsList: [{ n: opts.params.n }],
+      revisedPrompts: [],
+    }))
+    useStore.setState({
+      params: { ...DEFAULT_PARAMS, n: 3 },
+    })
+
+    await submitTask()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks[0].status).toBe('done')
+      expect(electronAPI.saveJson).toHaveBeenCalled()
+    })
+    expect(electronAPI.saveImage).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps only recent stream partial images when a task fails', async () => {
     await clearImages()
     vi.mocked(callImageApi).mockImplementationOnce(async (opts) => {

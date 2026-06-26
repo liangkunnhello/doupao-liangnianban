@@ -2,13 +2,18 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
+  selectFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-file', { filters }),
   saveImage: (filePath: string, dataUrl: string) => ipcRenderer.invoke('fs:save-image', { filePath, dataUrl }),
+  saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => ipcRenderer.invoke('composite:save-image', { filePath, dataUrl, maxSizeKb }),
   saveJson: (filePath: string, data: unknown) => ipcRenderer.invoke('fs:save-json', { filePath, data }),
   saveText: (filePath: string, content: string) => ipcRenderer.invoke('fs:save-text', { filePath, content }),
   ensureDir: (dirPath: string) => ipcRenderer.invoke('fs:ensure-dir', { dirPath }),
   pathJoin: (...paths: string[]) => ipcRenderer.invoke('fs:path-join', { paths }),
   checkExists: (filePath: string) => ipcRenderer.invoke('fs:check-exists', { filePath }),
   readDir: (dirPath: string) => ipcRenderer.invoke('fs:read-dir', { dirPath }),
+  readImageFile: (filePath: string) => ipcRenderer.invoke('composite:read-image-file', { filePath }),
+  listImageFiles: (dirPath: string) => ipcRenderer.invoke('composite:list-image-files', { dirPath }),
+  pickImageFile: (input: { path: string; mode: 'random' | 'sequential'; index: number }) => ipcRenderer.invoke('composite:pick-image-file', input),
   readFileBuffer: (filePath: string) => ipcRenderer.invoke('fs:read-file-buffer', { filePath }),
   getDefaultPath: () => ipcRenderer.invoke('fs:get-default-path'),
   openInExplorer: (filePath: string) => ipcRenderer.invoke('fs:open-in-explorer', { filePath }),

@@ -194,7 +194,7 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
 
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
-    const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
+    const dataUrl = await ensureImageCached(imageId)
     if (dataUrl) {
       await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
     }
@@ -234,7 +234,7 @@ async function saveTaskToLocalFS(taskId: string) {
   try {
     for (let i = 0; i < (task.outputImages?.length ?? 0); i++) {
       const imageId = task.outputImages[i]
-      const dataUrl = getCachedImage(imageId) || (await getImage(imageId))?.dataUrl
+      const dataUrl = await ensureImageCached(imageId)
       if (dataUrl) {
         const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
         if (!saved) imageFailCount++
@@ -6033,7 +6033,7 @@ async function executeTask(taskId: string) {
         useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
         if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
       }
-      void saveTaskToLocalFS(task.id)
+      void saveTaskMetaToLocalFS(task.id)
       const currentMask = useStore.getState().maskDraft
       if (
         maskDataUrl &&
@@ -6205,7 +6205,11 @@ async function executeTask(taskId: string) {
       useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
       if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
     }
-    void saveTaskToLocalFS(task.id)
+    if (n > 1) {
+      void saveTaskMetaToLocalFS(task.id)
+    } else {
+      void saveTaskToLocalFS(task.id)
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&

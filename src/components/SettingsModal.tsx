@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { useStore, exportData, exportDataToPath, importData, clearData, type SettingsTab, cleanupAllOrphanedImages, getErrorToastMessage } from '../store'
+import { useStore, exportData, importData, clearData, type SettingsTab, cleanupAllOrphanedImages, getErrorToastMessage } from '../store'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_FAL_BASE_URL,
@@ -30,7 +30,7 @@ import {
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getDesktopPath, getBackupPath, selectBackupDirectory, createBackupInPath } from '../lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getBackupPath } from '../lib/localSave'
 import { useAutoUpdate } from '../hooks/useAutoUpdate'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { formatUpdateReleaseNotes } from '../lib/updateReleaseNotes'
@@ -2515,7 +2515,7 @@ export default function SettingsModal() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                   <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    每次保存应用状态时，系统会自动备份上一份状态 JSON。备份包含设置、输入草稿、收藏夹、词条库、工作区标签等持久化状态；不包含 IndexedDB 中的任务图片数据。需要完整迁移任务、图片和缩略图时，请使用下方一键 ZIP 备份。自动备份最多保留 30 份，设置为 0 表示每次保存都备份。
+                    每次保存应用状态时，系统会自动备份上一份状态 JSON。备份包含设置、输入草稿、收藏夹、词条库、工作区标签等持久化状态；不包含 IndexedDB 中的任务图片数据。需要完整迁移任务、图片和缩略图时，请使用「数据管理」中的 ZIP 导出。自动备份最多保留 30 份，设置为 0 表示每次保存都备份。
                   </div>
                 </div>
 
@@ -2546,89 +2546,6 @@ export default function SettingsModal() {
                       <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
                         {draft.backupInterval === 0 ? '每次保存都备份' : `至少间隔 ${draft.backupInterval} 分钟才创建新备份`}
                       </span>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] shadow-sm space-y-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                      <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">一键备份</h4>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      立即生成一份包含配置、任务、Agent 对话、词条库、图片和缩略图的 ZIP 备份文件，保存到自定义位置或桌面。
-                    </p>
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">备份到：</span>
-                        <input
-                          type="text"
-                          value={draft.customBackupPath || ''}
-                          placeholder="默认：桌面"
-                          readOnly
-                          className="flex-1 px-3 py-2 text-sm bg-gray-50 dark:bg-white/[0.05] border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-700 dark:text-gray-300 truncate"
-                        />
-                        <button
-                          onClick={async () => {
-                            const path = await selectBackupDirectory()
-                            if (path) {
-                              commitSettings({ ...draft, customBackupPath: path })
-                            }
-                          }}
-                          className="px-3 py-2 text-sm bg-gray-100 dark:bg-white/[0.08] rounded-lg hover:bg-gray-200 dark:hover:bg-white/[0.12] transition-colors shrink-0"
-                        >
-                          选择路径
-                        </button>
-                        {draft.customBackupPath && (
-                          <button
-                            onClick={() => commitSettings({ ...draft, customBackupPath: '' })}
-                            className="px-3 py-2 text-sm bg-red-50 dark:bg-red-500/10 text-red-500 rounded-lg hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors shrink-0"
-                          >
-                            重置
-                          </button>
-                        )}
-                      </div>
-                      <button
-                        onClick={async () => {
-                          const targetPath = draft.customBackupPath || await getDesktopPath()
-                          if (!targetPath) {
-                            showToast('无法获取备份路径', 'error')
-                            return
-                          }
-                          showToast('正在生成备份...', 'info')
-                          if (draft.customBackupPath) {
-                            const success = await createBackupInPath(targetPath)
-                            if (success) {
-                              showToast(`备份已保存到：${targetPath}`, 'success')
-                              setBackups(await getBackupList())
-                            } else {
-                              showToast('备份保存失败', 'error')
-                            }
-                          } else {
-                            const desktop = await getDesktopPath()
-                            if (!desktop) {
-                              showToast('无法获取桌面路径', 'error')
-                              return
-                            }
-                            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-                            const fileName = `doupao_backup_${ts}.zip`
-                            const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
-                            const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true })
-                            if (success) {
-                              showToast(`备份已保存到桌面：${fileName}`, 'success')
-                            } else {
-                              showToast('备份保存失败', 'error')
-                            }
-                          }
-                        }}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors w-fit"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        备份
-                      </button>
                     </div>
                   </div>
 

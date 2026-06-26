@@ -3,13 +3,18 @@ import type { UpdateStatus } from '../hooks/useAutoUpdate'
 
 type ElectronAPI = {
   selectDirectory: () => Promise<string | null>
+  selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   saveImage: (filePath: string, dataUrl: string) => Promise<boolean>
+  saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => Promise<boolean>
   saveJson: (filePath: string, data: unknown) => Promise<boolean>
   saveText: (filePath: string, content: string) => Promise<boolean>
   ensureDir: (dirPath: string) => Promise<boolean>
   pathJoin: (...paths: string[]) => Promise<string>
   checkExists: (filePath: string) => Promise<boolean>
   readDir: (dirPath: string) => Promise<string[]>
+  readImageFile: (filePath: string) => Promise<{ path: string; name: string; dataUrl: string } | null>
+  listImageFiles: (dirPath: string) => Promise<{ path: string; name: string; dataUrl?: string }[]>
+  pickImageFile: (input: { path: string; mode: 'random' | 'sequential'; index: number }) => Promise<{ path: string; name: string; dataUrl: string } | null>
   readFileBuffer: (filePath: string) => Promise<{ data: ArrayBuffer; name: string } | null>
   getDefaultPath: () => Promise<string>
   openInExplorer: (filePath: string) => Promise<void>

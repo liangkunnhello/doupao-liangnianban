@@ -84,6 +84,52 @@ function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
   }
 }
 
+const COMPOSITE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+
+function isCompositeImagePath(filePath: string): boolean {
+  return COMPOSITE_IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
+function mimeFromImagePath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase()
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.webp') return 'image/webp'
+  return 'image/png'
+}
+
+function readImageFilePayload(filePath: string) {
+  const safeFilePath = assertAllowedPath(filePath)
+  if (!existsSync(safeFilePath) || !statSync(safeFilePath).isFile() || !isCompositeImagePath(safeFilePath)) return null
+  const buffer = readFileSync(safeFilePath)
+  return {
+    path: safeFilePath,
+    name: path.basename(safeFilePath),
+    dataUrl: `data:${mimeFromImagePath(safeFilePath)};base64,${buffer.toString('base64')}`,
+  }
+}
+
+function listCompositeImageFiles(dirPath: string) {
+  const safeDirPath = assertAllowedPath(dirPath)
+  if (!existsSync(safeDirPath) || !statSync(safeDirPath).isDirectory()) return []
+  return readdirSync(safeDirPath)
+    .map((name) => path.join(safeDirPath, name))
+    .filter((filePath) => {
+      try {
+        return statSync(filePath).isFile() && isCompositeImagePath(filePath)
+      } catch {
+        return false
+      }
+    })
+    .map((filePath) => {
+      const buffer = readFileSync(filePath)
+      return {
+        path: filePath,
+        name: path.basename(filePath),
+        dataUrl: `data:${mimeFromImagePath(filePath)};base64,${buffer.toString('base64')}`,
+      }
+    })
+}
+
 export function registerIpcHandlers(): void {
   ipcMain.handle('fs:select-directory', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -93,6 +139,18 @@ export function registerIpcHandlers(): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     addAllowedRoot(result.filePaths[0])
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('fs:select-file', async (event, { filters }: { filters?: Electron.FileFilter[] }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openFile'],
+      title: '选择本地文件',
+      filters: filters ?? [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    addAllowedRoot(path.dirname(result.filePaths[0]))
     return result.filePaths[0]
   })
 
@@ -169,6 +227,42 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('composite:read-image-file', async (_event, { filePath }: { filePath: string }) => {
+    try {
+      return readImageFilePayload(filePath)
+    } catch (err) {
+      console.error('读取合成图片失败:', err)
+      return null
+    }
+  })
+
+  ipcMain.handle('composite:list-image-files', async (_event, { dirPath }: { dirPath: string }) => {
+    try {
+      return listCompositeImageFiles(dirPath)
+    } catch (err) {
+      console.error('列出合成图片失败:', err)
+      return []
+    }
+  })
+
+  ipcMain.handle('composite:pick-image-file', async (_event, { path: inputPath, mode, index }: { path: string; mode: 'random' | 'sequential'; index: number }) => {
+    try {
+      const safePath = assertAllowedPath(inputPath)
+      const stat = statSync(safePath)
+      if (stat.isFile()) return readImageFilePayload(safePath)
+      if (!stat.isDirectory()) return null
+      const files = listCompositeImageFiles(safePath)
+      if (!files.length) return null
+      const picked = mode === 'random'
+        ? files[Math.floor(Math.random() * files.length)]
+        : files[((index % files.length) + files.length) % files.length]
+      return readImageFilePayload(picked.path)
+    } catch (err) {
+      console.error('抽取合成图片失败:', err)
+      return null
+    }
+  })
+
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
     try {
       const safeFilePath = assertAllowedPath(filePath)
@@ -179,6 +273,20 @@ export function registerIpcHandlers(): void {
     } catch (err) {
       console.error('读取文件失败:', err)
       return null
+    }
+  })
+
+  ipcMain.handle('composite:save-image', async (_event, { filePath, dataUrl }: { filePath: string; dataUrl: string; maxSizeKb?: number }) => {
+    try {
+      const safeFilePath = assertAllowedPath(filePath)
+      const { buffer } = dataUrlToBuffer(dataUrl)
+      const dir = path.dirname(safeFilePath)
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      writeFileSync(safeFilePath, buffer)
+      return true
+    } catch (err) {
+      console.error('保存合成图片失败:', err)
+      return false
     }
   })
 

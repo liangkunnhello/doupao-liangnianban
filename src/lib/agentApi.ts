@@ -810,18 +810,26 @@ export async function generateDerivedWordEntries(opts: {
       
       const prompt = promptLines.join('\n')
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
-      method: 'POST',
-      headers: createHeaders(profile),
-      cache: 'no-store',
-      body: JSON.stringify({
-        model: profile.model || settings.model,
-        instructions: WORD_DERIVATIVE_INSTRUCTIONS,
-        input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
-        max_output_tokens: Math.max(128, normalizedCount * 24),
-      }),
-      signal: controller.signal,
-    })
+    let response: Response
+    try {
+      response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: createHeaders(profile),
+        cache: 'no-store',
+        body: JSON.stringify({
+          model: profile.model || settings.model,
+          instructions: WORD_DERIVATIVE_INSTRUCTIONS,
+          input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
+          max_output_tokens: Math.max(128, normalizedCount * 24),
+        }),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      if (controller.signal.aborted && !signal?.aborted) {
+        throw new Error(`词条生成超时：超过 ${profile.timeout} 秒仍未完成，请稍后重试或提高 Agent 配置中的超时时间。`)
+      }
+      throw err
+    }
 
     if (!response.ok) {
       throw new Error(await getApiErrorMessage(response))
