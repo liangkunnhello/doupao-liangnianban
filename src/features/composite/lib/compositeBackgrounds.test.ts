@@ -50,4 +50,33 @@ describe('composite backgrounds', () => {
     expect(history.previous().current()).toBe('a')
     expect(history.next().current()).toBe('c')
   })
+
+  it('preserves all string initial entries while starting at the first item', () => {
+    const history = createPreviewHistory(['a', 'b', 'c'])
+
+    expect(history.current()).toBe('a')
+    expect(history.snapshot()).toEqual({ entries: ['a', 'b', 'c'], index: 0 })
+  })
+
+  it('restores snapshot input and clamps out-of-range indexes', () => {
+    const restored = createPreviewHistory({ entries: ['a', 'b', 'c'], index: 1 })
+    const clamped = createPreviewHistory({ entries: ['a', 'b', 'c'], index: 12 })
+    const empty = createPreviewHistory({ entries: [], index: 3 })
+
+    expect(restored.current()).toBe('b')
+    expect(restored.snapshot()).toEqual({ entries: ['a', 'b', 'c'], index: 1 })
+    expect(clamped.current()).toBe('c')
+    expect(clamped.snapshot()).toEqual({ entries: ['a', 'b', 'c'], index: 2 })
+    expect(empty.current()).toBeNull()
+    expect(empty.snapshot()).toEqual({ entries: [], index: -1 })
+  })
+
+  it('returns the history API when navigation methods are destructured', () => {
+    const history = createPreviewHistory(['a'])
+    const { push, previous, next } = history
+
+    expect(push('b').current()).toBe('b')
+    expect(previous().current()).toBe('a')
+    expect(next().current()).toBe('b')
+  })
 })

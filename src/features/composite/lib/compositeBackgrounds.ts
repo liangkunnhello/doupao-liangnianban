@@ -25,11 +25,13 @@ export function naturalSortBackgrounds(items: CompositeV2BackgroundImage[]): Com
   })
 }
 
-export function createPreviewHistory(initial: string[] = []) {
-  let entries = initial.slice(0, 1)
-  let index = entries.length ? 0 : -1
+export type CompositePreviewHistorySnapshot = { entries: string[]; index: number }
 
-  return {
+export function createPreviewHistory(initial: string[] | CompositePreviewHistorySnapshot = []) {
+  let entries = Array.isArray(initial) ? [...initial] : [...initial.entries]
+  let index = Array.isArray(initial) ? (entries.length ? 0 : -1) : clampPreviewHistoryIndex(initial.index, entries.length)
+
+  const api = {
     current() {
       return index >= 0 ? entries[index] : null
     },
@@ -37,18 +39,25 @@ export function createPreviewHistory(initial: string[] = []) {
       entries = entries.slice(0, index + 1)
       entries.push(path)
       index = entries.length - 1
-      return this
+      return api
     },
     previous() {
       if (index > 0) index -= 1
-      return this
+      return api
     },
     next() {
       if (index < entries.length - 1) index += 1
-      return this
+      return api
     },
     snapshot() {
       return { entries: [...entries], index }
     },
   }
+
+  return api
+}
+
+function clampPreviewHistoryIndex(index: number, length: number): number {
+  if (length === 0) return -1
+  return Math.min(Math.max(index, 0), length - 1)
 }
