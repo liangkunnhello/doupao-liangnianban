@@ -29,6 +29,9 @@ export function duplicatePresetIntoGroup(
 ): { presets: CompositeV2Preset[]; group: CompositeV2PresetGroup } {
   const source = presets.find((preset) => preset.id === sourcePresetId)
   if (!source) return { presets, group }
+  if (presets.some((preset) => preset.id === newPresetId) || group.presetIds.includes(newPresetId)) {
+    return { presets, group }
+  }
 
   const copy: CompositeV2Preset = {
     ...structuredClone(source),
