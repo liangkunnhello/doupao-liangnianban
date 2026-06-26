@@ -29,4 +29,27 @@ describe('composite v2 output rules', () => {
     expect(enabled).toHaveLength(1)
     expect(enabled[0]).toMatchObject({ channelName: '百度', name: '370x245', maxSizeKb: 123 })
   })
+
+  it('clones global output rules before returning effective rules', () => {
+    const global = createDefaultCompositeV2OutputRuleGroups()
+
+    const effective = getEffectiveOutputRuleGroups(presetWithOverride(false), global)
+    effective[0]!.name = 'mutated'
+    effective[0]!.rules[0]!.enabled = true
+
+    expect(global[0]!.name).not.toBe('mutated')
+    expect(global[0]!.rules[0]!.enabled).toBe(false)
+  })
+
+  it('clones preset override output rules before returning effective rules', () => {
+    const global = createDefaultCompositeV2OutputRuleGroups()
+    const override = createDefaultCompositeV2OutputRuleGroups()
+
+    const effective = getEffectiveOutputRuleGroups(presetWithOverride(true, override), global)
+    effective[0]!.name = 'mutated'
+    effective[0]!.rules[0]!.enabled = true
+
+    expect(override[0]!.name).not.toBe('mutated')
+    expect(override[0]!.rules[0]!.enabled).toBe(false)
+  })
 })

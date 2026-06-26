@@ -28,6 +28,31 @@ describe('composite path templates', () => {
     expect(sanitizePathSegment('a:b*c?d<e>f|g')).toBe('a_b_c_d_e_f_g')
   })
 
+  it('rewrites dot-only path segments to safe visible folders', () => {
+    const parts = buildCompositeOutputPathParts({
+      date: '20260627',
+      channel: '百度',
+      size: '1080x1920',
+      preset: '产品A',
+      index: 1,
+      source: '背景1',
+      sourceDir: '',
+      custom: '..\\outside',
+      subfolderTemplate: '{custom}',
+      filenameTemplate: '{preset}',
+      preserveSourceDir: false,
+    })
+
+    expect(parts.subfolders).toEqual(['_', 'outside'])
+    expect(parts.subfolders).not.toContain('..')
+  })
+
+  it('sanitizes Windows reserved device names and trailing dots', () => {
+    expect(sanitizePathSegment('CON')).toBe('_CON')
+    expect(sanitizePathSegment('com1.txt')).toBe('_com1.txt')
+    expect(sanitizePathSegment('name.')).toBe('name_')
+  })
+
   it('omits empty subfolder path segments', () => {
     const parts = buildCompositeOutputPathParts({
       date: '20260627',

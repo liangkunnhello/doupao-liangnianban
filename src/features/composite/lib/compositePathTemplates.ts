@@ -16,9 +16,15 @@ type BuildPathInput = TemplateVars & {
 }
 
 const RESERVED_CHARS = /[<>:"/\\|?*\u0000-\u001F]/g
+const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 
 export function sanitizePathSegment(value: string): string {
-  return value.replace(RESERVED_CHARS, '_').trim() || '_'
+  const sanitized = value
+    .replace(RESERVED_CHARS, '_')
+    .trim()
+    .replace(/[. ]+$/g, (match) => '_'.repeat(match.length)) || '_'
+  const stem = sanitized.split('.')[0] ?? sanitized
+  return WINDOWS_RESERVED_NAMES.test(stem) ? `_${sanitized}` : sanitized
 }
 
 function replaceTemplate(template: string, vars: TemplateVars): string {
@@ -39,7 +45,7 @@ function splitTemplatePath(value: string): string[] {
     .split('/')
     .map((part) => part.trim())
     .filter(Boolean)
-    .map((part) => sanitizePathSegment(part))
+    .map((part) => sanitizePathSegment(/^\.+$/.test(part) ? '_' : part))
 }
 
 export function buildCompositeOutputPathParts(input: BuildPathInput) {

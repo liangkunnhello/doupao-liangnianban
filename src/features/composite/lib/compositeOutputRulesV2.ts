@@ -9,9 +9,13 @@ export function getEffectiveOutputRuleGroups(
   preset: Pick<CompositeV2Preset, 'useOutputOverrides' | 'outputRuleGroupsOverride'>,
   globalGroups: CompositeV2OutputRuleGroup[],
 ): CompositeV2OutputRuleGroup[] {
-  return preset.useOutputOverrides && preset.outputRuleGroupsOverride.length
+  const groups = preset.useOutputOverrides && preset.outputRuleGroupsOverride.length
     ? preset.outputRuleGroupsOverride
     : globalGroups
+  return groups.map((group) => ({
+    ...group,
+    rules: group.rules.map((rule) => ({ ...rule })),
+  }))
 }
 
 export function getEnabledOutputRules(groups: CompositeV2OutputRuleGroup[]): CompositeV2EnabledOutputRule[] {
