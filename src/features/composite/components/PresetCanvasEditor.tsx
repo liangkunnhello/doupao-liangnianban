@@ -51,6 +51,7 @@ export function PresetCanvasEditor({
   onPickLogo,
 }: PresetCanvasEditorProps) {
   const [selectedLayerId, setSelectedLayerId] = useState('')
+  const presetActionsDisabled = !preset
   const visibleLayers = useMemo(
     () => preset?.layers.filter((layer) => layer.visible) ?? [],
     [preset],
@@ -58,7 +59,7 @@ export function PresetCanvasEditor({
 
   return (
     <div className="relative min-h-[560px] overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-white/[0.08] dark:bg-gray-950">
-      <FloatingLayerToolbar onAddText={onAddText} onAddImage={onAddImage} />
+      <FloatingLayerToolbar onAddText={onAddText} onAddImage={onAddImage} disabled={presetActionsDisabled} />
 
       <div className="flex h-full min-h-[560px] items-center justify-center px-20 py-8">
         <div
@@ -139,6 +140,8 @@ export function PresetCanvasEditor({
         assets={logoAssets}
         statusText={logoStatusText}
         isRefreshing={isRefreshingLogos}
+        assetsDisabled={presetActionsDisabled}
+        assetDisabledReason="Select a preset first to insert this logo"
         onPathChange={onLogoLibraryPathChange}
         onSelectFolder={onSelectLogoFolder}
         onRefresh={onRefreshLogoFolder}

@@ -9,6 +9,8 @@ type FloatingLogoLibraryProps = {
   assets: CompositeFsImage[]
   statusText: string
   isRefreshing?: boolean
+  assetsDisabled?: boolean
+  assetDisabledReason?: string
   onPathChange: (path: string) => void
   onSelectFolder: () => void
   onRefresh: () => void
@@ -51,6 +53,8 @@ export function FloatingLogoLibrary({
   assets,
   statusText,
   isRefreshing = false,
+  assetsDisabled = false,
+  assetDisabledReason = 'Select a preset first to insert this logo',
   onPathChange,
   onSelectFolder,
   onRefresh,
@@ -88,9 +92,15 @@ export function FloatingLogoLibrary({
           <button
             key={asset.path}
             type="button"
+            disabled={assetsDisabled}
             onClick={() => onPickAsset(asset)}
-            className="min-w-0 rounded-md border border-gray-200 bg-gray-50 p-1.5 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:bg-blue-500/10"
-            title={asset.path}
+            aria-label={assetsDisabled ? `${asset.name} unavailable until a preset is selected` : asset.name}
+            className={`min-w-0 rounded-md border border-gray-200 bg-gray-50 p-1.5 text-left transition dark:border-white/[0.08] dark:bg-white/[0.03] ${
+              assetsDisabled
+                ? 'cursor-not-allowed opacity-60'
+                : 'hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-500/10'
+            }`}
+            title={assetsDisabled ? assetDisabledReason : asset.path}
           >
             {asset.dataUrl ? (
               <img src={asset.dataUrl} alt={asset.name} className="aspect-square w-full rounded-md object-contain" />

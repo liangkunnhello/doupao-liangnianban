@@ -5,6 +5,7 @@ import ViewportTooltip from '../../../components/ViewportTooltip'
 type FloatingLayerToolbarProps = {
   onAddText: () => void
   onAddImage: () => void
+  disabled?: boolean
 }
 
 type ToolButtonProps = {
@@ -62,13 +63,23 @@ function ToolButton({ tooltip, ariaLabel, disabled = false, onClick, children }:
   )
 }
 
-export function FloatingLayerToolbar({ onAddText, onAddImage }: FloatingLayerToolbarProps) {
+export function FloatingLayerToolbar({ onAddText, onAddImage, disabled = false }: FloatingLayerToolbarProps) {
   return (
     <div className="absolute left-4 top-1/2 z-20 flex -translate-y-1/2 flex-col overflow-hidden rounded-md border border-gray-200 bg-white/95 shadow-lg backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/90">
-      <ToolButton tooltip="添加文字图层" ariaLabel="Add text layer" onClick={onAddText}>
+      <ToolButton
+        tooltip={disabled ? 'Select a preset first to add text layers' : '添加文字图层'}
+        ariaLabel={disabled ? 'Add text layer unavailable until a preset is selected' : 'Add text layer'}
+        disabled={disabled}
+        onClick={onAddText}
+      >
         <span className="text-base leading-none">T</span>
       </ToolButton>
-      <ToolButton tooltip="添加图片图层" ariaLabel="Add image layer" onClick={onAddImage}>
+      <ToolButton
+        tooltip={disabled ? 'Select a preset first to add image layers' : '添加图片图层'}
+        ariaLabel={disabled ? 'Add image layer unavailable until a preset is selected' : 'Add image layer'}
+        disabled={disabled}
+        onClick={onAddImage}
+      >
         <ImageLayerIcon />
       </ToolButton>
       <ToolButton tooltip="形状图层后续支持" ariaLabel="Shape layer coming soon" disabled>
