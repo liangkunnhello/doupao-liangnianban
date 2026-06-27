@@ -72,6 +72,16 @@ export function PresetCanvasEditor(props: Props) {
     })
   }
 
+  function moveLayer(layerId: string, direction: -1 | 1) {
+    if (!preset || !props.onUpdatePreset) return
+    const index = preset.layers.findIndex((layer) => layer.id === layerId)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= preset.layers.length) return
+    const layers = [...preset.layers]
+    ;[layers[index], layers[target]] = [layers[target]!, layers[index]!]
+    props.onUpdatePreset({ layers })
+  }
+
   function onPointerMove(event: React.PointerEvent) {
     if (!preset || !dragRef.current) return
     const layer = preset.layers.find((item) => item.id === dragRef.current?.id)
@@ -116,6 +126,15 @@ export function PresetCanvasEditor(props: Props) {
 
       {preset && selectedLayer && (
         <div className="absolute bottom-3 left-20 right-[19rem] z-20 rounded-md border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95">
+          <div className="mb-2 flex items-center gap-1 overflow-x-auto border-b border-gray-100 pb-2 dark:border-white/[0.08]">
+            {preset.layers.map((layer, index) => (
+              <button key={layer.id} type="button" onClick={() => setSelectedLayerId(layer.id)} className={`shrink-0 rounded px-2 py-1 ${layer.id === selectedLayer.id ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10' : 'bg-gray-50 dark:bg-white/[0.04]'}`}>
+                {index + 1}. {layer.name}
+              </button>
+            ))}
+            <button type="button" title="上移图层" onClick={() => moveLayer(selectedLayer.id, -1)} className="ml-auto shrink-0 rounded border px-2 py-1">上移</button>
+            <button type="button" title="下移图层" onClick={() => moveLayer(selectedLayer.id, 1)} className="shrink-0 rounded border px-2 py-1">下移</button>
+          </div>
           <div className="grid grid-cols-6 gap-2">
             <label>名称<input value={selectedLayer.name} onChange={(event) => updateLayer(selectedLayer.id, { name: event.target.value })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
             <label>透明度<input type="number" min={0} max={1} step={0.05} value={selectedLayer.opacity} onChange={(event) => updateLayer(selectedLayer.id, { opacity: Number(event.target.value) })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
@@ -129,6 +148,14 @@ export function PresetCanvasEditor(props: Props) {
                 : { mode: 'anchor', anchor: 'center', marginX: 0, marginY: 0, offsetX: 0, offsetY: 0, width: selectedLayer.position.width, height: selectedLayer.position.height } })
             }} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900"><option value="free">自由坐标</option><option value="anchor">九宫格</option></select></label>
           </div>
+          <div className="mt-2 grid grid-cols-6 gap-2">
+            <label className="flex items-center gap-1"><input type="checkbox" checked={selectedLayer.shadow.enabled} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, enabled: event.target.checked } })} />阴影</label>
+            <label>阴影色<input type="color" value={selectedLayer.shadow.color} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, color: event.target.value } })} className="mt-1 h-7 w-full" /></label>
+            <label>阴影 X<input type="number" value={selectedLayer.shadow.x} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, x: Number(event.target.value) } })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+            <label>阴影 Y<input type="number" value={selectedLayer.shadow.y} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, y: Number(event.target.value) } })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+            <label>模糊<input type="number" min={0} value={selectedLayer.shadow.blur} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, blur: Math.max(0, Number(event.target.value)) } })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+            <label>阴影透明<input type="number" min={0} max={1} step={0.05} value={selectedLayer.shadow.opacity} onChange={(event) => updateLayer(selectedLayer.id, { shadow: { ...selectedLayer.shadow, opacity: Number(event.target.value) } })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+          </div>
           {selectedLayer.type === 'text' && (
             <div className="mt-2 grid grid-cols-6 gap-2">
               <label className="col-span-2">文字<textarea value={selectedLayer.text} onChange={(event) => updateLayer(selectedLayer.id, { text: event.target.value })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
@@ -139,6 +166,15 @@ export function PresetCanvasEditor(props: Props) {
               <label>行高<input type="number" step={0.1} value={selectedLayer.lineHeight} onChange={(event) => updateLayer(selectedLayer.id, { lineHeight: Number(event.target.value) })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
               <label>字距<input type="number" value={selectedLayer.letterSpacing} onChange={(event) => updateLayer(selectedLayer.id, { letterSpacing: Number(event.target.value) })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
               <label>对齐<select value={selectedLayer.align} onChange={(event) => updateLayer(selectedLayer.id, { align: event.target.value as 'left' | 'center' | 'right' })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900"><option value="left">左</option><option value="center">中</option><option value="right">右</option></select></label>
+              <label className="flex items-center gap-1"><input type="checkbox" checked={selectedLayer.stroke.enabled} onChange={(event) => updateLayer(selectedLayer.id, { stroke: { ...selectedLayer.stroke, enabled: event.target.checked } })} />描边</label>
+              <label>描边色<input type="color" value={selectedLayer.stroke.color} onChange={(event) => updateLayer(selectedLayer.id, { stroke: { ...selectedLayer.stroke, color: event.target.value } })} className="mt-1 h-7 w-full" /></label>
+              <label>描边宽<input type="number" min={0} value={selectedLayer.stroke.width} onChange={(event) => updateLayer(selectedLayer.id, { stroke: { ...selectedLayer.stroke, width: Math.max(0, Number(event.target.value)) } })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+            </div>
+          )}
+          {selectedLayer.type === 'image' && (
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <label>圆角<input type="number" min={0} value={selectedLayer.radius} onChange={(event) => updateLayer(selectedLayer.id, { radius: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded border px-2 py-1 dark:bg-gray-900" /></label>
+              <label className="flex items-center gap-1"><input type="checkbox" checked={selectedLayer.clip} onChange={(event) => updateLayer(selectedLayer.id, { clip: event.target.checked })} />启用裁切</label>
             </div>
           )}
         </div>

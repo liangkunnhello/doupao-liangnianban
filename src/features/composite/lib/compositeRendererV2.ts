@@ -57,7 +57,11 @@ function applyShadow(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer 
   if (!layer.shadow.enabled) return
   const scaleX = target.width / base.width
   const scaleY = target.height / base.height
-  ctx.shadowColor = layer.shadow.color
+  const alpha = Math.max(0, Math.min(1, layer.shadow.opacity))
+  const hex = layer.shadow.color.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i)
+  ctx.shadowColor = hex
+    ? `rgba(${Number.parseInt(hex[1]!, 16)}, ${Number.parseInt(hex[2]!, 16)}, ${Number.parseInt(hex[3]!, 16)}, ${alpha})`
+    : layer.shadow.color
   ctx.shadowOffsetX = layer.shadow.x * scaleX
   ctx.shadowOffsetY = layer.shadow.y * scaleY
   ctx.shadowBlur = layer.shadow.blur * Math.min(scaleX, scaleY)
@@ -85,6 +89,7 @@ async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLa
   } else {
     const metrics = getScaledTextMetrics(layer.fontSize, layer.stroke.width, preset.baseCanvas, target)
     ctx.font = `${layer.fontWeight} ${metrics.fontSize}px ${layer.fontFamily}`
+    ;(ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${layer.letterSpacing * Math.min(target.width / preset.baseCanvas.width, target.height / preset.baseCanvas.height)}px`
     ctx.fillStyle = layer.color
     ctx.textAlign = layer.align
     ctx.textBaseline = 'middle'
