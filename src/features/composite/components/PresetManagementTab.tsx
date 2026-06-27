@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import { useCompositeV2Store } from '../storeV2'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
@@ -27,9 +27,18 @@ export function PresetManagementTab() {
   )
 
   const activePreset = useMemo(
-    () => presets.find((preset) => preset.id === selectedPreviewPresetId) ?? visiblePresets[0] ?? null,
-    [presets, selectedPreviewPresetId, visiblePresets],
+    () => visiblePresets.find((preset) => preset.id === selectedPreviewPresetId) ?? null,
+    [selectedPreviewPresetId, visiblePresets],
   )
+
+  useEffect(() => {
+    if (!visiblePresets.length) return
+    if (activePreset) return
+    const nextPresetId = visiblePresets[0]?.id
+    if (nextPresetId && nextPresetId !== selectedPreviewPresetId) {
+      setSelectedPreviewPresetId(nextPresetId)
+    }
+  }, [activePreset, selectedPreviewPresetId, setSelectedPreviewPresetId, visiblePresets])
 
   async function loadLogoAssets(nextPath: string, reason: 'select' | 'refresh') {
     const trimmedPath = nextPath.trim()
@@ -100,7 +109,8 @@ export function PresetManagementTab() {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[220px_280px_minmax(0,1fr)] gap-4">
+    <div className="min-h-0 flex-1 overflow-x-auto">
+      <div className="grid min-h-0 min-w-[1180px] grid-cols-[220px_280px_minmax(640px,1fr)] gap-4">
       <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
         <div className="border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
           <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">预设组</h2>
@@ -111,6 +121,7 @@ export function PresetManagementTab() {
             <button
               key={group.id}
               type="button"
+              aria-pressed={selectedPresetGroupId === group.id}
               onClick={() => setSelectedPresetGroup(group.id)}
               className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition ${
                 selectedPresetGroupId === group.id
@@ -147,6 +158,7 @@ export function PresetManagementTab() {
               <button
                 key={preset.id}
                 type="button"
+                aria-pressed={selectedPreviewPresetId === preset.id}
                 onClick={() => setSelectedPreviewPresetId(preset.id)}
                 className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
                   selectedPreviewPresetId === preset.id
@@ -204,6 +216,7 @@ export function PresetManagementTab() {
         onRefreshLogoFolder={handleRefreshLogoFolder}
         onPickLogo={handlePickLogo}
       />
+      </div>
     </div>
   )
 }
