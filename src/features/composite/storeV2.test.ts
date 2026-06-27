@@ -119,6 +119,39 @@ describe('composite v2 store state factory', () => {
     })
   })
 
+  it('truncates forward preview history when a new random background is pushed after going back', () => {
+    const store = createCompositeV2Store()
+
+    store.setState({
+      previewHistory: ['D:/bg/a.jpg', 'D:/bg/b.jpg', 'D:/bg/c.jpg'],
+      previewHistoryIndex: 2,
+    })
+
+    store.getState().previousPreviewBackground()
+    store.getState().pushPreviewBackground('D:/bg/d.jpg')
+
+    expect(store.getState().previewHistory).toEqual(['D:/bg/a.jpg', 'D:/bg/b.jpg', 'D:/bg/d.jpg'])
+    expect(store.getState().previewHistoryIndex).toBe(2)
+  })
+
+  it('keeps previous and next preview navigation inside the visited range', () => {
+    const store = createCompositeV2Store()
+
+    store.setState({
+      previewHistory: ['D:/bg/a.jpg', 'D:/bg/b.jpg'],
+      previewHistoryIndex: 0,
+    })
+
+    store.getState().previousPreviewBackground()
+    expect(store.getState().previewHistoryIndex).toBe(0)
+
+    store.getState().nextPreviewBackground()
+    expect(store.getState().previewHistoryIndex).toBe(1)
+
+    store.getState().nextPreviewBackground()
+    expect(store.getState().previewHistoryIndex).toBe(1)
+  })
+
   it('updates a preset immutably and refreshes updatedAt', () => {
     const store = createCompositeV2Store()
     const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }

@@ -38,6 +38,9 @@ type CompositeV2StoreActions = {
   setEnabledPresetIdsForRun: (presetIds: string[]) => void
   setCustomValue: (value: string) => void
   setPreserveSourceDir: (preserveSourceDir: boolean) => void
+  pushPreviewBackground: (path: string) => void
+  previousPreviewBackground: () => void
+  nextPreviewBackground: () => void
   setExportProgress: (completed: number, total: number) => void
   setExportStatus: (status: CompositeV2ExportStatus) => void
 }
@@ -147,6 +150,16 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
       setEnabledPresetIdsForRun: (enabledPresetIdsForRun) => set({ enabledPresetIdsForRun }),
       setCustomValue: (customValue) => set({ customValue }),
       setPreserveSourceDir: (preserveSourceDir) => set({ preserveSourceDir }),
+      pushPreviewBackground: (path) => set((state) => {
+        if (!path.trim()) return {}
+        return createPreviewHistoryState(state, (preview) => preview.push(path))
+      }),
+      previousPreviewBackground: () => set((state) => (
+        createPreviewHistoryState(state, (preview) => preview.previous())
+      )),
+      nextPreviewBackground: () => set((state) => (
+        createPreviewHistoryState(state, (preview) => preview.next())
+      )),
       setExportProgress: (exportCompleted, exportTotal) => set({ exportCompleted, exportTotal }),
       setExportStatus: (exportStatus) => set({ exportStatus }),
     }),
@@ -193,6 +206,22 @@ function createRandomPreviewState(
   return {
     previewHistory: preview.entries,
     previewHistoryIndex: preview.index,
+  }
+}
+
+function createPreviewHistoryState(
+  state: Pick<CompositeV2StoreState, 'previewHistory' | 'previewHistoryIndex'>,
+  updater: (preview: ReturnType<typeof createPreviewHistory>) => void,
+) {
+  const preview = createPreviewHistory({
+    entries: state.previewHistory,
+    index: state.previewHistoryIndex,
+  })
+  updater(preview)
+  const snapshot = preview.snapshot()
+  return {
+    previewHistory: snapshot.entries,
+    previewHistoryIndex: snapshot.index,
   }
 }
 
