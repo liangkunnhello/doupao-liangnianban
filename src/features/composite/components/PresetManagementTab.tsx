@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import { useCompositeV2Store } from '../storeV2'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
@@ -7,12 +7,14 @@ import type { CompositeFsImage } from '../lib/compositeTypes'
 export function PresetManagementTab() {
   const presets = useCompositeV2Store((state) => state.presets)
   const groups = useCompositeV2Store((state) => state.presetGroups)
+  const selectedPresetGroupId = useCompositeV2Store((state) => state.selectedPresetGroupId)
+  const selectedPreviewPresetId = useCompositeV2Store((state) => state.selectedPreviewPresetId)
+  const setSelectedPresetGroup = useCompositeV2Store((state) => state.setSelectedPresetGroup)
+  const setSelectedPreviewPresetId = useCompositeV2Store((state) => state.setSelectedPreviewPresetId)
   const updatePreset = useCompositeV2Store((state) => state.updatePreset)
   const addImageLayer = useCompositeV2Store((state) => state.addImageLayer)
   const addTextLayer = useCompositeV2Store((state) => state.addTextLayer)
 
-  const [activeGroupId, setActiveGroupId] = useState(() => groups[0]?.id ?? '')
-  const [activePresetId, setActivePresetId] = useState(() => presets[0]?.id ?? '')
   const [query, setQuery] = useState('')
   const [logoLibraryPath, setLogoLibraryPath] = useState('')
   const [logoAssets, setLogoAssets] = useState<CompositeFsImage[]>([])
@@ -20,34 +22,14 @@ export function PresetManagementTab() {
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
 
   const visiblePresets = useMemo(
-    () => filterPresetsForLibrary(presets, groups, { query, groupId: activeGroupId || undefined }),
-    [activeGroupId, groups, presets, query],
+    () => filterPresetsForLibrary(presets, groups, { query, groupId: selectedPresetGroupId || undefined }),
+    [groups, presets, query, selectedPresetGroupId],
   )
 
   const activePreset = useMemo(
-    () => presets.find((preset) => preset.id === activePresetId) ?? visiblePresets[0] ?? null,
-    [activePresetId, presets, visiblePresets],
+    () => presets.find((preset) => preset.id === selectedPreviewPresetId) ?? visiblePresets[0] ?? null,
+    [presets, selectedPreviewPresetId, visiblePresets],
   )
-
-  useEffect(() => {
-    if (!groups.length) {
-      if (activeGroupId) setActiveGroupId('')
-      return
-    }
-    if (!groups.some((group) => group.id === activeGroupId)) {
-      setActiveGroupId(groups[0]?.id ?? '')
-    }
-  }, [activeGroupId, groups])
-
-  useEffect(() => {
-    if (!visiblePresets.length) {
-      if (activePresetId) setActivePresetId('')
-      return
-    }
-    if (!visiblePresets.some((preset) => preset.id === activePresetId)) {
-      setActivePresetId(visiblePresets[0]?.id ?? '')
-    }
-  }, [activePresetId, visiblePresets])
 
   async function loadLogoAssets(nextPath: string, reason: 'select' | 'refresh') {
     const trimmedPath = nextPath.trim()
@@ -129,9 +111,9 @@ export function PresetManagementTab() {
             <button
               key={group.id}
               type="button"
-              onClick={() => setActiveGroupId(group.id)}
+              onClick={() => setSelectedPresetGroup(group.id)}
               className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition ${
-                activeGroupId === group.id
+                selectedPresetGroupId === group.id
                   ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
                   : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.04]'
               }`}
@@ -165,9 +147,9 @@ export function PresetManagementTab() {
               <button
                 key={preset.id}
                 type="button"
-                onClick={() => setActivePresetId(preset.id)}
+                onClick={() => setSelectedPreviewPresetId(preset.id)}
                 className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                  activePreset?.id === preset.id
+                  selectedPreviewPresetId === preset.id
                     ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
                     : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.04]'
                 }`}
