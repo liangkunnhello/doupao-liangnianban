@@ -4,6 +4,7 @@ import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import type { CompositeFsImage } from '../lib/compositeTypes'
 import { useCompositeV2Store } from '../storeV2'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
+import { PresetLayerPanel } from './PresetLayerPanel'
 
 export function PresetManagementTab() {
   const store = useCompositeV2Store()
@@ -12,6 +13,7 @@ export function PresetManagementTab() {
   const [logoAssets, setLogoAssets] = useState<CompositeFsImage[]>([])
   const [logoStatusText, setLogoStatusText] = useState('选择目录后可插入 LOGO。')
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
+  const [selectedLayerId, setSelectedLayerId] = useState('')
 
   const visiblePresets = useMemo(
     () => filterPresetsForLibrary(store.presets, store.presetGroups, {
@@ -25,6 +27,12 @@ export function PresetManagementTab() {
   useEffect(() => {
     if (!activePreset && visiblePresets[0]) store.setSelectedPreviewPresetId(visiblePresets[0].id)
   }, [activePreset, store.setSelectedPreviewPresetId, visiblePresets])
+
+  useEffect(() => {
+    if (!activePreset?.layers.some((layer) => layer.id === selectedLayerId)) {
+      setSelectedLayerId(activePreset?.layers[0]?.id ?? '')
+    }
+  }, [activePreset, selectedLayerId])
 
   async function loadLogos(path: string) {
     if (!window.electronAPI?.listImageFiles || !path.trim()) {
@@ -50,8 +58,8 @@ export function PresetManagementTab() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-x-auto">
-      <div className="grid min-h-0 min-w-[1180px] grid-cols-[220px_280px_minmax(640px,1fr)] gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
+      <div className="grid min-h-[560px] min-w-[1180px] shrink-0 grid-cols-[220px_280px_minmax(640px,1fr)] gap-4">
         <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
           <header className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
             <div><h2 className="text-sm font-semibold">预设组</h2><p className="text-[11px] text-gray-500">{store.presetGroups.length} 个分组</p></div>
@@ -133,12 +141,22 @@ export function PresetManagementTab() {
           logoAssets={logoAssets}
           logoStatusText={logoStatusText}
           isRefreshingLogos={isRefreshingLogos}
+          selectedLayerId={selectedLayerId}
+          onSelectLayer={setSelectedLayerId}
           onLogoLibraryPathChange={setLogoLibraryPath}
           onAddText={() => activePreset && store.addTextLayer(activePreset.id)}
           onAddImage={() => activePreset && store.addImageLayer(activePreset.id)}
           onSelectLogoFolder={() => void chooseLogoFolder()}
           onRefreshLogoFolder={() => void loadLogos(logoLibraryPath)}
           onPickLogo={(asset) => activePreset && store.addImageLayer(activePreset.id, { kind: 'path', path: asset.path })}
+          onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
+        />
+      </div>
+      <div className="min-w-[1180px] flex-1">
+        <PresetLayerPanel
+          preset={activePreset}
+          selectedLayerId={selectedLayerId}
+          onSelectLayer={setSelectedLayerId}
           onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
         />
       </div>

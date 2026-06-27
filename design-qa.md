@@ -30,6 +30,7 @@ No actionable P0, P1, or P2 visual differences remain. The implementation intent
 - Restored the four-item toolbar silhouette with two disabled future shape entries.
 - Replaced custom icon drawings with Lucide icons.
 - Added stable minimum canvas width and horizontal overflow for narrow desktop windows.
+- Moved layer ordering and precision controls into a persistent full-width panel below the three-column editor, filling the previously unused lower viewport while keeping the canvas unobstructed.
 
 **Follow-up Polish**
 
