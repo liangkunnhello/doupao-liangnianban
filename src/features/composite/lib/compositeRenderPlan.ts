@@ -83,6 +83,7 @@ export function planBackgroundFit(mode: CompositeV2FitMode, source: Size, target
 export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Size, target: Size) {
   assertValidSize(base)
   assertValidSize(target)
+  assertValidSize({ width: position.width, height: position.height })
 
   const scaleX = target.width / base.width
   const scaleY = target.height / base.height

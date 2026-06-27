@@ -93,4 +93,29 @@ describe('composite render plan', () => {
       { width: 640, height: 360 },
     )).toThrow(/invalid/i)
   })
+
+  it('rejects invalid free layer dimensions', () => {
+    expect(() => mapLayerPositionToCanvas(
+      { mode: 'free', x: 1, y: 2, width: 0, height: 4 },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/invalid/i)
+  })
+
+  it('rejects invalid anchor layer dimensions', () => {
+    expect(() => mapLayerPositionToCanvas(
+      {
+        mode: 'anchor',
+        anchor: 'center',
+        marginX: 0,
+        marginY: 0,
+        offsetX: 0,
+        offsetY: 0,
+        width: Number.NaN,
+        height: 4,
+      },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/invalid/i)
+  })
 })
