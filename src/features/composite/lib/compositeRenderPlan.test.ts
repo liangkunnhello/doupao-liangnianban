@@ -49,6 +49,10 @@ describe('composite render plan', () => {
     })
   })
 
+  it('rejects unknown background fit modes', () => {
+    expect(() => planBackgroundFit('mystery' as never, { width: 400, height: 200 }, { width: 300, height: 300 })).toThrow(/unknown/i)
+  })
+
   it('maps free position from base canvas to target canvas', () => {
     expect(
       mapLayerPositionToCanvas(
@@ -102,6 +106,14 @@ describe('composite render plan', () => {
     )).toThrow(/invalid/i)
   })
 
+  it('rejects non-finite free layer coordinates', () => {
+    expect(() => mapLayerPositionToCanvas(
+      { mode: 'free', x: Number.POSITIVE_INFINITY, y: 2, width: 3, height: 4 },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/invalid/i)
+  })
+
   it('rejects invalid anchor layer dimensions', () => {
     expect(() => mapLayerPositionToCanvas(
       {
@@ -117,5 +129,30 @@ describe('composite render plan', () => {
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
     )).toThrow(/invalid/i)
+  })
+
+  it('rejects non-finite anchor margins and offsets', () => {
+    expect(() => mapLayerPositionToCanvas(
+      {
+        mode: 'anchor',
+        anchor: 'center',
+        marginX: Number.POSITIVE_INFINITY,
+        marginY: 0,
+        offsetX: 0,
+        offsetY: Number.NaN,
+        width: 3,
+        height: 4,
+      },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/invalid/i)
+  })
+
+  it('rejects unknown position modes', () => {
+    expect(() => mapLayerPositionToCanvas(
+      { mode: 'mystery' as never, x: 1, y: 2, width: 3, height: 4 },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/unknown/i)
   })
 })
