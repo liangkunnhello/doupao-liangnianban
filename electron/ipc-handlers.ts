@@ -86,6 +86,17 @@ function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
 
 const COMPOSITE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 
+type CompositeBackgroundFile = {
+  path: string
+  name: string
+  relativeDir: string
+}
+
+type CompositeDeleteFilesResult = {
+  deleted: string[]
+  failed: string[]
+}
+
 function isCompositeImagePath(filePath: string): boolean {
   return COMPOSITE_IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
@@ -95,6 +106,10 @@ function mimeFromImagePath(filePath: string): string {
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
   if (ext === '.webp') return 'image/webp'
   return 'image/png'
+}
+
+function normalizeRelativeDir(relativeDir: string): string {
+  return relativeDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 }
 
 function readImageFilePayload(filePath: string) {
@@ -128,6 +143,64 @@ function listCompositeImageFiles(dirPath: string) {
         dataUrl: `data:${mimeFromImagePath(filePath)};base64,${buffer.toString('base64')}`,
       }
     })
+}
+
+export function listCompositeBackgroundFiles(dirPath: string, recursive: boolean): CompositeBackgroundFile[] {
+  const safeDirPath = assertAllowedPath(dirPath)
+  if (!existsSync(safeDirPath) || !statSync(safeDirPath).isDirectory()) return []
+  if (!recursive) {
+    return readdirSync(safeDirPath).flatMap((name) => {
+      const filePath = path.join(safeDirPath, name)
+      try {
+        const stat = statSync(filePath)
+        if (!stat.isFile() || !isCompositeImagePath(filePath)) return []
+        return [{
+          path: filePath,
+          name,
+          relativeDir: '',
+        }]
+      } catch {
+        return []
+      }
+    })
+  }
+  return listCompositeBackgroundFilesRecursive(safeDirPath)
+}
+
+function listCompositeBackgroundFilesRecursive(dirPath: string, rootPath = dirPath): CompositeBackgroundFile[] {
+  const safeDirPath = assertAllowedPath(dirPath)
+  if (!existsSync(safeDirPath) || !statSync(safeDirPath).isDirectory()) return []
+  return readdirSync(safeDirPath).flatMap((name) => {
+    const filePath = path.join(safeDirPath, name)
+    try {
+      const stat = statSync(filePath)
+      if (stat.isDirectory()) return listCompositeBackgroundFilesRecursive(filePath, rootPath)
+      if (!stat.isFile() || !isCompositeImagePath(filePath)) return []
+      const relativeDir = path.relative(rootPath, path.dirname(filePath))
+      return [{
+        path: filePath,
+        name: path.basename(filePath),
+        relativeDir: relativeDir === '.' ? '' : normalizeRelativeDir(relativeDir),
+      }]
+    } catch {
+      return []
+    }
+  })
+}
+
+export function deleteCompositeFiles(filePaths: string[]): CompositeDeleteFilesResult {
+  const deleted: string[] = []
+  const failed: string[] = []
+  for (const filePath of filePaths) {
+    try {
+      const safeFilePath = assertAllowedPath(filePath)
+      if (existsSync(safeFilePath)) unlinkSync(safeFilePath)
+      deleted.push(safeFilePath)
+    } catch {
+      failed.push(filePath)
+    }
+  }
+  return { deleted, failed }
 }
 
 export function registerIpcHandlers(): void {
@@ -245,6 +318,15 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('composite:list-background-files', async (_event, { dirPath, recursive }: { dirPath: string; recursive: boolean }) => {
+    try {
+      return listCompositeBackgroundFiles(dirPath, recursive)
+    } catch (err) {
+      console.error('Failed to list composite background files:', err)
+      return []
+    }
+  })
+
   ipcMain.handle('composite:pick-image-file', async (_event, { path: inputPath, mode, index }: { path: string; mode: 'random' | 'sequential'; index: number }) => {
     try {
       const safePath = assertAllowedPath(inputPath)
@@ -261,6 +343,10 @@ export function registerIpcHandlers(): void {
       console.error('抽取合成图片失败:', err)
       return null
     }
+  })
+
+  ipcMain.handle('composite:delete-files', async (_event, { filePaths }: { filePaths: string[] }) => {
+    return deleteCompositeFiles(filePaths)
   })
 
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
