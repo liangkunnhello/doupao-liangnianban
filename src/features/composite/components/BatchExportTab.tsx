@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, FolderOpen, Play, RefreshCw, Shuffle } from 'lucide-react'
+import { naturalSortBackgrounds } from '../lib/compositeBackgrounds'
+import { createCompositeExportSnapshot, expandCompositeExportItems } from '../lib/compositeExportPlan'
 import { useCompositeV2Store } from '../storeV2'
 import { ExportResultsPanel } from './ExportResultsPanel'
 
@@ -30,6 +32,8 @@ export function BatchExportTab() {
   const previewHistoryIndex = useCompositeV2Store((state) => state.previewHistoryIndex)
   const presets = useCompositeV2Store((state) => state.presets)
   const groups = useCompositeV2Store((state) => state.presetGroups)
+  const outputRuleGroups = useCompositeV2Store((state) => state.outputRuleGroups)
+  const globalFitMode = useCompositeV2Store((state) => state.globalFitMode)
   const selectedPresetGroupId = useCompositeV2Store((state) => state.selectedPresetGroupId)
   const selectedPreviewPresetId = useCompositeV2Store((state) => state.selectedPreviewPresetId)
   const enabledPresetIdsForRun = useCompositeV2Store((state) => state.enabledPresetIdsForRun)
@@ -47,16 +51,21 @@ export function BatchExportTab() {
   const setEnabledPresetIdsForRun = useCompositeV2Store((state) => state.setEnabledPresetIdsForRun)
   const setCustomValue = useCompositeV2Store((state) => state.setCustomValue)
   const setPreserveSourceDir = useCompositeV2Store((state) => state.setPreserveSourceDir)
+  const setExportProgress = useCompositeV2Store((state) => state.setExportProgress)
+  const setExportStatus = useCompositeV2Store((state) => state.setExportStatus)
   const pushPreviewBackground = useCompositeV2Store((state) => state.pushPreviewBackground)
   const previousPreviewBackground = useCompositeV2Store((state) => state.previousPreviewBackground)
   const nextPreviewBackground = useCompositeV2Store((state) => state.nextPreviewBackground)
 
   const [backgroundStatus, setBackgroundStatus] = useState('Select a folder to load composite backgrounds.')
   const [previewStatus, setPreviewStatus] = useState('Random preview will appear here after backgrounds load.')
+  const [runStatusText, setRunStatusText] = useState('Export shell is ready to validate configuration.')
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null)
   const [isLoadingBackgrounds, setIsLoadingBackgrounds] = useState(false)
   const [isLoadingPreview, setIsLoadingPreview] = useState(false)
 
+  const electronApi = getElectronApi()
+  const canBrowseBackgrounds = Boolean(electronApi?.isElectron && electronApi.listCompositeBackgroundFiles)
   const selectedGroup = useMemo(
     () => getSelectedGroup(groups, selectedPresetGroupId),
     [groups, selectedPresetGroupId],
@@ -75,6 +84,37 @@ export function BatchExportTab() {
     () => groupPresets.filter((preset) => enabledPresetIdsSet.has(preset.id)),
     [enabledPresetIdsSet, groupPresets],
   )
+  const plannedExportCount = useMemo(() => {
+    if (!selectedGroup || !backgrounds.length || !enabledPresets.length) return 0
+
+    const snapshot = createCompositeExportSnapshot({
+      id: 'shell-preview',
+      date: 'shell',
+      backgroundFolder,
+      recursive: recursiveBackgrounds,
+      backgrounds,
+      presets,
+      presetGroup: selectedGroup,
+      enabledPresetIds: enabledPresets.map((preset) => preset.id),
+      outputRuleGroups,
+      custom: customValue,
+      fitMode: globalFitMode,
+      preserveSourceDir,
+    })
+
+    return expandCompositeExportItems(snapshot).length
+  }, [
+    backgroundFolder,
+    backgrounds,
+    customValue,
+    enabledPresets,
+    globalFitMode,
+    outputRuleGroups,
+    preserveSourceDir,
+    presets,
+    recursiveBackgrounds,
+    selectedGroup,
+  ])
   const currentPreviewPath = useMemo(
     () => getPreviewPath(previewHistory, previewHistoryIndex),
     [previewHistory, previewHistoryIndex],
@@ -90,8 +130,7 @@ export function BatchExportTab() {
     && Boolean(selectedGroup)
     && enabledPresets.length > 0
     && enabledPresets.every((preset) => preset.outputRootPath.trim())
-  const electronApi = getElectronApi()
-  const canBrowseBackgrounds = Boolean(electronApi?.isElectron && electronApi.listCompositeBackgroundFiles)
+    && plannedExportCount > 0
 
   useEffect(() => {
     let active = true
@@ -99,7 +138,11 @@ export function BatchExportTab() {
     async function loadPreview() {
       if (!currentPreviewPath) {
         setPreviewFile(null)
-        setPreviewStatus(backgrounds.length ? 'Pick a preview step to inspect the current background.' : 'Random preview will appear here after backgrounds load.')
+        setPreviewStatus(
+          backgrounds.length
+            ? 'Pick a preview step to inspect the current background.'
+            : 'Random preview will appear here after backgrounds load.',
+        )
         return
       }
 
@@ -111,6 +154,7 @@ export function BatchExportTab() {
 
       setIsLoadingPreview(true)
       setPreviewStatus('Loading preview background...')
+
       try {
         const file = await electronApi.readImageFile(currentPreviewPath)
         if (!active) return
@@ -138,6 +182,7 @@ export function BatchExportTab() {
 
   async function loadBackgroundFolder(nextFolder: string, nextRecursive: boolean) {
     const trimmedFolder = nextFolder.trim()
+
     if (!electronApi?.isElectron || !electronApi.listCompositeBackgroundFiles) {
       setBackgroundStatus('Desktop directory loading is unavailable in the current environment.')
       return
@@ -147,13 +192,14 @@ export function BatchExportTab() {
       return
     }
 
+    setBackgroundFolder(trimmedFolder)
+    setRecursiveBackgrounds(nextRecursive)
     setIsLoadingBackgrounds(true)
     setBackgroundStatus(nextRecursive ? 'Loading backgrounds recursively...' : 'Loading backgrounds...')
 
     try {
-      const nextBackgrounds = await electronApi.listCompositeBackgroundFiles(trimmedFolder, nextRecursive)
-      setBackgroundFolder(trimmedFolder)
-      setRecursiveBackgrounds(nextRecursive)
+      const files = await electronApi.listCompositeBackgroundFiles(trimmedFolder, nextRecursive)
+      const nextBackgrounds = naturalSortBackgrounds(files)
       setBackgrounds(nextBackgrounds)
       setBackgroundStatus(
         nextBackgrounds.length
@@ -161,6 +207,7 @@ export function BatchExportTab() {
           : 'No supported background images were found in that folder.',
       )
     } catch (error) {
+      setBackgrounds([])
       setBackgroundStatus(error instanceof Error ? error.message : 'Failed to load background folder.')
     } finally {
       setIsLoadingBackgrounds(false)
@@ -183,11 +230,12 @@ export function BatchExportTab() {
   }
 
   async function handleRecursiveChange(nextRecursive: boolean) {
-    setRecursiveBackgrounds(nextRecursive)
     if (!backgroundFolder.trim()) {
+      setRecursiveBackgrounds(nextRecursive)
       setBackgroundStatus('Recursive mode updated. Select a background folder to load files.')
       return
     }
+
     await loadBackgroundFolder(backgroundFolder, nextRecursive)
   }
 
@@ -196,13 +244,14 @@ export function BatchExportTab() {
       setBackgroundStatus('Please select a background folder before reloading.')
       return
     }
+
     await loadBackgroundFolder(backgroundFolder, recursiveBackgrounds)
   }
 
   function handleRandomPreview() {
     if (!backgrounds.length) return
-    const index = Math.min(backgrounds.length - 1, Math.max(0, Math.floor(Math.random() * backgrounds.length)))
-    const nextBackground = backgrounds[index] ?? backgrounds[0]
+    const randomIndex = Math.min(backgrounds.length - 1, Math.max(0, Math.floor(Math.random() * backgrounds.length)))
+    const nextBackground = backgrounds[randomIndex] ?? backgrounds[0]
     if (!nextBackground) return
     pushPreviewBackground(nextBackground.path)
     setPreviewStatus(`Preview moved to ${nextBackground.name}.`)
@@ -217,18 +266,20 @@ export function BatchExportTab() {
   }
 
   function handleStartExport() {
-    setBackgroundStatus('Batch export runtime will be wired in a later task. This shell now validates configuration only.')
+    setExportStatus('running')
+    setExportProgress(0, plannedExportCount)
+    setRunStatusText('Waiting for export engine / preparing')
   }
 
   return (
     <div className="min-h-0 flex-1 overflow-x-auto">
       <div className="grid min-h-0 min-w-[1160px] grid-cols-[240px_minmax(0,1fr)_320px] grid-rows-[minmax(0,1fr)_auto] gap-4">
         <section className="min-h-0 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Background Folder</h2>
-              <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">Pick a folder, decide recursion, then reload whenever the source changes.</p>
-            </div>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Background Folder</h2>
+            <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              Pick a folder, decide recursion, then reload whenever the source changes.
+            </p>
           </div>
 
           <button
@@ -242,7 +293,9 @@ export function BatchExportTab() {
           </button>
 
           <div className="mt-3 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">
-            <div className="truncate font-medium text-gray-800 dark:text-gray-100">{backgroundFolder || 'No folder selected'}</div>
+            <div className="truncate font-medium text-gray-800 dark:text-gray-100">
+              {backgroundFolder || 'No folder selected'}
+            </div>
             <div className="mt-1">{backgroundStatus}</div>
           </div>
 
@@ -287,10 +340,11 @@ export function BatchExportTab() {
                 {currentPreviewBackground?.relativeDir ? ` - ${currentPreviewBackground.relativeDir}` : ''}
               </p>
             </div>
+
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label="上一张"
+                aria-label="Previous preview"
                 title="Previous preview"
                 onClick={previousPreviewBackground}
                 disabled={!canGoPrevious}
@@ -300,7 +354,7 @@ export function BatchExportTab() {
               </button>
               <button
                 type="button"
-                aria-label="随机下一张"
+                aria-label="Random preview"
                 title="Random preview"
                 onClick={handleRandomPreview}
                 disabled={!canPickRandom}
@@ -310,7 +364,7 @@ export function BatchExportTab() {
               </button>
               <button
                 type="button"
-                aria-label="下一张"
+                aria-label="Next preview"
                 title="Next visited preview"
                 onClick={nextPreviewBackground}
                 disabled={!canGoNext}
@@ -346,7 +400,9 @@ export function BatchExportTab() {
         <section className="min-h-0 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
           <div>
             <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Current Run</h2>
-            <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">Choose one preset group, temporarily trim the preset list, and validate export readiness.</p>
+            <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              Choose one preset group, temporarily trim the preset list, and validate export readiness.
+            </p>
           </div>
 
           <div className="mt-4 space-y-2">
@@ -376,32 +432,39 @@ export function BatchExportTab() {
               {groupPresets.length ? groupPresets.map((preset) => {
                 const isEnabled = enabledPresetIdsSet.has(preset.id)
                 const isPreviewPreset = selectedPreviewPresetId === preset.id
+
                 return (
-                  <button
+                  <div
                     key={preset.id}
-                    type="button"
-                    onClick={() => setSelectedPreviewPresetId(preset.id)}
-                    aria-pressed={isPreviewPreset}
-                    className={`flex w-full items-start gap-3 rounded-md px-3 py-2 text-left transition ${
+                    className={`flex items-start gap-3 rounded-md px-2 py-2 transition ${
                       isPreviewPreset
                         ? 'bg-blue-50 dark:bg-blue-500/10'
                         : 'hover:bg-gray-50 dark:hover:bg-white/[0.04]'
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      value={preset.id}
-                      checked={isEnabled}
-                      onChange={(event) => handleTogglePreset(preset.id, event.target.checked)}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                    <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      aria-label={`Preview preset ${preset.name}`}
+                      aria-pressed={isPreviewPreset}
+                      onClick={() => setSelectedPreviewPresetId(preset.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
                       <div className="truncate text-sm font-medium text-gray-800 dark:text-gray-100">{preset.name}</div>
                       <div className="mt-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
                         {preset.outputRootPath.trim() ? preset.outputRootPath : 'Missing output root path'}
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    <label className="mt-0.5 inline-flex shrink-0 items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        aria-label={`Include preset ${preset.name}`}
+                        value={preset.id}
+                        checked={isEnabled}
+                        onChange={(event) => handleTogglePreset(preset.id, event.target.checked)}
+                      />
+                      <span>Run</span>
+                    </label>
+                  </div>
                 )
               }) : (
                 <div className="rounded-md border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-400 dark:border-white/[0.08] dark:text-gray-500">
@@ -432,7 +495,12 @@ export function BatchExportTab() {
 
           <div className="mt-4 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">
             <div>{enabledPresets.length} presets selected for this run.</div>
-            <div className="mt-1">{canStartExport ? 'Configuration looks complete for the shell stage.' : 'Start stays disabled until backgrounds and preset output roots are ready.'}</div>
+            <div className="mt-1">{runStatusText}</div>
+            <div className="mt-1">
+              {canStartExport
+                ? `Planned shell total: ${plannedExportCount}`
+                : 'Start stays disabled until backgrounds, output roots, and enabled size rules are ready.'}
+            </div>
           </div>
 
           <button
