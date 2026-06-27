@@ -155,4 +155,21 @@ describe('composite render plan', () => {
       { width: 640, height: 360 },
     )).toThrow(/unknown/i)
   })
+
+  it('rejects unknown anchor values', () => {
+    expect(() => mapLayerPositionToCanvas(
+      {
+        mode: 'anchor',
+        anchor: 'mystery' as never,
+        marginX: 0,
+        marginY: 0,
+        offsetX: 0,
+        offsetY: 0,
+        width: 3,
+        height: 4,
+      },
+      { width: 1280, height: 720 },
+      { width: 640, height: 360 },
+    )).toThrow(/unknown/i)
+  })
 })

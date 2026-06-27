@@ -15,6 +15,18 @@ export type CompositeV2DrawRect = {
   dh: number
 }
 
+const VALID_ANCHORS = new Set([
+  'top-left',
+  'top-center',
+  'top-right',
+  'center-left',
+  'center',
+  'center-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+])
+
 function assertValidSize(size: Size) {
   if (!Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) {
     throw new Error('Invalid composite size')
@@ -24,6 +36,12 @@ function assertValidSize(size: Size) {
 function assertValidNumber(value: number) {
   if (!Number.isFinite(value)) {
     throw new Error('Invalid composite value')
+  }
+}
+
+function assertValidAnchor(anchor: string) {
+  if (!VALID_ANCHORS.has(anchor)) {
+    throw new Error('Unknown anchor')
   }
 }
 
@@ -112,6 +130,7 @@ export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Si
     assertValidNumber(position.marginY)
     assertValidNumber(position.offsetX)
     assertValidNumber(position.offsetY)
+    assertValidAnchor(position.anchor)
 
     const width = position.width * scaleX
     const height = position.height * scaleY
