@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -82,6 +82,28 @@ describe('ipc composite background filesystem helpers', () => {
     ])
   })
 
+  it('skips recursive symlink or junction directories instead of traversing them', async () => {
+    const mod = await import('./ipc-handlers')
+    const listCompositeBackgroundFiles = (mod as {
+      listCompositeBackgroundFiles?: (dirPath: string, recursive: boolean) => Array<{ path: string; name: string; relativeDir: string }>
+    }).listCompositeBackgroundFiles
+    const outsideRoot = mkdtempSync(path.join(os.tmpdir(), 'composite-ipc-outside-'))
+    const escapedFile = path.join(outsideRoot, 'escaped.png')
+    const junctionPath = path.join(fixtureDir, 'linked-outside')
+
+    writeFixtureFile(path.join(fixtureDir, 'safe.jpg'))
+    writeFixtureFile(escapedFile)
+    symlinkSync(outsideRoot, junctionPath, 'junction')
+
+    expect(listCompositeBackgroundFiles).toBeTypeOf('function')
+    expect(sortBackgrounds(listCompositeBackgroundFiles!(fixtureDir, true))).toEqual([
+      { path: path.join(fixtureDir, 'safe.jpg'), name: 'safe.jpg', relativeDir: '' },
+    ])
+
+    rmSync(junctionPath, { recursive: true, force: true })
+    rmSync(outsideRoot, { recursive: true, force: true })
+  })
+
   it('deletes allowed files, treats missing files as deleted, and rejects disallowed paths', async () => {
     const mod = await import('./ipc-handlers')
     const deleteCompositeFiles = (mod as {
@@ -104,5 +126,53 @@ describe('ipc composite background filesystem helpers', () => {
     expect(existsSync(outsideFile)).toBe(true)
 
     rmSync(outsideRoot, { recursive: true, force: true })
+  })
+
+  it('deletes only jpg files and rejects directory, wrong extension, and junction escapes', async () => {
+    const mod = await import('./ipc-handlers')
+    const deleteCompositeFiles = (mod as {
+      deleteCompositeFiles?: (filePaths: string[]) => { deleted: string[]; failed: string[] }
+    }).deleteCompositeFiles
+    const insideJpg = path.join(fixtureDir, 'inside.jpg')
+    const insidePng = path.join(fixtureDir, 'inside.png')
+    const nestedDir = path.join(fixtureDir, 'folder.jpg')
+    const outsideRoot = mkdtempSync(path.join(os.tmpdir(), 'composite-ipc-outside-'))
+    const junctionPath = path.join(fixtureDir, 'outside-link')
+    const escapedJpg = path.join(junctionPath, 'escaped.jpg')
+
+    writeFixtureFile(insideJpg)
+    writeFixtureFile(insidePng)
+    mkdirSync(nestedDir, { recursive: true })
+    writeFixtureFile(path.join(outsideRoot, 'escaped.jpg'))
+    symlinkSync(outsideRoot, junctionPath, 'junction')
+
+    expect(deleteCompositeFiles).toBeTypeOf('function')
+    expect(deleteCompositeFiles!([insideJpg, insidePng, nestedDir, escapedJpg])).toEqual({
+      deleted: [insideJpg],
+      failed: [insidePng, nestedDir, escapedJpg],
+    })
+    expect(existsSync(insideJpg)).toBe(false)
+    expect(existsSync(insidePng)).toBe(true)
+    expect(existsSync(path.join(outsideRoot, 'escaped.jpg'))).toBe(true)
+
+    rmSync(junctionPath, { recursive: true, force: true })
+    rmSync(outsideRoot, { recursive: true, force: true })
+  })
+
+  it('returns structured results for malformed IPC payload helpers', async () => {
+    const mod = await import('./ipc-handlers')
+    const handleCompositeListBackgroundFilesPayload = (mod as {
+      handleCompositeListBackgroundFilesPayload?: (payload: unknown) => Array<{ path: string; name: string; relativeDir: string }>
+    }).handleCompositeListBackgroundFilesPayload
+    const handleDeleteCompositeFilesPayload = (mod as {
+      handleDeleteCompositeFilesPayload?: (payload: unknown) => { deleted: string[]; failed: string[] }
+    }).handleDeleteCompositeFilesPayload
+
+    expect(handleCompositeListBackgroundFilesPayload).toBeTypeOf('function')
+    expect(handleDeleteCompositeFilesPayload).toBeTypeOf('function')
+    expect(handleCompositeListBackgroundFilesPayload!({ dirPath: fixtureDir, recursive: 'yes' })).toEqual([])
+    expect(handleCompositeListBackgroundFilesPayload!(null)).toEqual([])
+    expect(handleDeleteCompositeFilesPayload!({ filePaths: ['ok.jpg', 1] })).toEqual({ deleted: [], failed: [] })
+    expect(handleDeleteCompositeFilesPayload!(null)).toEqual({ deleted: [], failed: [] })
   })
 })

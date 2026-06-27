@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'path'
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync } from 'fs'
 
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
 const sessionAllowedRoots = new Set<string>()
@@ -47,6 +47,36 @@ function assertAllowedPath(targetPath: string): string {
   return normalized
 }
 
+function resolveRealPathSafe(targetPath: string): string {
+  try {
+    return realpathSync(targetPath)
+  } catch {
+    return normalizeFsPath(targetPath)
+  }
+}
+
+function findNearestExistingPath(targetPath: string): string | null {
+  let current = normalizeFsPath(targetPath)
+  while (true) {
+    if (existsSync(current)) return current
+    const parent = path.dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
+function assertAllowedRealPath(targetPath: string): string {
+  const normalized = assertAllowedPath(targetPath)
+  const existingPath = findNearestExistingPath(normalized)
+  if (!existingPath) return normalized
+  const realPath = resolveRealPathSafe(existingPath)
+  const allowedRealRoots = getAllowedRoots().map(resolveRealPathSafe)
+  if (!allowedRealRoots.some((root) => isPathInside(realPath, root))) {
+    throw new Error('Path resolves outside allowed application directories')
+  }
+  return normalized
+}
+
 export function initLocalSavePath(): void {
   try {
     const settings = readLocalSettings()
@@ -85,6 +115,7 @@ function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
 }
 
 const COMPOSITE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+const COMPOSITE_DELETE_EXTENSIONS = new Set(['.jpg', '.jpeg'])
 
 type CompositeBackgroundFile = {
   path: string
@@ -95,6 +126,11 @@ type CompositeBackgroundFile = {
 type CompositeDeleteFilesResult = {
   deleted: string[]
   failed: string[]
+}
+
+type CompositeListBackgroundFilesPayload = {
+  dirPath: string
+  recursive: boolean
 }
 
 function isCompositeImagePath(filePath: string): boolean {
@@ -110,6 +146,26 @@ function mimeFromImagePath(filePath: string): string {
 
 function normalizeRelativeDir(relativeDir: string): string {
   return relativeDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+export function parseCompositeListBackgroundFilesPayload(payload: unknown): CompositeListBackgroundFilesPayload | null {
+  if (!isRecord(payload)) return null
+  if (typeof payload.dirPath !== 'string' || typeof payload.recursive !== 'boolean') return null
+  return { dirPath: payload.dirPath, recursive: payload.recursive }
+}
+
+export function parseDeleteCompositeFilesPayload(payload: unknown): string[] | null {
+  if (!isRecord(payload) || !Array.isArray(payload.filePaths)) return null
+  if (!payload.filePaths.every((filePath) => typeof filePath === 'string')) return null
+  return payload.filePaths
+}
+
+function isCompositeDeletePath(filePath: string): boolean {
+  return COMPOSITE_DELETE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
 }
 
 function readImageFilePayload(filePath: string) {
@@ -146,14 +202,17 @@ function listCompositeImageFiles(dirPath: string) {
 }
 
 export function listCompositeBackgroundFiles(dirPath: string, recursive: boolean): CompositeBackgroundFile[] {
-  const safeDirPath = assertAllowedPath(dirPath)
-  if (!existsSync(safeDirPath) || !statSync(safeDirPath).isDirectory()) return []
+  const safeDirPath = assertAllowedRealPath(dirPath)
+  if (!existsSync(safeDirPath)) return []
+  const dirStat = lstatSync(safeDirPath)
+  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return []
   if (!recursive) {
     return readdirSync(safeDirPath).flatMap((name) => {
       const filePath = path.join(safeDirPath, name)
       try {
-        const stat = statSync(filePath)
-        if (!stat.isFile() || !isCompositeImagePath(filePath)) return []
+        const stat = lstatSync(filePath)
+        if (stat.isSymbolicLink() || !stat.isFile() || !isCompositeImagePath(filePath)) return []
+        assertAllowedRealPath(filePath)
         return [{
           path: filePath,
           name,
@@ -168,14 +227,18 @@ export function listCompositeBackgroundFiles(dirPath: string, recursive: boolean
 }
 
 function listCompositeBackgroundFilesRecursive(dirPath: string, rootPath = dirPath): CompositeBackgroundFile[] {
-  const safeDirPath = assertAllowedPath(dirPath)
-  if (!existsSync(safeDirPath) || !statSync(safeDirPath).isDirectory()) return []
+  const safeDirPath = assertAllowedRealPath(dirPath)
+  if (!existsSync(safeDirPath)) return []
+  const dirStat = lstatSync(safeDirPath)
+  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return []
   return readdirSync(safeDirPath).flatMap((name) => {
     const filePath = path.join(safeDirPath, name)
     try {
-      const stat = statSync(filePath)
+      const stat = lstatSync(filePath)
+      if (stat.isSymbolicLink()) return []
       if (stat.isDirectory()) return listCompositeBackgroundFilesRecursive(filePath, rootPath)
       if (!stat.isFile() || !isCompositeImagePath(filePath)) return []
+      assertAllowedRealPath(filePath)
       const relativeDir = path.relative(rootPath, path.dirname(filePath))
       return [{
         path: filePath,
@@ -193,14 +256,33 @@ export function deleteCompositeFiles(filePaths: string[]): CompositeDeleteFilesR
   const failed: string[] = []
   for (const filePath of filePaths) {
     try {
-      const safeFilePath = assertAllowedPath(filePath)
-      if (existsSync(safeFilePath)) unlinkSync(safeFilePath)
+      const safeFilePath = assertAllowedRealPath(filePath)
+      if (!isCompositeDeletePath(safeFilePath)) throw new Error('Only jpg files can be deleted')
+      if (!existsSync(safeFilePath)) {
+        deleted.push(safeFilePath)
+        continue
+      }
+      const stat = lstatSync(safeFilePath)
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Only regular files can be deleted')
+      unlinkSync(safeFilePath)
       deleted.push(safeFilePath)
     } catch {
       failed.push(filePath)
     }
   }
   return { deleted, failed }
+}
+
+export function handleCompositeListBackgroundFilesPayload(payload: unknown): CompositeBackgroundFile[] {
+  const parsed = parseCompositeListBackgroundFilesPayload(payload)
+  if (!parsed) return []
+  return listCompositeBackgroundFiles(parsed.dirPath, parsed.recursive)
+}
+
+export function handleDeleteCompositeFilesPayload(payload: unknown): CompositeDeleteFilesResult {
+  const filePaths = parseDeleteCompositeFilesPayload(payload)
+  if (!filePaths) return { deleted: [], failed: [] }
+  return deleteCompositeFiles(filePaths)
 }
 
 export function registerIpcHandlers(): void {
@@ -318,9 +400,9 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('composite:list-background-files', async (_event, { dirPath, recursive }: { dirPath: string; recursive: boolean }) => {
+  ipcMain.handle('composite:list-background-files', async (_event, payload: unknown) => {
     try {
-      return listCompositeBackgroundFiles(dirPath, recursive)
+      return handleCompositeListBackgroundFilesPayload(payload)
     } catch (err) {
       console.error('Failed to list composite background files:', err)
       return []
@@ -345,8 +427,13 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('composite:delete-files', async (_event, { filePaths }: { filePaths: string[] }) => {
-    return deleteCompositeFiles(filePaths)
+  ipcMain.handle('composite:delete-files', async (_event, payload: unknown) => {
+    try {
+      return handleDeleteCompositeFilesPayload(payload)
+    } catch (err) {
+      console.error('Failed to delete composite files:', err)
+      return { deleted: [], failed: [] }
+    }
   })
 
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
