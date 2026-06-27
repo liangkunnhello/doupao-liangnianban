@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createDefaultCompositeV2State } from './compositeV2Defaults'
 
 describe('composite v2 defaults', () => {
-  it('creates a 1280x720 default preset with jpg output defaults', () => {
+  it('creates readable Chinese defaults and jpg output rules', () => {
     const state = createDefaultCompositeV2State()
-
     expect(state.presets[0]).toMatchObject({
       name: '默认产品预设',
       baseCanvas: { width: 1280, height: 720 },

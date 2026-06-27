@@ -119,6 +119,50 @@ describe('composite v2 store state factory', () => {
     })
   })
 
+  it('collects export results and retains history', () => {
+    const store = createCompositeV2Store()
+    store.getState().resetExportResults()
+    store.getState().addExportSuccess({
+      path: 'D:/out/a.jpg',
+      presetId: 'preset-default',
+      presetName: 'Default',
+      channel: 'Baidu',
+      size: '1280x720',
+      index: 1,
+      warning: 'oversize',
+    })
+    store.getState().addExportFailure({
+      backgroundPath: 'D:/bg/b.jpg',
+      presetId: 'preset-default',
+      presetName: 'Default',
+      channel: 'Baidu',
+      size: '1280x720',
+      reason: 'read failed',
+    })
+    store.getState().addHistoryRecord({
+      id: 'run-1',
+      status: 'completed-with-failures',
+      startedAt: 1,
+      endedAt: 2,
+      backgroundFolder: 'D:/bg',
+      recursive: false,
+      backgroundCount: 2,
+      presetGroupName: 'Default',
+      enabledPresetCount: 1,
+      plannedCount: 2,
+      successCount: 1,
+      failureCount: 1,
+      successes: [],
+      failures: [],
+    })
+
+    expect(store.getState().exportSuccesses).toHaveLength(1)
+    expect(store.getState().exportFailures).toHaveLength(1)
+    expect(store.getState().history[0]?.id).toBe('run-1')
+    store.getState().setHistoryRetention(0)
+    expect(store.getState().historyRetention).toBe(1)
+  })
+
   it('truncates forward preview history when a new random background is pushed after going back', () => {
     const store = createCompositeV2Store()
 
@@ -208,5 +252,26 @@ describe('composite v2 store state factory', () => {
       shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
     })
     expect(store.getState().presets[0]?.updatedAt).toBe(456)
+  })
+
+  it('creates, renames, duplicates and removes preset groups', () => {
+    const store = createCompositeV2Store()
+    store.getState().createPresetGroup('Campaign')
+    const created = store.getState().presetGroups.find((group) => group.name === 'Campaign')
+    expect(created).toBeTruthy()
+    store.getState().renamePresetGroup(created!.id, 'Campaign 2')
+    store.getState().duplicatePresetGroup(created!.id)
+    expect(store.getState().presetGroups.some((group) => group.name === 'Campaign 2 copy')).toBe(true)
+    store.getState().deletePresetGroup(created!.id)
+    expect(store.getState().presetGroups.some((group) => group.id === created!.id)).toBe(false)
+  })
+
+  it('updates global fit mode and an output size rule', () => {
+    const store = createCompositeV2Store()
+    const ruleId = store.getState().outputRuleGroups[0]!.rules[0]!.id
+    store.getState().setGlobalFitMode('contain-blur')
+    store.getState().updateOutputRule(ruleId, { enabled: true, maxSizeKb: 123 })
+    expect(store.getState().globalFitMode).toBe('contain-blur')
+    expect(store.getState().outputRuleGroups[0]!.rules[0]).toMatchObject({ enabled: true, maxSizeKb: 123 })
   })
 })

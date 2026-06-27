@@ -74,7 +74,7 @@ describe('BatchExportTab', () => {
     mountedRenderers.push(renderer!)
 
     await act(async () => {
-      void findButtonByText(renderer!.root, 'Select Background Folder')?.props.onClick()
+      void findButtonByText(renderer!.root, '选择背景文件夹')?.props.onClick()
       await Promise.resolve()
     })
 
@@ -143,7 +143,7 @@ describe('BatchExportTab', () => {
     mountedRenderers.push(renderer!)
 
     await act(async () => {
-      await findButtonByText(renderer!.root, 'Select Background Folder')?.props.onClick()
+      await findButtonByText(renderer!.root, '选择背景文件夹')?.props.onClick()
     })
 
     expect(useCompositeV2Store.getState().backgroundFolder).toBe('D:/backgrounds')
@@ -223,7 +223,7 @@ describe('BatchExportTab', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const startButton = findButtonByText(renderer!.root, 'Start Export')
+    const startButton = findButtonByText(renderer!.root, '开始导出')
     expect(startButton?.props.disabled).toBe(true)
 
     await act(async () => {
@@ -239,15 +239,16 @@ describe('BatchExportTab', () => {
     })
 
     expect(useCompositeV2Store.getState().enabledPresetIdsForRun).toEqual([presetA.id])
-    expect(findButtonByText(renderer!.root, 'Start Export')?.props.disabled).toBe(false)
+    expect(findButtonByText(renderer!.root, '开始导出')?.props.disabled).toBe(false)
 
     await act(async () => {
-      await findButtonByText(renderer!.root, 'Start Export')?.props.onClick()
+      await findButtonByText(renderer!.root, '开始导出')?.props.onClick()
     })
 
-    expect(useCompositeV2Store.getState().exportStatus).toBe('running')
-    expect(useCompositeV2Store.getState().exportCompleted).toBe(0)
+    expect(useCompositeV2Store.getState().exportStatus).toBe('completed')
+    expect(useCompositeV2Store.getState().exportCompleted).toBe(2)
     expect(useCompositeV2Store.getState().exportTotal).toBe(2)
-    expect(getNodeText(renderer!.root)).toContain('Waiting for export engine / preparing')
+    expect(useCompositeV2Store.getState().exportFailures).toHaveLength(2)
+    expect(getNodeText(renderer!.root)).toContain('导出完成')
   })
 })

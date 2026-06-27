@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, FolderOpen, Play, RefreshCw, Shuffle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, ArrowRight, FolderOpen, Pause, Play, RefreshCw, Shuffle, Square } from 'lucide-react'
 import { naturalSortBackgrounds } from '../lib/compositeBackgrounds'
 import { createCompositeExportSnapshot, expandCompositeExportItems } from '../lib/compositeExportPlan'
+import { runCompositeV2Export } from '../lib/compositeExportRuntime'
+import { renderCompositeV2ToCanvas } from '../lib/compositeRendererV2'
 import { useCompositeV2Store } from '../storeV2'
 import { ExportResultsPanel } from './ExportResultsPanel'
 
@@ -43,6 +45,8 @@ export function BatchExportTab() {
   const exportCompleted = useCompositeV2Store((state) => state.exportCompleted)
   const exportTotal = useCompositeV2Store((state) => state.exportTotal)
   const history = useCompositeV2Store((state) => state.history)
+  const exportSuccesses = useCompositeV2Store((state) => state.exportSuccesses)
+  const exportFailures = useCompositeV2Store((state) => state.exportFailures)
   const setBackgroundFolder = useCompositeV2Store((state) => state.setBackgroundFolder)
   const setRecursiveBackgrounds = useCompositeV2Store((state) => state.setRecursiveBackgrounds)
   const setBackgrounds = useCompositeV2Store((state) => state.setBackgrounds)
@@ -56,13 +60,22 @@ export function BatchExportTab() {
   const pushPreviewBackground = useCompositeV2Store((state) => state.pushPreviewBackground)
   const previousPreviewBackground = useCompositeV2Store((state) => state.previousPreviewBackground)
   const nextPreviewBackground = useCompositeV2Store((state) => state.nextPreviewBackground)
+  const resetExportResults = useCompositeV2Store((state) => state.resetExportResults)
+  const addExportSuccess = useCompositeV2Store((state) => state.addExportSuccess)
+  const addExportFailure = useCompositeV2Store((state) => state.addExportFailure)
+  const addHistoryRecord = useCompositeV2Store((state) => state.addHistoryRecord)
+  const setGlobalFitMode = useCompositeV2Store((state) => state.setGlobalFitMode)
+  const updateOutputRule = useCompositeV2Store((state) => state.updateOutputRule)
 
-  const [backgroundStatus, setBackgroundStatus] = useState('Select a folder to load composite backgrounds.')
-  const [previewStatus, setPreviewStatus] = useState('Random preview will appear here after backgrounds load.')
-  const [runStatusText, setRunStatusText] = useState('Export shell is ready to validate configuration.')
+  const [backgroundStatus, setBackgroundStatus] = useState('选择文件夹后加载背景图片。')
+  const [previewStatus, setPreviewStatus] = useState('加载背景后将随机显示一张预览。')
+  const [runStatusText, setRunStatusText] = useState('请完成背景、预设和尺寸规则配置。')
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null)
   const [isLoadingBackgrounds, setIsLoadingBackgrounds] = useState(false)
   const [isLoadingPreview, setIsLoadingPreview] = useState(false)
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null)
+  const pausedRef = useRef(false)
+  const canceledRef = useRef(false)
 
   const electronApi = getElectronApi()
   const canBrowseBackgrounds = Boolean(electronApi?.isElectron && electronApi.listCompositeBackgroundFiles)
@@ -123,6 +136,10 @@ export function BatchExportTab() {
     () => backgrounds.find((background) => background.path === currentPreviewPath) ?? null,
     [backgrounds, currentPreviewPath],
   )
+  const selectedPreviewPreset = useMemo(
+    () => presets.find((preset) => preset.id === selectedPreviewPresetId) ?? enabledPresets[0] ?? null,
+    [enabledPresets, presets, selectedPreviewPresetId],
+  )
   const canGoPrevious = previewHistoryIndex > 0
   const canGoNext = previewHistoryIndex >= 0 && previewHistoryIndex < previewHistory.length - 1
   const canPickRandom = backgrounds.length > 0
@@ -179,6 +196,22 @@ export function BatchExportTab() {
       active = false
     }
   }, [backgrounds.length, currentPreviewPath, electronApi])
+
+  useEffect(() => {
+    if (!previewFile?.dataUrl || !selectedPreviewPreset || !previewCanvasRef.current) return
+    let active = true
+    void renderCompositeV2ToCanvas({
+      backgroundDataUrl: previewFile.dataUrl,
+      preset: selectedPreviewPreset,
+      targetSize: selectedPreviewPreset.baseCanvas,
+      fitMode: globalFitMode,
+    }, previewCanvasRef.current).catch((error) => {
+      if (active) setPreviewStatus(error instanceof Error ? error.message : 'Composite preview failed.')
+    })
+    return () => {
+      active = false
+    }
+  }, [globalFitMode, previewFile?.dataUrl, selectedPreviewPreset])
 
   async function loadBackgroundFolder(nextFolder: string, nextRecursive: boolean) {
     const trimmedFolder = nextFolder.trim()
@@ -265,10 +298,88 @@ export function BatchExportTab() {
     setEnabledPresetIdsForRun(nextSelectedIds)
   }
 
-  function handleStartExport() {
+  async function handleStartExport() {
+    if (!selectedGroup || !canStartExport) return
+    const startedAt = Date.now()
+    const now = new Date()
+    const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    const snapshot = createCompositeExportSnapshot({
+      id: `export-${startedAt}`,
+      date,
+      backgroundFolder,
+      recursive: recursiveBackgrounds,
+      backgrounds,
+      presets,
+      presetGroup: selectedGroup,
+      enabledPresetIds: enabledPresets.map((preset) => preset.id),
+      outputRuleGroups,
+      custom: customValue,
+      fitMode: globalFitMode,
+      preserveSourceDir,
+    }, startedAt)
+    resetExportResults()
+    pausedRef.current = false
+    canceledRef.current = false
     setExportStatus('running')
     setExportProgress(0, plannedExportCount)
-    setRunStatusText('Waiting for export engine / preparing')
+    setRunStatusText('正在导出...')
+    const successes: typeof exportSuccesses = []
+    const failures: typeof exportFailures = []
+    try {
+      await runCompositeV2Export(snapshot, {
+        onProgress: setExportProgress,
+        onSuccess: (item) => {
+          successes.push(item)
+          addExportSuccess(item)
+        },
+        onFailure: (item) => {
+          failures.push(item)
+          addExportFailure(item)
+        },
+        shouldPause: () => pausedRef.current,
+        shouldCancel: () => canceledRef.current,
+      })
+      const canceled = canceledRef.current
+      setExportStatus(canceled ? 'canceled' : 'completed')
+      setRunStatusText(canceled ? '导出已取消。' : `导出完成：${successes.length} 成功，${failures.length} 失败。`)
+      addHistoryRecord({
+        id: snapshot.id,
+        status: canceled ? 'canceled' : failures.length ? 'completed-with-failures' : 'completed',
+        startedAt,
+        endedAt: Date.now(),
+        backgroundFolder,
+        recursive: recursiveBackgrounds,
+        backgroundCount: backgrounds.length,
+        presetGroupName: selectedGroup.name,
+        enabledPresetCount: enabledPresets.length,
+        plannedCount: plannedExportCount,
+        successCount: successes.length,
+        failureCount: failures.length,
+        successes,
+        failures,
+      })
+    } catch (error) {
+      setExportStatus('canceled')
+      setRunStatusText(error instanceof Error ? error.message : '导出运行失败。')
+    }
+  }
+
+  function handlePauseResume() {
+    const nextPaused = !pausedRef.current
+    pausedRef.current = nextPaused
+    setExportStatus(nextPaused ? 'paused' : 'running')
+    setRunStatusText(nextPaused ? '导出已暂停。' : '正在继续导出...')
+  }
+
+  async function handleCancel() {
+    if (!window.confirm('确定取消当前导出吗？')) return
+    canceledRef.current = true
+    pausedRef.current = false
+    setExportStatus('canceling')
+    if (exportSuccesses.length && !window.confirm('保留已经导出的文件？选择“取消”将删除这些文件。')) {
+      const cleanup = await window.electronAPI?.deleteCompositeFiles?.(exportSuccesses.map((item) => item.path))
+      setRunStatusText(cleanup?.failed.length ? `已取消，${cleanup.failed.length} 个文件删除失败。` : '已取消并删除已导出文件。')
+    }
   }
 
   return (
@@ -276,9 +387,9 @@ export function BatchExportTab() {
       <div className="grid min-h-0 min-w-[1160px] grid-cols-[240px_minmax(0,1fr)_320px] grid-rows-[minmax(0,1fr)_auto] gap-4">
         <section className="min-h-0 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Background Folder</h2>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">背景文件夹</h2>
             <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-              Pick a folder, decide recursion, then reload whenever the source changes.
+              默认加载全部支持的图片，可选择是否递归子文件夹。
             </p>
           </div>
 
@@ -289,12 +400,12 @@ export function BatchExportTab() {
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.04]"
           >
             <FolderOpen className="h-4 w-4" />
-            <span>Select Background Folder</span>
+            <span>选择背景文件夹</span>
           </button>
 
           <div className="mt-3 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">
             <div className="truncate font-medium text-gray-800 dark:text-gray-100">
-              {backgroundFolder || 'No folder selected'}
+              {backgroundFolder || '尚未选择文件夹'}
             </div>
             <div className="mt-1">{backgroundStatus}</div>
           </div>
@@ -306,7 +417,7 @@ export function BatchExportTab() {
               checked={recursiveBackgrounds}
               onChange={(event) => void handleRecursiveChange(event.target.checked)}
             />
-            <span>Include child folders recursively</span>
+            <span>递归加载子文件夹</span>
           </label>
 
           <button
@@ -316,17 +427,17 @@ export function BatchExportTab() {
             className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.04]"
           >
             <RefreshCw className={`h-4 w-4 ${isLoadingBackgrounds ? 'animate-spin' : ''}`} />
-            <span>Reload Backgrounds</span>
+            <span>重新加载</span>
           </button>
 
           <dl className="mt-4 grid gap-3 text-sm text-gray-600 dark:text-gray-300">
             <div className="rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
-              <dt className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Loaded</dt>
-              <dd className="mt-1 font-medium">{backgrounds.length} files</dd>
+              <dt className="text-[11px] text-gray-400 dark:text-gray-500">已加载</dt>
+              <dd className="mt-1 font-medium">{backgrounds.length} 张</dd>
             </div>
             <div className="rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
-              <dt className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Preview History</dt>
-              <dd className="mt-1 font-medium">{previewHistory.length} steps</dd>
+              <dt className="text-[11px] text-gray-400 dark:text-gray-500">预览历史</dt>
+              <dd className="mt-1 font-medium">{previewHistory.length} 张</dd>
             </div>
           </dl>
         </section>
@@ -334,9 +445,9 @@ export function BatchExportTab() {
         <section className="min-h-0 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Preview</h2>
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">合成预览</h2>
               <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                {currentPreviewBackground?.name ?? 'No background selected yet'}
+                {currentPreviewBackground?.name ?? '尚未选择背景'}
                 {currentPreviewBackground?.relativeDir ? ` - ${currentPreviewBackground.relativeDir}` : ''}
               </p>
             </div>
@@ -377,15 +488,15 @@ export function BatchExportTab() {
 
           <div className="mt-4 flex min-h-[360px] items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50 p-4 dark:border-white/[0.12] dark:bg-white/[0.03]">
             <div className="flex aspect-video w-full max-w-[760px] items-center justify-center overflow-hidden rounded-md bg-white dark:bg-gray-900">
-              {previewFile?.dataUrl ? (
-                <img
-                  src={previewFile.dataUrl}
-                  alt={previewFile.name}
+              {previewFile?.dataUrl && selectedPreviewPreset ? (
+                <canvas
+                  ref={previewCanvasRef}
+                  aria-label={`预览 ${previewFile.name} 与 ${selectedPreviewPreset.name}`}
                   className="max-h-full max-w-full object-contain"
                 />
               ) : (
                 <div className="px-6 text-center text-sm text-gray-400 dark:text-gray-500">
-                  {isLoadingPreview ? 'Loading preview...' : 'Preview image unavailable until a background is loaded.'}
+                  {isLoadingPreview ? '正在加载预览...' : '加载背景后在这里显示合成预览。'}
                 </div>
               )}
             </div>
@@ -399,9 +510,9 @@ export function BatchExportTab() {
 
         <section className="min-h-0 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Current Run</h2>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">本次导出</h2>
             <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-              Choose one preset group, temporarily trim the preset list, and validate export readiness.
+              每次选择一个预设组，并临时勾选本次需要导出的产品预设。
             </p>
           </div>
 
@@ -426,7 +537,7 @@ export function BatchExportTab() {
 
           <div className="mt-4 rounded-md border border-gray-200 dark:border-white/[0.08]">
             <div className="border-b border-gray-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:border-white/[0.08] dark:text-gray-400">
-              Presets in this group
+              组内预设
             </div>
             <div className="max-h-[240px] space-y-1 overflow-y-auto p-2">
               {groupPresets.length ? groupPresets.map((preset) => {
@@ -451,7 +562,7 @@ export function BatchExportTab() {
                     >
                       <div className="truncate text-sm font-medium text-gray-800 dark:text-gray-100">{preset.name}</div>
                       <div className="mt-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
-                        {preset.outputRootPath.trim() ? preset.outputRootPath : 'Missing output root path'}
+                        {preset.outputRootPath.trim() ? preset.outputRootPath : '尚未设置输出根目录'}
                       </div>
                     </button>
                     <label className="mt-0.5 inline-flex shrink-0 items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
@@ -462,7 +573,7 @@ export function BatchExportTab() {
                         checked={isEnabled}
                         onChange={(event) => handleTogglePreset(preset.id, event.target.checked)}
                       />
-                      <span>Run</span>
+                      <span>导出</span>
                     </label>
                   </div>
                 )
@@ -475,11 +586,11 @@ export function BatchExportTab() {
           </div>
 
           <label className="mt-4 block text-xs font-medium text-gray-500 dark:text-gray-400">
-            Custom
+            自定义参数
             <input
               value={customValue}
               onChange={(event) => setCustomValue(event.target.value)}
-              placeholder="Optional custom token"
+              placeholder="本次导出全局共用"
               className="mt-1 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100"
             />
           </label>
@@ -490,28 +601,68 @@ export function BatchExportTab() {
               checked={preserveSourceDir}
               onChange={(event) => setPreserveSourceDir(event.target.checked)}
             />
-            <span>Preserve source subdirectory layout</span>
+            <span>保留源文件夹层级</span>
           </label>
 
           <div className="mt-4 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">
-            <div>{enabledPresets.length} presets selected for this run.</div>
+            <div>本次已选择 {enabledPresets.length} 个预设。</div>
             <div className="mt-1">{runStatusText}</div>
             <div className="mt-1">
               {canStartExport
-                ? `Planned shell total: ${plannedExportCount}`
-                : 'Start stays disabled until backgrounds, output roots, and enabled size rules are ready.'}
+                ? `预计输出 ${plannedExportCount} 张`
+                : '请先加载背景、设置输出目录并启用至少一个尺寸规则。'}
             </div>
           </div>
 
           <button
             type="button"
-            onClick={handleStartExport}
-            disabled={!canStartExport || exportStatus === 'running'}
+            onClick={() => void handleStartExport()}
+            disabled={!canStartExport || exportStatus === 'running' || exportStatus === 'paused' || exportStatus === 'canceling'}
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Play className="h-4 w-4" />
-            <span>Start Export</span>
+            <span>开始导出</span>
           </button>
+          {(exportStatus === 'running' || exportStatus === 'paused') && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button type="button" onClick={handlePauseResume} className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-white/[0.08]">
+                {exportStatus === 'paused' ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                {exportStatus === 'paused' ? '继续' : '暂停'}
+              </button>
+              <button type="button" onClick={() => void handleCancel()} className="inline-flex items-center justify-center gap-2 rounded-md border border-red-200 px-3 py-2 text-sm text-red-600 dark:border-red-500/30">
+                <Square className="h-4 w-4" />取消
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="col-span-3 rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
+          <div className="flex items-center justify-between gap-4">
+            <div><h2 className="text-sm font-semibold">全局输出尺寸 / 最大 KB</h2><p className="mt-1 text-[11px] text-gray-500">预设默认共用这些规则；已启用规则决定每张背景的输出数量。</p></div>
+            <label className="text-xs text-gray-500">非等比适配
+              <select value={globalFitMode} onChange={(event) => setGlobalFitMode(event.target.value as typeof globalFitMode)} className="ml-2 rounded-md border border-gray-200 px-2 py-1 dark:border-white/[0.08] dark:bg-gray-900">
+                <option value="crop-fill">裁切填满</option><option value="contain-blur">完整留边（模糊背景）</option><option value="stretch">拉伸变形</option>
+              </select>
+            </label>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            {outputRuleGroups.map((group) => (
+              <div key={group.id} className="rounded-md border border-gray-200 p-3 dark:border-white/[0.08]">
+                <div className="mb-2 text-sm font-medium">{group.name}</div>
+                <div className="space-y-2">
+                  {group.rules.map((rule) => (
+                    <div key={rule.id} className="grid grid-cols-[auto_64px_auto_64px_70px] items-center gap-1 text-xs">
+                      <input type="checkbox" checked={rule.enabled} onChange={(event) => updateOutputRule(rule.id, { enabled: event.target.checked })} aria-label={`启用 ${group.name} ${rule.name}`} />
+                      <input aria-label={`${rule.name} 宽`} type="number" min={1} value={rule.width} onChange={(event) => updateOutputRule(rule.id, { width: Math.max(1, Number(event.target.value)), name: `${Math.max(1, Number(event.target.value))}x${rule.height}` })} className="w-16 rounded border border-gray-200 px-1 py-0.5 dark:border-white/[0.08] dark:bg-gray-900" />
+                      <span>x</span>
+                      <input aria-label={`${rule.name} 高`} type="number" min={1} value={rule.height} onChange={(event) => updateOutputRule(rule.id, { height: Math.max(1, Number(event.target.value)), name: `${rule.width}x${Math.max(1, Number(event.target.value))}` })} className="w-16 rounded border border-gray-200 px-1 py-0.5 dark:border-white/[0.08] dark:bg-gray-900" />
+                      <label className="flex items-center gap-1"><input type="number" min={1} value={rule.maxSizeKb} onChange={(event) => updateOutputRule(rule.id, { maxSizeKb: Math.max(1, Number(event.target.value)) })} className="w-14 rounded border border-gray-200 px-1 py-0.5 dark:border-white/[0.08] dark:bg-gray-900" />KB</label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
 
         <div className="col-span-3">
@@ -520,6 +671,8 @@ export function BatchExportTab() {
             completed={exportCompleted}
             total={exportTotal}
             history={history}
+            successes={exportSuccesses}
+            failures={exportFailures}
           />
         </div>
       </div>

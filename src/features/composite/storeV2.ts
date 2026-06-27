@@ -2,11 +2,17 @@ import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 import { createPreviewHistory } from './lib/compositeBackgrounds'
+import { addCompositeHistoryRecord } from './lib/compositeExportHistoryV2'
 import { createDefaultCompositeV2State } from './lib/compositeV2Defaults'
 import type {
   CompositeV2BackgroundImage,
   CompositeV2ExportStatus,
   CompositeV2ImageAssetRef,
+  CompositeV2FailureItem,
+  CompositeV2HistoryRecord,
+  CompositeV2FitMode,
+  CompositeV2OutputSizeRule,
+  CompositeV2SuccessItem,
   CompositeV2State,
 } from './lib/compositeV2Types'
 
@@ -24,6 +30,8 @@ type CompositeV2BatchState = {
   exportStatus: CompositeV2ExportStatus
   exportCompleted: number
   exportTotal: number
+  exportSuccesses: CompositeV2SuccessItem[]
+  exportFailures: CompositeV2FailureItem[]
 }
 
 type CompositeV2StoreActions = {
@@ -43,6 +51,19 @@ type CompositeV2StoreActions = {
   nextPreviewBackground: () => void
   setExportProgress: (completed: number, total: number) => void
   setExportStatus: (status: CompositeV2ExportStatus) => void
+  resetExportResults: () => void
+  addExportSuccess: (item: CompositeV2SuccessItem) => void
+  addExportFailure: (item: CompositeV2FailureItem) => void
+  addHistoryRecord: (record: CompositeV2HistoryRecord) => void
+  setHistoryRetention: (retention: number) => void
+  createPresetGroup: (name: string) => void
+  renamePresetGroup: (groupId: string, name: string) => void
+  duplicatePresetGroup: (groupId: string) => void
+  deletePresetGroup: (groupId: string) => void
+  duplicatePresetIntoGroup: (presetId: string, groupId: string) => void
+  removePresetFromGroup: (presetId: string, groupId: string) => void
+  setGlobalFitMode: (mode: CompositeV2FitMode) => void
+  updateOutputRule: (ruleId: string, patch: Partial<CompositeV2OutputSizeRule>) => void
 }
 
 export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2State & CompositeV2StoreActions
@@ -73,6 +94,8 @@ export function createCompositeV2StoreState(): CompositeV2BatchState & Composite
     exportStatus: 'idle',
     exportCompleted: 0,
     exportTotal: 0,
+    exportSuccesses: [],
+    exportFailures: [],
     presets: defaults.presets,
     presetGroups: defaults.presetGroups,
     outputRuleGroups: defaults.outputRuleGroups,
@@ -162,6 +185,63 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
       )),
       setExportProgress: (exportCompleted, exportTotal) => set({ exportCompleted, exportTotal }),
       setExportStatus: (exportStatus) => set({ exportStatus }),
+      resetExportResults: () => set({ exportSuccesses: [], exportFailures: [], exportCompleted: 0, exportTotal: 0 }),
+      addExportSuccess: (item) => set((state) => ({ exportSuccesses: [...state.exportSuccesses, item] })),
+      addExportFailure: (item) => set((state) => ({ exportFailures: [...state.exportFailures, item] })),
+      addHistoryRecord: (record) => set((state) => ({
+        history: addCompositeHistoryRecord(state.history, record, state.historyRetention),
+      })),
+      setHistoryRetention: (retention) => set((state) => {
+        const historyRetention = Math.max(1, Math.floor(Number.isFinite(retention) ? retention : 1))
+        return { historyRetention, history: state.history.slice(0, historyRetention) }
+      }),
+      createPresetGroup: (name) => set((state) => {
+        const now = Date.now()
+        const group = { id: uniqueId('group'), name: name.trim() || '新预设组', presetIds: [], updatedAt: now }
+        return { presetGroups: [...state.presetGroups, group], selectedPresetGroupId: group.id, enabledPresetIdsForRun: [], selectedPreviewPresetId: '' }
+      }),
+      renamePresetGroup: (groupId, name) => set((state) => ({
+        presetGroups: state.presetGroups.map((group) => group.id === groupId ? { ...group, name: name.trim() || group.name, updatedAt: Date.now() } : group),
+      })),
+      duplicatePresetGroup: (groupId) => set((state) => {
+        const source = state.presetGroups.find((group) => group.id === groupId)
+        if (!source) return {}
+        const group = { ...source, id: uniqueId('group'), name: `${source.name} copy`, presetIds: [...source.presetIds], updatedAt: Date.now() }
+        return { presetGroups: [...state.presetGroups, group] }
+      }),
+      deletePresetGroup: (groupId) => set((state) => {
+        if (state.presetGroups.length <= 1) return {}
+        const presetGroups = state.presetGroups.filter((group) => group.id !== groupId)
+        const selected = presetGroups[0]
+        return {
+          presetGroups,
+          selectedPresetGroupId: selected?.id ?? '',
+          enabledPresetIdsForRun: [...(selected?.presetIds ?? [])],
+          selectedPreviewPresetId: selected?.presetIds[0] ?? '',
+        }
+      }),
+      duplicatePresetIntoGroup: (presetId, groupId) => set((state) => {
+        const source = state.presets.find((preset) => preset.id === presetId)
+        if (!source) return {}
+        const preset = structuredClone({ ...source, id: uniqueId('preset'), name: `${source.name} copy`, updatedAt: Date.now() })
+        return {
+          presets: [...state.presets, preset],
+          presetGroups: state.presetGroups.map((group) => group.id === groupId ? { ...group, presetIds: [...group.presetIds, preset.id], updatedAt: Date.now() } : group),
+          selectedPreviewPresetId: preset.id,
+        }
+      }),
+      removePresetFromGroup: (presetId, groupId) => set((state) => ({
+        presetGroups: state.presetGroups.map((group) => group.id === groupId ? { ...group, presetIds: group.presetIds.filter((id) => id !== presetId), updatedAt: Date.now() } : group),
+        enabledPresetIdsForRun: state.enabledPresetIdsForRun.filter((id) => id !== presetId),
+        selectedPreviewPresetId: state.selectedPreviewPresetId === presetId ? '' : state.selectedPreviewPresetId,
+      })),
+      setGlobalFitMode: (globalFitMode) => set({ globalFitMode }),
+      updateOutputRule: (ruleId, patch) => set((state) => ({
+        outputRuleGroups: state.outputRuleGroups.map((group) => ({
+          ...group,
+          rules: group.rules.map((rule) => rule.id === ruleId ? { ...rule, ...patch } : rule),
+        })),
+      })),
     }),
     {
       name: STORAGE_NAME,
@@ -233,6 +313,10 @@ function clampIndex(index: number, length: number) {
 
 function defaultPickRandomIndex(length: number) {
   return Math.floor(Math.random() * length)
+}
+
+function uniqueId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function updatePresets(

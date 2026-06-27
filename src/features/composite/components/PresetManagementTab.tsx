@@ -1,20 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Copy, Plus, Trash2 } from 'lucide-react'
 import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
+import type { CompositeFsImage } from '../lib/compositeTypes'
 import { useCompositeV2Store } from '../storeV2'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
-import type { CompositeFsImage } from '../lib/compositeTypes'
 
 export function PresetManagementTab() {
-  const presets = useCompositeV2Store((state) => state.presets)
-  const groups = useCompositeV2Store((state) => state.presetGroups)
-  const selectedPresetGroupId = useCompositeV2Store((state) => state.selectedPresetGroupId)
-  const selectedPreviewPresetId = useCompositeV2Store((state) => state.selectedPreviewPresetId)
-  const setSelectedPresetGroup = useCompositeV2Store((state) => state.setSelectedPresetGroup)
-  const setSelectedPreviewPresetId = useCompositeV2Store((state) => state.setSelectedPreviewPresetId)
-  const updatePreset = useCompositeV2Store((state) => state.updatePreset)
-  const addImageLayer = useCompositeV2Store((state) => state.addImageLayer)
-  const addTextLayer = useCompositeV2Store((state) => state.addTextLayer)
-
+  const store = useCompositeV2Store()
   const [query, setQuery] = useState('')
   const [logoLibraryPath, setLogoLibraryPath] = useState('')
   const [logoAssets, setLogoAssets] = useState<CompositeFsImage[]>([])
@@ -22,200 +14,133 @@ export function PresetManagementTab() {
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
 
   const visiblePresets = useMemo(
-    () => filterPresetsForLibrary(presets, groups, { query, groupId: selectedPresetGroupId || undefined }),
-    [groups, presets, query, selectedPresetGroupId],
+    () => filterPresetsForLibrary(store.presets, store.presetGroups, {
+      query,
+      groupId: store.selectedPresetGroupId || undefined,
+    }),
+    [query, store.presetGroups, store.presets, store.selectedPresetGroupId],
   )
-
-  const activePreset = useMemo(
-    () => visiblePresets.find((preset) => preset.id === selectedPreviewPresetId) ?? null,
-    [selectedPreviewPresetId, visiblePresets],
-  )
+  const activePreset = visiblePresets.find((preset) => preset.id === store.selectedPreviewPresetId) ?? null
 
   useEffect(() => {
-    if (!visiblePresets.length) return
-    if (activePreset) return
-    const nextPresetId = visiblePresets[0]?.id
-    if (nextPresetId && nextPresetId !== selectedPreviewPresetId) {
-      setSelectedPreviewPresetId(nextPresetId)
-    }
-  }, [activePreset, selectedPreviewPresetId, setSelectedPreviewPresetId, visiblePresets])
+    if (!activePreset && visiblePresets[0]) store.setSelectedPreviewPresetId(visiblePresets[0].id)
+  }, [activePreset, store.setSelectedPreviewPresetId, visiblePresets])
 
-  async function loadLogoAssets(nextPath: string, reason: 'select' | 'refresh') {
-    const trimmedPath = nextPath.trim()
-    const api = typeof window !== 'undefined' ? window.electronAPI : undefined
-
-    if (!api?.isElectron || !api.listImageFiles) {
-      setLogoStatusText('当前环境不支持读取本地 LOGO 目录。')
+  async function loadLogos(path: string) {
+    if (!window.electronAPI?.listImageFiles || !path.trim()) {
+      setLogoStatusText('请选择有效的 LOGO 目录。')
       return
     }
-    if (!trimmedPath) {
-      setLogoStatusText('请输入或选择 LOGO 目录。')
-      return
-    }
-
     setIsRefreshingLogos(true)
-    setLogoStatusText(reason === 'refresh' ? '正在刷新 LOGO 列表…' : '正在读取 LOGO 目录…')
-
     try {
-      const assets = await api.listImageFiles(trimmedPath)
-      setLogoLibraryPath(trimmedPath)
+      const assets = await window.electronAPI.listImageFiles(path.trim())
+      setLogoLibraryPath(path.trim())
       setLogoAssets(assets)
-      setLogoStatusText(assets.length ? `已载入 ${assets.length} 个 LOGO。` : '目录为空，没有可用 LOGO。')
+      setLogoStatusText(`已加载 ${assets.length} 个 LOGO。`)
     } catch (error) {
-      setLogoStatusText(error instanceof Error ? `读取失败：${error.message}` : '读取 LOGO 目录失败。')
+      setLogoStatusText(error instanceof Error ? error.message : 'LOGO 目录读取失败。')
     } finally {
       setIsRefreshingLogos(false)
     }
   }
 
-  async function handleSelectLogoFolder() {
-    const api = typeof window !== 'undefined' ? window.electronAPI : undefined
-    if (!api?.isElectron || !api.selectDirectory) {
-      setLogoStatusText('当前环境不支持选择目录。')
-      return
-    }
-
-    const nextPath = await api.selectDirectory()
-    if (!nextPath) {
-      setLogoStatusText('未选择 LOGO 目录。')
-      return
-    }
-
-    await loadLogoAssets(nextPath, 'select')
-  }
-
-  async function handleRefreshLogoFolder() {
-    await loadLogoAssets(logoLibraryPath, 'refresh')
-  }
-
-  function handlePickLogo(asset: CompositeFsImage) {
-    if (!activePreset) {
-      setLogoStatusText('请先选择一个预设。')
-      return
-    }
-
-    addImageLayer(activePreset.id, { kind: 'path', path: asset.path })
-    setLogoStatusText(`已将 ${asset.name} 添加为图片图层。`)
-  }
-
-  function handleAddTextLayer() {
-    if (!activePreset) return
-    addTextLayer(activePreset.id)
-  }
-
-  function handleAddImageLayer() {
-    if (!activePreset) return
-    addImageLayer(activePreset.id)
+  async function chooseLogoFolder() {
+    const path = await window.electronAPI?.selectDirectory?.()
+    if (path) await loadLogos(path)
   }
 
   return (
     <div className="min-h-0 flex-1 overflow-x-auto">
       <div className="grid min-h-0 min-w-[1180px] grid-cols-[220px_280px_minmax(640px,1fr)] gap-4">
-      <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
-        <div className="border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">预设组</h2>
-          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{groups.length} 个分组</p>
-        </div>
-        <div className="min-h-0 space-y-1 overflow-y-auto p-2">
-          {groups.map((group) => (
-            <button
-              key={group.id}
-              type="button"
-              aria-pressed={selectedPresetGroupId === group.id}
-              onClick={() => setSelectedPresetGroup(group.id)}
-              className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition ${
-                selectedPresetGroupId === group.id
-                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
-                  : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.04]'
-              }`}
-            >
-              <span className="truncate">{group.name}</span>
-              <span className="ml-3 shrink-0 text-[11px] opacity-70">{group.presetIds.length}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
-        <div className="border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">全局预设库</h2>
-          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">筛选并编辑当前预设</p>
-        </div>
-
-        <div className="border-b border-gray-200 p-3 dark:border-white/[0.08]">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索预设"
-            aria-label="Search presets"
-            className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100"
-          />
-        </div>
-
-        <div className="min-h-0 overflow-y-auto">
-          <div className="space-y-1 p-2">
-            {visiblePresets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                aria-pressed={selectedPreviewPresetId === preset.id}
-                onClick={() => setSelectedPreviewPresetId(preset.id)}
-                className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                  selectedPreviewPresetId === preset.id
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
-                    : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.04]'
-                }`}
-              >
-                <div className="truncate font-medium">{preset.name}</div>
-                <div className="mt-1 truncate text-[11px] opacity-70">
-                  {preset.layers.length} 层 · {preset.baseCanvas.width} × {preset.baseCanvas.height}
+        <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
+          <header className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+            <div><h2 className="text-sm font-semibold">预设组</h2><p className="text-[11px] text-gray-500">{store.presetGroups.length} 个分组</p></div>
+            <button type="button" title="新建预设组" onClick={() => store.createPresetGroup(window.prompt('预设组名称') ?? '')} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 dark:border-white/[0.08]"><Plus className="h-4 w-4" /></button>
+          </header>
+          <div className="space-y-1 overflow-y-auto p-2">
+            {store.presetGroups.map((group) => {
+              const selected = group.id === store.selectedPresetGroupId
+              return (
+                <div key={group.id} className={`rounded-md ${selected ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200' : ''}`}>
+                  <button type="button" aria-pressed={selected} onClick={() => store.setSelectedPresetGroup(group.id)} onDoubleClick={() => store.renamePresetGroup(group.id, window.prompt('重命名预设组', group.name) ?? group.name)} className="flex w-full justify-between px-3 py-2 text-left text-sm">
+                    <span className="truncate">{group.name}</span><span className="text-[11px] opacity-70">{group.presetIds.length}</span>
+                  </button>
+                  {selected && (
+                    <div className="flex justify-end gap-1 px-2 pb-2">
+                      <button type="button" title="复制组" onClick={() => store.duplicatePresetGroup(group.id)} className="p-1"><Copy className="h-3.5 w-3.5" /></button>
+                      <button type="button" title="删除组" disabled={store.presetGroups.length <= 1} onClick={() => window.confirm('删除这个预设组？') && store.deletePresetGroup(group.id)} className="p-1 text-red-500 disabled:opacity-30"><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  )}
                 </div>
-              </button>
-            ))}
-            {!visiblePresets.length && (
-              <div className="rounded-md border border-dashed border-gray-200 px-3 py-4 text-center text-xs text-gray-400 dark:border-white/[0.08] dark:text-gray-500">
-                没有匹配的预设。
+              )
+            })}
+          </div>
+        </section>
+
+        <section className="min-h-0 overflow-y-auto rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
+          <header className="border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]"><h2 className="text-sm font-semibold">全局水印预设库</h2></header>
+          <div className="p-3"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="按名称搜索" aria-label="Search presets" className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /></div>
+          <div className="space-y-1 px-2">
+            {visiblePresets.map((preset) => (
+              <div key={preset.id} className={`rounded-md px-3 py-2 text-sm ${preset.id === store.selectedPreviewPresetId ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200' : ''}`}>
+                <button type="button" aria-pressed={preset.id === store.selectedPreviewPresetId} onClick={() => store.setSelectedPreviewPresetId(preset.id)} className="w-full text-left">
+                  <div className="truncate font-medium">{preset.name}</div><div className="text-[11px] opacity-70">{preset.layers.length} 层 · {preset.baseCanvas.width} x {preset.baseCanvas.height}</div>
+                </button>
+                {preset.id === store.selectedPreviewPresetId && (
+                  <div className="mt-2 flex gap-3 text-[11px]">
+                    <button type="button" onClick={() => store.duplicatePresetIntoGroup(preset.id, store.selectedPresetGroupId)} className="text-blue-600">复制为新预设</button>
+                    <button type="button" onClick={() => store.removePresetFromGroup(preset.id, store.selectedPresetGroupId)} className="text-red-500">移出当前组</button>
+                  </div>
+                )}
               </div>
-            )}
+            ))}
           </div>
 
           {activePreset && (
-            <div className="border-t border-gray-200 px-3 py-3 dark:border-white/[0.08]">
-              <label className="block text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                预设名称
-                <input
-                  value={activePreset.name}
-                  onChange={(event) => updatePreset(activePreset.id, { name: event.target.value })}
-                  className="mt-1 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100"
-                />
+            <div className="mt-3 space-y-3 border-t border-gray-200 p-3 dark:border-white/[0.08]">
+              <label className="block text-[11px] text-gray-500">预设名称<input value={activePreset.name} onChange={(event) => store.updatePreset(activePreset.id, { name: event.target.value })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /></label>
+              <label className="block text-[11px] text-gray-500">输出根目录<div className="mt-1 flex gap-2"><input value={activePreset.outputRootPath} onChange={(event) => store.updatePreset(activePreset.id, { outputRootPath: event.target.value })} className="min-w-0 flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /><button type="button" onClick={async () => { const path = await window.electronAPI?.selectDirectory?.(); if (path) store.updatePreset(activePreset.id, { outputRootPath: path }) }} className="rounded-md border border-gray-200 px-2 text-xs dark:border-white/[0.08]">选择</button></div></label>
+              <label className="block text-[11px] text-gray-500">示例背景路径<input value={activePreset.sampleBackgroundPath} onChange={(event) => store.updatePreset(activePreset.id, { sampleBackgroundPath: event.target.value })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /></label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[11px] text-gray-500">基准宽<input type="number" min={1} value={activePreset.baseCanvas.width} onChange={(event) => store.updatePreset(activePreset.id, { baseCanvas: { ...activePreset.baseCanvas, width: Math.max(1, Number(event.target.value)) } })} className="mt-1 w-full rounded border border-gray-200 px-2 py-1 dark:border-white/[0.08] dark:bg-gray-900" /></label>
+                <label className="text-[11px] text-gray-500">基准高<input type="number" min={1} value={activePreset.baseCanvas.height} onChange={(event) => store.updatePreset(activePreset.id, { baseCanvas: { ...activePreset.baseCanvas, height: Math.max(1, Number(event.target.value)) } })} className="mt-1 w-full rounded border border-gray-200 px-2 py-1 dark:border-white/[0.08] dark:bg-gray-900" /></label>
+              </div>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={activePreset.useOutputOverrides} onChange={(event) => store.updatePreset(activePreset.id, {
+                  useOutputOverrides: event.target.checked,
+                  outputRuleGroupsOverride: activePreset.outputRuleGroupsOverride.length ? activePreset.outputRuleGroupsOverride : structuredClone(store.outputRuleGroups),
+                })} />
+                覆盖全局渠道/尺寸勾选规则
               </label>
-              <label className="mt-3 block text-[11px] font-medium text-gray-500 dark:text-gray-400">
-                示例背景路径
-                <input
-                  value={activePreset.sampleBackgroundPath}
-                  onChange={(event) => updatePreset(activePreset.id, { sampleBackgroundPath: event.target.value })}
-                  placeholder="可选，用于后续预览接线"
-                  className="mt-1 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100"
-                />
-              </label>
+              {activePreset.useOutputOverrides && (
+                <div className="max-h-36 space-y-2 overflow-auto rounded border border-gray-200 p-2 text-xs dark:border-white/[0.08]">
+                  {activePreset.outputRuleGroupsOverride.map((group) => (
+                    <div key={group.id}><div className="font-medium">{group.name}</div>{group.rules.map((rule) => (
+                      <label key={rule.id} className="mt-1 flex items-center gap-2"><input type="checkbox" checked={rule.enabled} onChange={(event) => store.updatePreset(activePreset.id, {
+                        outputRuleGroupsOverride: activePreset.outputRuleGroupsOverride.map((item) => ({ ...item, rules: item.rules.map((candidate) => candidate.id === rule.id ? { ...candidate, enabled: event.target.checked } : candidate) })),
+                      })} />{rule.name}</label>
+                    ))}</div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
-        </div>
-      </section>
+        </section>
 
-      <PresetCanvasEditor
-        preset={activePreset}
-        logoLibraryPath={logoLibraryPath}
-        logoAssets={logoAssets}
-        logoStatusText={logoStatusText}
-        isRefreshingLogos={isRefreshingLogos}
-        onLogoLibraryPathChange={setLogoLibraryPath}
-        onAddText={handleAddTextLayer}
-        onAddImage={handleAddImageLayer}
-        onSelectLogoFolder={handleSelectLogoFolder}
-        onRefreshLogoFolder={handleRefreshLogoFolder}
-        onPickLogo={handlePickLogo}
-      />
+        <PresetCanvasEditor
+          preset={activePreset}
+          logoLibraryPath={logoLibraryPath}
+          logoAssets={logoAssets}
+          logoStatusText={logoStatusText}
+          isRefreshingLogos={isRefreshingLogos}
+          onLogoLibraryPathChange={setLogoLibraryPath}
+          onAddText={() => activePreset && store.addTextLayer(activePreset.id)}
+          onAddImage={() => activePreset && store.addImageLayer(activePreset.id)}
+          onSelectLogoFolder={() => void chooseLogoFolder()}
+          onRefreshLogoFolder={() => void loadLogos(logoLibraryPath)}
+          onPickLogo={(asset) => activePreset && store.addImageLayer(activePreset.id, { kind: 'path', path: asset.path })}
+          onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
+        />
       </div>
     </div>
   )
