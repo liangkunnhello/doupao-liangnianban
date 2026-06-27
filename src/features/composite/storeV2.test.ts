@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 import {
   createCompositeV2Store,
   createCompositeV2StoreState,
   getCompositeV2PersistedState,
 } from './storeV2'
 import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from './lib/compositeV2Defaults'
+import type { CompositeV2ImageLayer, CompositeV2TextLayer } from './lib/compositeV2Types'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('composite v2 store state factory', () => {
   it('creates batch state separate from persisted preset state', () => {
@@ -112,5 +117,63 @@ describe('composite v2 store state factory', () => {
       exportTotal: 7,
       exportStatus: 'paused',
     })
+  })
+
+  it('updates a preset immutably and refreshes updatedAt', () => {
+    const store = createCompositeV2Store()
+    const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }
+    const group = { ...createDefaultCompositeV2PresetGroup(10), presetIds: [preset.id] }
+    vi.spyOn(Date, 'now').mockReturnValue(99)
+
+    store.setState({ presets: [preset], presetGroups: [group] })
+    const previousPreset = store.getState().presets[0]
+
+    store.getState().updatePreset(preset.id, { name: 'Preset A Updated', sampleBackgroundPath: 'D:/sample.jpg' })
+
+    expect(store.getState().presets[0]).toMatchObject({
+      id: preset.id,
+      name: 'Preset A Updated',
+      sampleBackgroundPath: 'D:/sample.jpg',
+      updatedAt: 99,
+    })
+    expect(store.getState().presets[0]).not.toBe(previousPreset)
+  })
+
+  it('adds a text layer to the target preset and stamps updatedAt', () => {
+    const store = createCompositeV2Store()
+    const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }
+    vi.spyOn(Date, 'now').mockReturnValue(123)
+
+    store.setState({ presets: [preset] })
+    store.getState().addTextLayer(preset.id)
+
+    const layer = store.getState().presets[0]?.layers[0] as CompositeV2TextLayer | undefined
+    expect(layer).toMatchObject({
+      type: 'text',
+      name: 'Text Layer',
+      text: 'New Text',
+      position: { mode: 'free', x: 100, y: 100, width: 240, height: 120 },
+      shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
+    })
+    expect(store.getState().presets[0]?.updatedAt).toBe(123)
+  })
+
+  it('adds an image layer with the provided asset and stamps updatedAt', () => {
+    const store = createCompositeV2Store()
+    const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }
+    vi.spyOn(Date, 'now').mockReturnValue(456)
+
+    store.setState({ presets: [preset] })
+    store.getState().addImageLayer(preset.id, { kind: 'path', path: 'D:/logos/logo.png' })
+
+    const layer = store.getState().presets[0]?.layers[0] as CompositeV2ImageLayer | undefined
+    expect(layer).toMatchObject({
+      type: 'image',
+      name: 'Image Layer',
+      asset: { kind: 'path', path: 'D:/logos/logo.png' },
+      position: { mode: 'free', x: 100, y: 100, width: 240, height: 120 },
+      shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
+    })
+    expect(store.getState().presets[0]?.updatedAt).toBe(456)
   })
 })

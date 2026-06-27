@@ -6,6 +6,7 @@ import { createDefaultCompositeV2State } from './lib/compositeV2Defaults'
 import type {
   CompositeV2BackgroundImage,
   CompositeV2ExportStatus,
+  CompositeV2ImageAssetRef,
   CompositeV2State,
 } from './lib/compositeV2Types'
 
@@ -29,6 +30,9 @@ type CompositeV2StoreActions = {
   setBackgroundFolder: (path: string) => void
   setRecursiveBackgrounds: (recursive: boolean) => void
   setBackgrounds: (backgrounds: CompositeV2BackgroundImage[]) => void
+  updatePreset: (presetId: string, patch: Partial<CompositeV2State['presets'][number]>) => void
+  addImageLayer: (presetId: string, asset?: CompositeV2ImageAssetRef) => void
+  addTextLayer: (presetId: string) => void
   setSelectedPresetGroup: (groupId: string) => void
   setSelectedPreviewPresetId: (presetId: string) => void
   setEnabledPresetIdsForRun: (presetIds: string[]) => void
@@ -45,6 +49,8 @@ export type CreateCompositeV2StoreOptions = {
 }
 
 const STORAGE_NAME = 'doupao-composite-v2-workspace-storage'
+const DEFAULT_LAYER_POSITION = { mode: 'free' as const, x: 100, y: 100, width: 240, height: 120 }
+const DEFAULT_LAYER_SHADOW = { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 }
 
 export function createCompositeV2StoreState(): CompositeV2BatchState & CompositeV2State {
   const defaults = createDefaultCompositeV2State()
@@ -102,6 +108,33 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
         backgrounds,
         ...createRandomPreviewState(backgrounds, pickRandomIndex),
       }),
+      updatePreset: (presetId, patch) => set((state) => ({
+        presets: updatePresets(state.presets, presetId, (preset, now) => ({
+          ...preset,
+          ...patch,
+          updatedAt: now,
+        })),
+      })),
+      addImageLayer: (presetId, asset) => set((state) => ({
+        presets: updatePresets(state.presets, presetId, (preset, now) => ({
+          ...preset,
+          layers: [
+            ...preset.layers,
+            createImageLayer(asset ?? null, now),
+          ],
+          updatedAt: now,
+        })),
+      })),
+      addTextLayer: (presetId) => set((state) => ({
+        presets: updatePresets(state.presets, presetId, (preset, now) => ({
+          ...preset,
+          layers: [
+            ...preset.layers,
+            createTextLayer(now),
+          ],
+          updatedAt: now,
+        })),
+      })),
       setSelectedPresetGroup: (groupId) => set((state) => {
         const selectedGroup = getSelectedGroup(state.presetGroups, groupId)
         return {
@@ -171,4 +204,64 @@ function clampIndex(index: number, length: number) {
 
 function defaultPickRandomIndex(length: number) {
   return Math.floor(Math.random() * length)
+}
+
+function updatePresets(
+  presets: CompositeV2State['presets'],
+  presetId: string,
+  updater: (preset: CompositeV2State['presets'][number], now: number) => CompositeV2State['presets'][number],
+) {
+  let changed = false
+  const now = Date.now()
+  const nextPresets = presets.map((preset) => {
+    if (preset.id !== presetId) return preset
+    changed = true
+    return updater(preset, now)
+  })
+
+  return changed ? nextPresets : presets
+}
+
+function createImageLayer(asset: CompositeV2ImageAssetRef | null, now: number) {
+  return {
+    id: `image-layer-${now}`,
+    type: 'image' as const,
+    name: 'Image Layer',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    rotation: 0,
+    position: { ...DEFAULT_LAYER_POSITION },
+    shadow: { ...DEFAULT_LAYER_SHADOW },
+    asset,
+    radius: 0,
+    clip: false,
+  }
+}
+
+function createTextLayer(now: number) {
+  return {
+    id: `text-layer-${now}`,
+    type: 'text' as const,
+    name: 'Text Layer',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    rotation: 0,
+    position: { ...DEFAULT_LAYER_POSITION },
+    shadow: { ...DEFAULT_LAYER_SHADOW },
+    text: 'New Text',
+    fontFamily: 'sans-serif',
+    fontSize: 48,
+    fontWeight: 700,
+    color: '#ffffff',
+    align: 'center' as const,
+    lineHeight: 1.1,
+    letterSpacing: 0,
+    stroke: {
+      enabled: false,
+      color: '#000000',
+      width: 0,
+    },
+  }
 }
