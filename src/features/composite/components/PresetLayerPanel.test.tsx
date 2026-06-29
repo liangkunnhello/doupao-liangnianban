@@ -9,6 +9,7 @@ describe('PresetLayerPanel', () => {
     const presetId = store.getState().presets[0]!.id
     store.getState().addTextLayer(presetId)
     store.getState().addImageLayer(presetId)
+    store.getState().replaceOrAddLogoLayer(presetId, { kind: 'path', path: 'D:/logos/a.png' })
     const currentPreset = store.getState().presets[0]!
     store.getState().updatePreset(presetId, {
       layers: currentPreset.layers.map((layer, index) => index === 0 ? {
@@ -39,6 +40,8 @@ describe('PresetLayerPanel', () => {
 
     expect(html).toContain('图层信息')
     expect(html.indexOf('Text Layer')).toBeLessThan(html.indexOf('Image Layer'))
+    expect(html).toContain('LOGO Layer')
+    expect(html).toContain('LOGO ·')
     expect(html).toContain('显示')
     expect(html).toContain('锁定')
     expect(html).toContain('透明度')

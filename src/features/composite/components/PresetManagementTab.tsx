@@ -4,7 +4,6 @@ import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import type { CompositeFsImage } from '../lib/compositeTypes'
 import { useCompositeV2Store } from '../storeV2'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
-import { PresetLayerPanel } from './PresetLayerPanel'
 
 export function PresetManagementTab() {
   const store = useCompositeV2Store()
@@ -61,9 +60,12 @@ export function PresetManagementTab() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-      <div className="grid min-h-[560px] min-w-[1180px] shrink-0 grid-cols-[220px_280px_minmax(640px,1fr)] gap-4">
-        <section className="min-h-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
+    <div
+      data-layout="preset-management-workspace"
+      className="grid min-h-[680px] min-w-[1180px] flex-1 grid-cols-[300px_minmax(0,1fr)] gap-4 overflow-hidden"
+    >
+      <div data-layout="stacked-library-rail" className="flex min-h-0 flex-col gap-4">
+        <section className="max-h-[220px] min-h-[170px] shrink-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
           <header className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
             <div><h2 className="text-sm font-semibold">预设组</h2><p className="text-[11px] text-gray-500">{store.presetGroups.length} 个分组</p></div>
             <button type="button" title="新建预设组" onClick={() => store.createPresetGroup(window.prompt('预设组名称') ?? '')} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 dark:border-white/[0.08]"><Plus className="h-4 w-4" /></button>
@@ -88,7 +90,7 @@ export function PresetManagementTab() {
           </div>
         </section>
 
-        <section className="min-h-0 overflow-y-auto rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
+        <section className="min-h-0 flex-1 overflow-y-auto rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">
           <header className="border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]"><h2 className="text-sm font-semibold">全局水印预设库</h2></header>
           <div className="p-3"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="按名称搜索" aria-label="Search presets" className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /></div>
           <div className="space-y-1 px-2">
@@ -151,32 +153,32 @@ export function PresetManagementTab() {
             </div>
           )}
         </section>
+      </div>
 
-        <PresetCanvasEditor
-          preset={activePreset}
-          logoLibraryPath={store.logoLibraryPath}
-          logoAssets={logoAssets}
-          logoStatusText={logoStatusText}
-          isRefreshingLogos={isRefreshingLogos}
-          selectedLayerId={selectedLayerId}
-          onSelectLayer={setSelectedLayerId}
-          onLogoLibraryPathChange={store.setLogoLibraryPath}
-          onAddText={() => activePreset && store.addTextLayer(activePreset.id)}
-          onAddImage={() => activePreset && store.addImageLayer(activePreset.id)}
-          onSelectLogoFolder={() => void chooseLogoFolder()}
-          onRefreshLogoFolder={() => void loadLogos(store.logoLibraryPath)}
-          onPickLogo={(asset) => activePreset && store.addImageLayer(activePreset.id, { kind: 'path', path: asset.path })}
-          onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
-        />
-      </div>
-      <div className="min-w-[1180px] flex-1">
-        <PresetLayerPanel
-          preset={activePreset}
-          selectedLayerId={selectedLayerId}
-          onSelectLayer={setSelectedLayerId}
-          onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
-        />
-      </div>
+      <PresetCanvasEditor
+        preset={activePreset}
+        logoLibraryPath={store.logoLibraryPath}
+        logoAssets={logoAssets}
+        logoStatusText={logoStatusText}
+        isRefreshingLogos={isRefreshingLogos}
+        selectedLayerId={selectedLayerId}
+        onSelectLayer={setSelectedLayerId}
+        onLogoLibraryPathChange={store.setLogoLibraryPath}
+        onAddText={() => activePreset && store.addTextLayer(activePreset.id)}
+        onAddImage={() => activePreset && store.addImageLayer(activePreset.id)}
+        onSelectLogoFolder={() => void chooseLogoFolder()}
+        onRefreshLogoFolder={() => void loadLogos(store.logoLibraryPath)}
+        onPickLogo={(asset) => {
+          if (!activePreset) return
+          const layerId = store.replaceOrAddLogoLayer(
+            activePreset.id,
+            { kind: 'path', path: asset.path },
+            selectedLayerId,
+          )
+          setSelectedLayerId(layerId)
+        }}
+        onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
+      />
     </div>
   )
 }

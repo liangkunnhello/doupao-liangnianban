@@ -38,6 +38,61 @@ function findInputByAriaLabel(root: ReactTestInstance, label: string) {
 }
 
 describe('PresetManagementTab', () => {
+  it('uses a stacked library rail beside a full preview workspace', () => {
+    let renderer: ReturnType<typeof create>
+    act(() => {
+      renderer = create(<PresetManagementTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findAll((node) => node.props['data-layout'] === 'preset-management-workspace')).toHaveLength(1)
+    expect(renderer!.root.findAll((node) => node.props['data-layout'] === 'stacked-library-rail')).toHaveLength(1)
+  })
+
+  it('replaces an existing LOGO layer instead of adding an image layer', async () => {
+    const preset = { ...createDefaultCompositeV2Preset(1), id: 'preset-logo' }
+    const group = { ...createDefaultCompositeV2PresetGroup(1), presetIds: [preset.id] }
+    useCompositeV2Store.setState({
+      presets: [preset],
+      presetGroups: [group],
+      selectedPresetGroupId: group.id,
+      selectedPreviewPresetId: preset.id,
+      logoLibraryPath: 'D:/logos',
+    })
+    const logoId = useCompositeV2Store.getState().replaceOrAddLogoLayer(
+      preset.id,
+      { kind: 'path', path: 'D:/logos/old.png' },
+    )
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        listImageFiles: vi.fn().mockResolvedValue([
+          { path: 'D:/logos/new.png', name: 'new.png', dataUrl: 'data:image/png;base64,AAAA' },
+        ]),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<PresetManagementTab />)
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const logoButton = renderer!.root.findAllByType('button').find((node) => node.props['aria-label'] === 'new.png')
+    act(() => {
+      logoButton?.props.onClick()
+    })
+
+    const layers = useCompositeV2Store.getState().presets[0]!.layers
+    expect(layers).toHaveLength(1)
+    expect(layers[0]).toMatchObject({
+      id: logoId,
+      type: 'logo',
+      asset: { kind: 'path', path: 'D:/logos/new.png' },
+    })
+  })
+
   it('toggles every override size in a channel from its select-all checkbox', () => {
     const outputRuleGroupsOverride = createDefaultCompositeV2OutputRuleGroups()
     const targetGroup = outputRuleGroupsOverride[1]!

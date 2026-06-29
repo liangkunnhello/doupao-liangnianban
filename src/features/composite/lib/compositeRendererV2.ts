@@ -1,5 +1,5 @@
 import { mapLayerPositionToCanvas, planBackgroundFit } from './compositeRenderPlan'
-import type { CompositeV2ImageLayer, CompositeV2Preset, CompositeV2FitMode, CompositeV2TextLayer } from './compositeV2Types'
+import type { CompositeV2MediaLayer, CompositeV2Preset, CompositeV2FitMode, CompositeV2TextLayer } from './compositeV2Types'
 
 type Size = { width: number; height: number }
 const overlayCache = new Map<string, HTMLCanvasElement>()
@@ -46,14 +46,14 @@ async function renderCombinedOverlay(preset: CompositeV2Preset, target: Size) {
   return overlay
 }
 
-async function resolveLayerImage(layer: CompositeV2ImageLayer) {
+async function resolveLayerImage(layer: CompositeV2MediaLayer) {
   if (!layer.asset) return null
   const api = window.electronAPI
   const payload = await api?.readImageFile?.(layer.asset.path)
   return payload?.dataUrl ? loadImage(payload.dataUrl) : null
 }
 
-function applyShadow(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer | CompositeV2ImageLayer, base: Size, target: Size) {
+function applyShadow(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer | CompositeV2MediaLayer, base: Size, target: Size) {
   if (!layer.shadow.enabled) return
   const scaleX = target.width / base.width
   const scaleY = target.height / base.height
@@ -67,7 +67,7 @@ function applyShadow(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer 
   ctx.shadowBlur = layer.shadow.blur * Math.min(scaleX, scaleY)
 }
 
-async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer | CompositeV2ImageLayer, preset: CompositeV2Preset, target: Size) {
+async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLayer | CompositeV2MediaLayer, preset: CompositeV2Preset, target: Size) {
   const rect = mapLayerPositionToCanvas(layer.position, preset.baseCanvas, target)
   ctx.save()
   ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity))
@@ -75,7 +75,7 @@ async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLa
   ctx.rotate((layer.rotation * Math.PI) / 180)
   applyShadow(ctx, layer, preset.baseCanvas, target)
 
-  if (layer.type === 'image') {
+  if (layer.type !== 'text') {
     const image = await resolveLayerImage(layer)
     if (image) {
       if (layer.clip) {
@@ -88,21 +88,23 @@ async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLa
     }
   } else {
     const metrics = getScaledTextMetrics(layer.fontSize, layer.stroke.width, preset.baseCanvas, target)
+    const scale = Math.min(target.width / preset.baseCanvas.width, target.height / preset.baseCanvas.height)
+    const padding = (layer.padding ?? 5) * scale
     ctx.font = `${layer.fontWeight} ${metrics.fontSize}px ${layer.fontFamily}`
     ;(ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${layer.letterSpacing * Math.min(target.width / preset.baseCanvas.width, target.height / preset.baseCanvas.height)}px`
     ctx.fillStyle = layer.color
     ctx.textAlign = layer.align
     ctx.textBaseline = 'middle'
     const lines = layer.text.split('\n')
-    const textX = layer.align === 'left' ? -rect.width / 2 : layer.align === 'right' ? rect.width / 2 : 0
+    const textX = layer.align === 'left' ? -rect.width / 2 + padding : layer.align === 'right' ? rect.width / 2 - padding : 0
     lines.forEach((line, index) => {
       const y = (index - (lines.length - 1) / 2) * metrics.fontSize * layer.lineHeight
       if (layer.stroke.enabled && metrics.strokeWidth > 0) {
         ctx.strokeStyle = layer.stroke.color
         ctx.lineWidth = metrics.strokeWidth
-        ctx.strokeText(line, textX, y, rect.width)
+        ctx.strokeText(line, textX, y, Math.max(1, rect.width - padding * 2))
       }
-      ctx.fillText(line, textX, y, rect.width)
+      ctx.fillText(line, textX, y, Math.max(1, rect.width - padding * 2))
     })
   }
   ctx.restore()

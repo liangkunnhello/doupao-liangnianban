@@ -232,9 +232,12 @@ describe('composite v2 store state factory', () => {
       type: 'text',
       name: 'Text Layer',
       text: 'New Text',
-      position: { mode: 'free', x: 100, y: 100, width: 240, height: 120 },
+      color: '#000000',
+      padding: 5,
       shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
     })
+    expect(layer!.position.width).toBeGreaterThan(0)
+    expect(layer!.position.height).toBeGreaterThan(0)
     expect(store.getState().presets[0]?.updatedAt).toBe(123)
   })
 
@@ -255,6 +258,72 @@ describe('composite v2 store state factory', () => {
       shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
     })
     expect(store.getState().presets[0]?.updatedAt).toBe(456)
+  })
+
+  it('creates a LOGO layer without changing an ordinary image layer', () => {
+    const store = createCompositeV2Store()
+    const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }
+    store.setState({ presets: [preset] })
+    store.getState().addImageLayer(preset.id, { kind: 'path', path: 'D:/images/photo.png' })
+
+    const logoId = store.getState().replaceOrAddLogoLayer(
+      preset.id,
+      { kind: 'path', path: 'D:/logos/logo-a.png' },
+    )
+    const layers = store.getState().presets[0]!.layers
+
+    expect(layers).toHaveLength(2)
+    expect(layers[0]).toMatchObject({
+      type: 'image',
+      asset: { kind: 'path', path: 'D:/images/photo.png' },
+    })
+    expect(layers[1]).toMatchObject({
+      id: logoId,
+      type: 'logo',
+      name: 'LOGO Layer',
+      asset: { kind: 'path', path: 'D:/logos/logo-a.png' },
+    })
+  })
+
+  it('replaces the selected LOGO first and otherwise the first LOGO', () => {
+    const store = createCompositeV2Store()
+    const preset = { ...createDefaultCompositeV2Preset(10), id: 'preset-a', name: 'Preset A' }
+    store.setState({ presets: [preset] })
+    const firstLogoId = store.getState().replaceOrAddLogoLayer(
+      preset.id,
+      { kind: 'path', path: 'D:/logos/first.png' },
+    )
+    const secondLogoId = store.getState().replaceOrAddLogoLayer(
+      preset.id,
+      { kind: 'path', path: 'D:/logos/second.png' },
+      'missing-layer',
+    )
+
+    expect(secondLogoId).toBe(firstLogoId)
+    expect(store.getState().presets[0]!.layers[0]).toMatchObject({
+      id: firstLogoId,
+      asset: { kind: 'path', path: 'D:/logos/second.png' },
+    })
+
+    const firstLogo = store.getState().presets[0]!.layers[0]!
+    expect(firstLogo.type).toBe('logo')
+    if (firstLogo.type !== 'logo') throw new Error('Expected a LOGO layer')
+    store.getState().presets[0]!.layers.push({
+      ...firstLogo,
+      id: 'logo-selected',
+      asset: { kind: 'path', path: 'D:/logos/selected-old.png' },
+    })
+    const selectedId = store.getState().replaceOrAddLogoLayer(
+      preset.id,
+      { kind: 'path', path: 'D:/logos/selected-new.png' },
+      'logo-selected',
+    )
+
+    expect(selectedId).toBe('logo-selected')
+    expect(store.getState().presets[0]!.layers[1]).toMatchObject({
+      id: 'logo-selected',
+      asset: { kind: 'path', path: 'D:/logos/selected-new.png' },
+    })
   })
 
   it('creates, renames, duplicates and removes preset groups', () => {

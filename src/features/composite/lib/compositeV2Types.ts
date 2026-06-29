@@ -56,11 +56,19 @@ export type CompositeV2ImageAssetRef =
   | { kind: 'path'; path: string }
   | { kind: 'internal'; path: string; originalPath?: string }
 
-export type CompositeV2ImageLayer = CompositeV2LayerBase & {
-  type: 'image'
+export type CompositeV2MediaLayer = CompositeV2LayerBase & {
+  type: 'image' | 'logo'
   asset: CompositeV2ImageAssetRef | null
   radius: number
   clip: boolean
+}
+
+export type CompositeV2ImageLayer = CompositeV2MediaLayer & {
+  type: 'image'
+}
+
+export type CompositeV2LogoLayer = CompositeV2MediaLayer & {
+  type: 'logo'
 }
 
 export type CompositeV2TextLayer = CompositeV2LayerBase & {
@@ -73,6 +81,7 @@ export type CompositeV2TextLayer = CompositeV2LayerBase & {
   align: 'left' | 'center' | 'right'
   lineHeight: number
   letterSpacing: number
+  padding: number
   stroke: {
     enabled: boolean
     color: string
@@ -80,7 +89,7 @@ export type CompositeV2TextLayer = CompositeV2LayerBase & {
   }
 }
 
-export type CompositeV2Layer = CompositeV2ImageLayer | CompositeV2TextLayer
+export type CompositeV2Layer = CompositeV2ImageLayer | CompositeV2LogoLayer | CompositeV2TextLayer
 
 export type CompositeV2OutputSizeRule = {
   id: string

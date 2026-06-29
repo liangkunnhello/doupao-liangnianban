@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware'
 import { createPreviewHistory } from './lib/compositeBackgrounds'
 import { addCompositeHistoryRecord } from './lib/compositeExportHistoryV2'
 import { createDefaultCompositeV2State } from './lib/compositeV2Defaults'
+import { fitCompositeTextLayer } from './lib/compositeTextLayout'
 import type {
   CompositeV2BackgroundImage,
   CompositeV2ExportStatus,
@@ -41,6 +42,7 @@ type CompositeV2StoreActions = {
   setBackgrounds: (backgrounds: CompositeV2BackgroundImage[]) => void
   updatePreset: (presetId: string, patch: Partial<CompositeV2State['presets'][number]>) => void
   addImageLayer: (presetId: string, asset?: CompositeV2ImageAssetRef) => void
+  replaceOrAddLogoLayer: (presetId: string, asset: CompositeV2ImageAssetRef, selectedLayerId?: string) => string
   addTextLayer: (presetId: string) => void
   setSelectedPresetGroup: (groupId: string) => void
   setSelectedPreviewPresetId: (presetId: string) => void
@@ -156,6 +158,29 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
           updatedAt: now,
         })),
       })),
+      replaceOrAddLogoLayer: (presetId, asset, selectedLayerId) => {
+        let resolvedLayerId = ''
+        set((state) => ({
+          presets: updatePresets(state.presets, presetId, (preset, now) => {
+            const selectedIndex = preset.layers.findIndex((layer) => layer.id === selectedLayerId && layer.type === 'logo')
+            const logoIndex = selectedIndex >= 0
+              ? selectedIndex
+              : preset.layers.findIndex((layer) => layer.type === 'logo')
+            if (logoIndex >= 0) {
+              const layers = [...preset.layers]
+              const logo = layers[logoIndex]!
+              if (logo.type !== 'logo') return preset
+              resolvedLayerId = logo.id
+              layers[logoIndex] = { ...logo, asset }
+              return { ...preset, layers, updatedAt: now }
+            }
+            const logo = createLogoLayer(asset, now)
+            resolvedLayerId = logo.id
+            return { ...preset, layers: [...preset.layers, logo], updatedAt: now }
+          }),
+        }))
+        return resolvedLayerId
+      },
       addTextLayer: (presetId) => set((state) => ({
         presets: updatePresets(state.presets, presetId, (preset, now) => ({
           ...preset,
@@ -362,8 +387,17 @@ function createImageLayer(asset: CompositeV2ImageAssetRef | null, now: number) {
   }
 }
 
-function createTextLayer(now: number) {
+function createLogoLayer(asset: CompositeV2ImageAssetRef, now: number) {
   return {
+    ...createImageLayer(asset, now),
+    id: `logo-layer-${now}`,
+    type: 'logo' as const,
+    name: 'LOGO Layer',
+  }
+}
+
+function createTextLayer(now: number) {
+  return fitCompositeTextLayer({
     id: `text-layer-${now}`,
     type: 'text' as const,
     name: 'Text Layer',
@@ -377,14 +411,15 @@ function createTextLayer(now: number) {
     fontFamily: 'sans-serif',
     fontSize: 48,
     fontWeight: 700,
-    color: '#ffffff',
+    color: '#000000',
     align: 'center' as const,
     lineHeight: 1.1,
     letterSpacing: 0,
+    padding: 5,
     stroke: {
       enabled: false,
       color: '#000000',
       width: 0,
     },
-  }
+  })
 }

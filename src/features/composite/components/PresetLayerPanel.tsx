@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Trash2 } from 'lucide-react'
+import { fitCompositeTextLayer } from '../lib/compositeTextLayout'
 import type { CompositeV2Layer, CompositeV2Preset } from '../lib/compositeV2Types'
 
 type Props = {
@@ -17,7 +18,11 @@ export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpd
   function updateLayer(layerId: string, patch: Partial<CompositeV2Layer>) {
     if (!preset) return
     onUpdatePreset({
-      layers: preset.layers.map((layer) => layer.id === layerId ? { ...layer, ...patch } as CompositeV2Layer : layer),
+      layers: preset.layers.map((layer) => {
+        if (layer.id !== layerId) return layer
+        const nextLayer = { ...layer, ...patch } as CompositeV2Layer
+        return nextLayer.type === 'text' ? fitCompositeTextLayer(nextLayer) : nextLayer
+      }),
     })
   }
 
@@ -58,7 +63,7 @@ export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpd
                 <button type="button" title={layer.locked ? '解锁图层' : '锁定图层'} onClick={() => updateLayer(layer.id, { locked: !layer.locked })} className={iconButtonClass}>{layer.locked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}</button>
                 <button type="button" onClick={() => onSelectLayer(layer.id)} className="min-w-0 flex-1 text-left">
                   <div className="truncate text-xs font-medium">{index + 1}. {layer.name}</div>
-                  <div className="text-[10px] opacity-60">{layer.type === 'text' ? '文字' : '图片'} · {layer.position.mode === 'free' ? '自由坐标' : '九宫格'}</div>
+                  <div className="text-[10px] opacity-60">{layer.type === 'text' ? '文字' : layer.type === 'logo' ? 'LOGO' : '图片'} · {layer.position.mode === 'free' ? '自由坐标' : '九宫格'}</div>
                 </button>
                 <button type="button" title="上移图层" disabled={index === 0} onClick={() => moveLayer(layer.id, -1)} className={iconButtonClass}><ChevronUp className="h-3.5 w-3.5" /></button>
                 <button type="button" title="下移图层" disabled={index === preset.layers.length - 1} onClick={() => moveLayer(layer.id, 1)} className={iconButtonClass}><ChevronDown className="h-3.5 w-3.5" /></button>
@@ -126,6 +131,7 @@ export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpd
                     <label className="text-xs text-gray-500">字号<input type="number" value={selectedLayer.fontSize} onChange={(event) => updateLayer(selectedLayer.id, { fontSize: Number(event.target.value) })} className={fieldClass} /></label>
                     <label className="text-xs text-gray-500">字重<input type="number" value={selectedLayer.fontWeight} onChange={(event) => updateLayer(selectedLayer.id, { fontWeight: Number(event.target.value) })} className={fieldClass} /></label>
                     <label className="text-xs text-gray-500">颜色<input type="color" value={selectedLayer.color} onChange={(event) => updateLayer(selectedLayer.id, { color: event.target.value })} className="mt-1 h-8 w-full" /></label>
+                    <label className="text-xs text-gray-500">内边距<input type="number" min={0} value={selectedLayer.padding ?? 5} onChange={(event) => updateLayer(selectedLayer.id, { padding: Math.max(0, Number(event.target.value)) })} className={fieldClass} /></label>
                   </div>
                 ) : (
                   <div className="grid grid-cols-4 gap-3 border-t border-gray-100 pt-3 dark:border-white/[0.08]">

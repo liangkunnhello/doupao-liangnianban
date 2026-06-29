@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { mapLayerPositionToCanvas } from '../lib/compositeRenderPlan'
 import { renderCompositeV2ToCanvas } from '../lib/compositeRendererV2'
-import type { CompositeV2Layer, CompositeV2Preset } from '../lib/compositeV2Types'
+import { fitCompositeTextLayer } from '../lib/compositeTextLayout'
+import type { CompositeV2Layer, CompositeV2Preset, CompositeV2TextLayer } from '../lib/compositeV2Types'
 import type { CompositeFsImage } from '../lib/compositeTypes'
 import { FloatingLayerToolbar } from './FloatingLayerToolbar'
 import { FloatingLogoLibrary } from './FloatingLogoLibrary'
+import { PresetLayerPanel } from './PresetLayerPanel'
 
 type Props = {
   preset: CompositeV2Preset | null
@@ -38,10 +40,16 @@ export function PresetCanvasEditor(props: Props) {
   const { preset } = props
   const [internalSelectedLayerId, setInternalSelectedLayerId] = useState('')
   const [backgroundDataUrl, setBackgroundDataUrl] = useState('')
+  const [editingTextLayerId, setEditingTextLayerId] = useState('')
+  const [editingStartText, setEditingStartText] = useState('')
+  const [editingScale, setEditingScale] = useState(1)
   const selectedLayerId = props.selectedLayerId ?? internalSelectedLayerId
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragRef = useRef<{ id: string; x: number; y: number } | null>(null)
   const visibleLayers = useMemo(() => preset?.layers.filter((layer) => layer.visible) ?? [], [preset])
+  const editingTextLayer = preset?.layers.find((layer): layer is CompositeV2TextLayer => (
+    layer.id === editingTextLayerId && layer.type === 'text'
+  )) ?? null
 
   function selectLayer(layerId: string) {
     setInternalSelectedLayerId(layerId)
@@ -73,8 +81,33 @@ export function PresetCanvasEditor(props: Props) {
   function updateLayer(layerId: string, patch: Partial<CompositeV2Layer>) {
     if (!preset || !props.onUpdatePreset) return
     props.onUpdatePreset({
-      layers: preset.layers.map((layer) => layer.id === layerId ? { ...layer, ...patch } as CompositeV2Layer : layer),
+      layers: preset.layers.map((layer) => {
+        if (layer.id !== layerId) return layer
+        const nextLayer = { ...layer, ...patch } as CompositeV2Layer
+        return nextLayer.type === 'text' ? fitCompositeTextLayer(nextLayer) : nextLayer
+      }),
     })
+  }
+
+  function beginTextEdit(layer: CompositeV2Layer, event: React.MouseEvent<HTMLButtonElement>) {
+    if (layer.type !== 'text' || layer.locked) return
+    event.stopPropagation()
+    dragRef.current = null
+    selectLayer(layer.id)
+    setEditingStartText(layer.text)
+    const host = event.currentTarget.parentElement?.getBoundingClientRect()
+    setEditingScale(host?.width ? host.width / preset!.baseCanvas.width : 1)
+    setEditingTextLayerId(layer.id)
+  }
+
+  function finishTextEdit() {
+    setEditingTextLayerId('')
+    setEditingStartText('')
+  }
+
+  function cancelTextEdit() {
+    if (editingTextLayer) updateLayer(editingTextLayer.id, { text: editingStartText })
+    finishTextEdit()
   }
 
   function handlePointerMove(event: React.PointerEvent) {
@@ -93,7 +126,7 @@ export function PresetCanvasEditor(props: Props) {
   }
 
   return (
-    <div className="relative h-[560px] min-h-[500px] overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-white/[0.08] dark:bg-gray-950">
+    <div className="relative h-full min-h-[680px] overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-white/[0.08] dark:bg-gray-950">
       <FloatingLayerToolbar onAddText={props.onAddText} onAddImage={props.onAddImage} disabled={!preset} />
 
       <div className="flex h-full items-center justify-center px-20 py-8">
@@ -120,10 +153,41 @@ export function PresetCanvasEditor(props: Props) {
                 selectLayer(layer.id)
                 dragRef.current = { id: layer.id, x: event.clientX, y: event.clientY }
               }}
+              onDoubleClick={(event) => beginTextEdit(layer, event)}
               className={`absolute border ${selectedLayerId === layer.id ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:border-blue-300'}`}
               style={getLayerStyle(layer, preset)}
             />
           ))}
+          {preset && editingTextLayer && (
+            <textarea
+              autoFocus
+              aria-label={`Edit text ${editingTextLayer.name}`}
+              value={editingTextLayer.text}
+              onPointerDown={(event) => event.stopPropagation()}
+              onChange={(event) => updateLayer(editingTextLayer.id, { text: event.target.value })}
+              onBlur={finishTextEdit}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelTextEdit()
+                } else if (event.key === 'Enter' && event.ctrlKey) {
+                  event.preventDefault()
+                  finishTextEdit()
+                }
+              }}
+              className="absolute z-30 resize-none overflow-hidden border border-blue-500 bg-white/90 text-gray-950 outline-none ring-2 ring-blue-500/20"
+              style={{
+                ...getLayerStyle(editingTextLayer, preset),
+                fontFamily: editingTextLayer.fontFamily,
+                fontSize: `${Math.max(10, editingTextLayer.fontSize * editingScale)}px`,
+                fontWeight: editingTextLayer.fontWeight,
+                lineHeight: editingTextLayer.lineHeight,
+                letterSpacing: `${editingTextLayer.letterSpacing * editingScale}px`,
+                padding: `${(editingTextLayer.padding ?? 5) * editingScale}px`,
+                textAlign: editingTextLayer.align,
+              }}
+            />
+          )}
         </div>
       </div>
 
@@ -139,6 +203,20 @@ export function PresetCanvasEditor(props: Props) {
         onRefresh={props.onRefreshLogoFolder}
         onPickAsset={props.onPickLogo}
       />
+
+      {preset && (
+        <div
+          data-layout="floating-layer-panel"
+          className="absolute bottom-4 left-20 right-[19rem] z-20 h-[280px] min-w-0 overflow-hidden rounded-md shadow-xl"
+        >
+          <PresetLayerPanel
+            preset={preset}
+            selectedLayerId={selectedLayerId}
+            onSelectLayer={selectLayer}
+            onUpdatePreset={(patch) => props.onUpdatePreset?.(patch)}
+          />
+        </div>
+      )}
     </div>
   )
 }
