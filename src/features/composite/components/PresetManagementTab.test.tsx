@@ -47,6 +47,18 @@ describe('PresetManagementTab', () => {
 
     expect(renderer!.root.findAll((node) => node.props['data-layout'] === 'preset-management-workspace')).toHaveLength(1)
     expect(renderer!.root.findAll((node) => node.props['data-layout'] === 'stacked-library-rail')).toHaveLength(1)
+
+    const workspace = renderer!.root.find(
+      (node) => node.props['data-layout'] === 'preset-management-workspace',
+    )
+    expect(workspace.props.className).toContain('h-full')
+    expect(workspace.props.className).not.toContain('min-h-[680px]')
+
+    const fixedMinimumHeightNodes = renderer!.root.findAll(
+      (node) => typeof node.props.className === 'string'
+        && node.props.className.includes('min-h-[680px]'),
+    )
+    expect(fixedMinimumHeightNodes).toHaveLength(0)
   })
 
   it('replaces an existing LOGO layer instead of adding an image layer', async () => {

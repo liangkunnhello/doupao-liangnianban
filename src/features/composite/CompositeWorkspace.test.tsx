@@ -11,6 +11,17 @@ vi.mock('./components/PresetManagementTab', () => ({
 }))
 
 describe('CompositeWorkspace', () => {
+  it('fills the viewport below the fixed application header', () => {
+    let renderer!: ReturnType<typeof create>
+    act(() => {
+      renderer = create(<CompositeWorkspace />)
+    })
+
+    const workspace = renderer.root.findByType('main')
+    expect(workspace.props.className).toContain('h-[calc(100vh-var(--app-header-offset))]')
+    expect(workspace.props.className).toContain('overflow-hidden')
+  })
+
   it('switches between batch export and preset management', () => {
     let renderer!: ReturnType<typeof create>
     act(() => {
