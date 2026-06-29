@@ -24,6 +24,7 @@ describe('PresetCanvasEditor', () => {
     expect(html).toContain('aria-label="Add text layer"')
     expect(html).toContain('aria-label="Select logo folder"')
     expect(html).toContain('logo-a.png')
+    expect(html).toContain('<canvas')
   })
 
   it('disables layer creation and logo picking when no preset is selected', () => {

@@ -5,7 +5,7 @@ type Size = { width: number; height: number }
 const overlayCache = new Map<string, HTMLCanvasElement>()
 
 export type CompositeV2RenderInput = {
-  backgroundDataUrl: string
+  backgroundDataUrl?: string
   preset: CompositeV2Preset
   targetSize: Size
   fitMode: CompositeV2FitMode
@@ -109,24 +109,27 @@ async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLa
 }
 
 export async function renderCompositeV2ToCanvas(input: CompositeV2RenderInput, canvas: HTMLCanvasElement) {
-  const background = await loadImage(input.backgroundDataUrl)
   canvas.width = input.targetSize.width
   canvas.height = input.targetSize.height
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('当前环境不支持 Canvas')
+  ctx.clearRect(0, 0, input.targetSize.width, input.targetSize.height)
 
-  if (input.fitMode === 'contain-blur') {
-    ctx.save()
-    ctx.filter = 'blur(24px)'
-    ctx.drawImage(background, -24, -24, input.targetSize.width + 48, input.targetSize.height + 48)
-    ctx.restore()
+  if (input.backgroundDataUrl) {
+    const background = await loadImage(input.backgroundDataUrl)
+    if (input.fitMode === 'contain-blur') {
+      ctx.save()
+      ctx.filter = 'blur(24px)'
+      ctx.drawImage(background, -24, -24, input.targetSize.width + 48, input.targetSize.height + 48)
+      ctx.restore()
+    }
+    const rect = planBackgroundFit(
+      input.fitMode,
+      { width: background.naturalWidth, height: background.naturalHeight },
+      input.targetSize,
+    )
+    ctx.drawImage(background, rect.sx, rect.sy, rect.sw, rect.sh, rect.dx, rect.dy, rect.dw, rect.dh)
   }
-  const rect = planBackgroundFit(
-    input.fitMode,
-    { width: background.naturalWidth, height: background.naturalHeight },
-    input.targetSize,
-  )
-  ctx.drawImage(background, rect.sx, rect.sy, rect.sw, rect.sh, rect.dx, rect.dy, rect.dw, rect.dh)
 
   const overlay = await renderCombinedOverlay(input.preset, input.targetSize)
   ctx.drawImage(overlay, 0, 0)

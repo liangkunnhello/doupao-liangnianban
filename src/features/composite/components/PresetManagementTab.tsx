@@ -9,7 +9,6 @@ import { PresetLayerPanel } from './PresetLayerPanel'
 export function PresetManagementTab() {
   const store = useCompositeV2Store()
   const [query, setQuery] = useState('')
-  const [logoLibraryPath, setLogoLibraryPath] = useState('')
   const [logoAssets, setLogoAssets] = useState<CompositeFsImage[]>([])
   const [logoStatusText, setLogoStatusText] = useState('选择目录后可插入 LOGO。')
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
@@ -34,6 +33,10 @@ export function PresetManagementTab() {
     }
   }, [activePreset, selectedLayerId])
 
+  useEffect(() => {
+    if (store.logoLibraryPath) void loadLogos(store.logoLibraryPath)
+  }, [])
+
   async function loadLogos(path: string) {
     if (!window.electronAPI?.listImageFiles || !path.trim()) {
       setLogoStatusText('请选择有效的 LOGO 目录。')
@@ -42,7 +45,7 @@ export function PresetManagementTab() {
     setIsRefreshingLogos(true)
     try {
       const assets = await window.electronAPI.listImageFiles(path.trim())
-      setLogoLibraryPath(path.trim())
+      store.setLogoLibraryPath(path.trim())
       setLogoAssets(assets)
       setLogoStatusText(`已加载 ${assets.length} 个 LOGO。`)
     } catch (error) {
@@ -123,7 +126,21 @@ export function PresetManagementTab() {
               {activePreset.useOutputOverrides && (
                 <div className="max-h-36 space-y-2 overflow-auto rounded border border-gray-200 p-2 text-xs dark:border-white/[0.08]">
                   {activePreset.outputRuleGroupsOverride.map((group) => (
-                    <div key={group.id}><div className="font-medium">{group.name}</div>{group.rules.map((rule) => (
+                    <div key={group.id}>
+                      <label className="flex items-center gap-2 font-medium">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select all override ${group.name} sizes`}
+                          checked={group.rules.length > 0 && group.rules.every((rule) => rule.enabled)}
+                          onChange={(event) => store.updatePreset(activePreset.id, {
+                            outputRuleGroupsOverride: activePreset.outputRuleGroupsOverride.map((item) => item.id === group.id
+                              ? { ...item, rules: item.rules.map((rule) => ({ ...rule, enabled: event.target.checked })) }
+                              : item),
+                          })}
+                        />
+                        <span>{group.name}</span>
+                      </label>
+                      {group.rules.map((rule) => (
                       <label key={rule.id} className="mt-1 flex items-center gap-2"><input type="checkbox" checked={rule.enabled} onChange={(event) => store.updatePreset(activePreset.id, {
                         outputRuleGroupsOverride: activePreset.outputRuleGroupsOverride.map((item) => ({ ...item, rules: item.rules.map((candidate) => candidate.id === rule.id ? { ...candidate, enabled: event.target.checked } : candidate) })),
                       })} />{rule.name}</label>
@@ -137,17 +154,17 @@ export function PresetManagementTab() {
 
         <PresetCanvasEditor
           preset={activePreset}
-          logoLibraryPath={logoLibraryPath}
+          logoLibraryPath={store.logoLibraryPath}
           logoAssets={logoAssets}
           logoStatusText={logoStatusText}
           isRefreshingLogos={isRefreshingLogos}
           selectedLayerId={selectedLayerId}
           onSelectLayer={setSelectedLayerId}
-          onLogoLibraryPathChange={setLogoLibraryPath}
+          onLogoLibraryPathChange={store.setLogoLibraryPath}
           onAddText={() => activePreset && store.addTextLayer(activePreset.id)}
           onAddImage={() => activePreset && store.addImageLayer(activePreset.id)}
           onSelectLogoFolder={() => void chooseLogoFolder()}
-          onRefreshLogoFolder={() => void loadLogos(logoLibraryPath)}
+          onRefreshLogoFolder={() => void loadLogos(store.logoLibraryPath)}
           onPickLogo={(asset) => activePreset && store.addImageLayer(activePreset.id, { kind: 'path', path: asset.path })}
           onUpdatePreset={(patch) => activePreset && store.updatePreset(activePreset.id, patch)}
         />

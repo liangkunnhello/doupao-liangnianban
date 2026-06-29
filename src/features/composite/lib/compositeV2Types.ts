@@ -165,6 +165,7 @@ export type CompositeV2HistoryRecord = {
 }
 
 export type CompositeV2State = {
+  logoLibraryPath: string
   presets: CompositeV2Preset[]
   presetGroups: CompositeV2PresetGroup[]
   outputRuleGroups: CompositeV2OutputRuleGroup[]

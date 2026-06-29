@@ -35,6 +35,7 @@ type CompositeV2BatchState = {
 }
 
 type CompositeV2StoreActions = {
+  setLogoLibraryPath: (path: string) => void
   setBackgroundFolder: (path: string) => void
   setRecursiveBackgrounds: (recursive: boolean) => void
   setBackgrounds: (backgrounds: CompositeV2BackgroundImage[]) => void
@@ -64,6 +65,7 @@ type CompositeV2StoreActions = {
   removePresetFromGroup: (presetId: string, groupId: string) => void
   setGlobalFitMode: (mode: CompositeV2FitMode) => void
   updateOutputRule: (ruleId: string, patch: Partial<CompositeV2OutputSizeRule>) => void
+  setOutputRuleGroupEnabled: (groupId: string, enabled: boolean) => void
 }
 
 export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2State & CompositeV2StoreActions
@@ -81,6 +83,7 @@ export function createCompositeV2StoreState(): CompositeV2BatchState & Composite
   const selectedPresetGroupId = defaults.presetGroups[0]?.id ?? ''
 
   return {
+    logoLibraryPath: defaults.logoLibraryPath,
     backgroundFolder: '',
     recursiveBackgrounds: false,
     backgrounds: [],
@@ -107,6 +110,7 @@ export function createCompositeV2StoreState(): CompositeV2BatchState & Composite
 
 export function getCompositeV2PersistedState(state: CompositeV2StoreState): CompositeV2State {
   return {
+    logoLibraryPath: state.logoLibraryPath,
     presets: state.presets,
     presetGroups: state.presetGroups,
     outputRuleGroups: state.outputRuleGroups,
@@ -128,6 +132,7 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
   return persist<CompositeV2StoreState, [], [], CompositeV2State>(
     (set) => ({
       ...createCompositeV2StoreState(),
+      setLogoLibraryPath: (logoLibraryPath) => set({ logoLibraryPath }),
       setBackgroundFolder: (backgroundFolder) => set({ backgroundFolder }),
       setRecursiveBackgrounds: (recursiveBackgrounds) => set({ recursiveBackgrounds }),
       setBackgrounds: (backgrounds) => set({
@@ -241,6 +246,11 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
           ...group,
           rules: group.rules.map((rule) => rule.id === ruleId ? { ...rule, ...patch } : rule),
         })),
+      })),
+      setOutputRuleGroupEnabled: (groupId, enabled) => set((state) => ({
+        outputRuleGroups: state.outputRuleGroups.map((group) => group.id === groupId
+          ? { ...group, rules: group.rules.map((rule) => ({ ...rule, enabled })) }
+          : group),
       })),
     }),
     {

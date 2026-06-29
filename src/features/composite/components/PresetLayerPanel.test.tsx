@@ -9,6 +9,22 @@ describe('PresetLayerPanel', () => {
     const presetId = store.getState().presets[0]!.id
     store.getState().addTextLayer(presetId)
     store.getState().addImageLayer(presetId)
+    const currentPreset = store.getState().presets[0]!
+    store.getState().updatePreset(presetId, {
+      layers: currentPreset.layers.map((layer, index) => index === 0 ? {
+        ...layer,
+        position: {
+          mode: 'anchor',
+          anchor: 'center',
+          marginX: 0,
+          marginY: 0,
+          offsetX: 0,
+          offsetY: 0,
+          width: layer.position.width,
+          height: layer.position.height,
+        },
+      } : layer),
+    })
     const preset = store.getState().presets[0]!
     const selectedLayerId = preset.layers[0]!.id
 
@@ -27,5 +43,7 @@ describe('PresetLayerPanel', () => {
     expect(html).toContain('锁定')
     expect(html).toContain('透明度')
     expect(html).toContain('定位模式')
+    expect(html).toContain('水平偏移')
+    expect(html).toContain('垂直偏移')
   })
 })

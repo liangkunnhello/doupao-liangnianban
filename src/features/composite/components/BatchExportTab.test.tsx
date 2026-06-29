@@ -44,6 +44,31 @@ function findInputByLabel(root: ReactTestInstance, label: string) {
 }
 
 describe('BatchExportTab', () => {
+  it('toggles every size in a channel from its select-all checkbox', async () => {
+    const outputRuleGroups = createDefaultCompositeV2OutputRuleGroups()
+    const targetGroup = outputRuleGroups[1]!
+    useCompositeV2Store.setState({ outputRuleGroups })
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { isElectron: true, readImageFile: vi.fn().mockResolvedValue(null) },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const selectAll = findInputByLabel(renderer!.root, `Select all ${targetGroup.name} sizes`)
+    expect(selectAll).toBeDefined()
+
+    act(() => {
+      selectAll?.props.onChange({ target: { checked: true } })
+    })
+
+    expect(useCompositeV2Store.getState().outputRuleGroups[1]!.rules.every((rule) => rule.enabled)).toBe(true)
+  })
+
   it('stores the folder immediately, sorts loaded backgrounds naturally, and updates recursive mode before rescanning', async () => {
     const selectDirectory = vi.fn().mockResolvedValue('D:/backgrounds')
     let resolveFirstScan: ((value: Array<{ path: string; name: string; relativeDir: string }>) => void) | null = null

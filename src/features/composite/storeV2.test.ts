@@ -15,6 +15,7 @@ describe('composite v2 store state factory', () => {
   it('creates batch state separate from persisted preset state', () => {
     const state = createCompositeV2StoreState()
 
+    expect((state as unknown as Record<string, unknown>).logoLibraryPath).toBe('')
     expect(state.backgroundFolder).toBe('')
     expect(state.recursiveBackgrounds).toBe(false)
     expect(state.backgrounds).toEqual([])
@@ -40,10 +41,12 @@ describe('composite v2 store state factory', () => {
       exportCompleted: 2,
       exportTotal: 10,
     })
+    store.setState({ logoLibraryPath: 'D:/logos' } as never)
 
     const persisted = getCompositeV2PersistedState(store.getState())
 
     expect(persisted).toEqual({
+      logoLibraryPath: 'D:/logos',
       presets: store.getState().presets,
       presetGroups: store.getState().presetGroups,
       outputRuleGroups: store.getState().outputRuleGroups,
@@ -273,5 +276,16 @@ describe('composite v2 store state factory', () => {
     store.getState().updateOutputRule(ruleId, { enabled: true, maxSizeKb: 123 })
     expect(store.getState().globalFitMode).toBe('contain-blur')
     expect(store.getState().outputRuleGroups[0]!.rules[0]).toMatchObject({ enabled: true, maxSizeKb: 123 })
+  })
+
+  it('enables every size rule in one channel without changing other channels', () => {
+    const store = createCompositeV2Store()
+    const targetGroup = store.getState().outputRuleGroups[1]!
+    const untouchedGroup = store.getState().outputRuleGroups[0]!
+
+    store.getState().setOutputRuleGroupEnabled(targetGroup.id, true)
+
+    expect(store.getState().outputRuleGroups[1]!.rules.every((rule) => rule.enabled)).toBe(true)
+    expect(store.getState().outputRuleGroups[0]).toEqual(untouchedGroup)
   })
 })

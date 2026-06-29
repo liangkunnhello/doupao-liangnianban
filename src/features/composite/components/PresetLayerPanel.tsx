@@ -100,6 +100,10 @@ export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpd
                         const position = selectedLayer.position
                         if (position.mode === 'anchor') updateLayer(selectedLayer.id, { position: { ...position, offsetX: Number(event.target.value) } })
                       }} className={fieldClass} /></label>
+                      <label className="text-xs text-gray-500">垂直偏移<input type="number" value={selectedLayer.position.offsetY} onChange={(event) => {
+                        const position = selectedLayer.position
+                        if (position.mode === 'anchor') updateLayer(selectedLayer.id, { position: { ...position, offsetY: Number(event.target.value) } })
+                      }} className={fieldClass} /></label>
                     </>
                   )}
                   <label className="text-xs text-gray-500">宽度<input type="number" min={1} value={selectedLayer.position.width} onChange={(event) => updateLayer(selectedLayer.id, { position: { ...selectedLayer.position, width: Math.max(1, Number(event.target.value)) } })} className={fieldClass} /></label>

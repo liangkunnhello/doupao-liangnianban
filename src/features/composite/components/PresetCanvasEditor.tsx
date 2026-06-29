@@ -61,9 +61,9 @@ export function PresetCanvasEditor(props: Props) {
   }, [preset?.sampleBackgroundPath])
 
   useEffect(() => {
-    if (!preset || !backgroundDataUrl || !canvasRef.current) return
+    if (!preset || !canvasRef.current) return
     void renderCompositeV2ToCanvas({
-      backgroundDataUrl,
+      backgroundDataUrl: backgroundDataUrl || undefined,
       preset,
       targetSize: preset.baseCanvas,
       fitMode: 'crop-fill',
@@ -104,10 +104,10 @@ export function PresetCanvasEditor(props: Props) {
           onPointerUp={() => { dragRef.current = null }}
         >
           {preset && <div className="absolute left-3 top-2 z-10 rounded bg-white/85 px-2 py-1 text-xs font-medium dark:bg-gray-950/85">{preset.name}</div>}
-          {backgroundDataUrl && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />}
-          {!backgroundDataUrl && (
+          {preset && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />}
+          {!preset && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
-              {preset ? '设置示例背景后显示真实合成效果' : '请选择预设'}
+              请选择预设
             </div>
           )}
           {preset && visibleLayers.map((layer) => (

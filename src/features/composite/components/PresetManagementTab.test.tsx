@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
+/* @vitest-environment jsdom */
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, create, type ReactTestInstance } from 'react-test-renderer'
-import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from '../lib/compositeV2Defaults'
+import {
+  createDefaultCompositeV2OutputRuleGroups,
+  createDefaultCompositeV2Preset,
+  createDefaultCompositeV2PresetGroup,
+} from '../lib/compositeV2Defaults'
 import { createCompositeV2StoreState, useCompositeV2Store } from '../storeV2'
 import { PresetManagementTab } from './PresetManagementTab'
 
@@ -13,6 +19,8 @@ afterEach(() => {
     mountedRenderers.pop()?.unmount()
   }
   useCompositeV2Store.setState(createCompositeV2StoreState())
+  vi.restoreAllMocks()
+  delete (window as Window & { electronAPI?: typeof window.electronAPI }).electronAPI
 })
 
 function getNodeText(node: ReactTestInstance): string {
@@ -30,6 +38,60 @@ function findInputByAriaLabel(root: ReactTestInstance, label: string) {
 }
 
 describe('PresetManagementTab', () => {
+  it('toggles every override size in a channel from its select-all checkbox', () => {
+    const outputRuleGroupsOverride = createDefaultCompositeV2OutputRuleGroups()
+    const targetGroup = outputRuleGroupsOverride[1]!
+    const preset = {
+      ...createDefaultCompositeV2Preset(1),
+      useOutputOverrides: true,
+      outputRuleGroupsOverride,
+    }
+    const group = { ...createDefaultCompositeV2PresetGroup(1), presetIds: [preset.id] }
+    useCompositeV2Store.setState({
+      presets: [preset],
+      presetGroups: [group],
+      selectedPresetGroupId: group.id,
+      selectedPreviewPresetId: preset.id,
+    })
+
+    let renderer: ReturnType<typeof create>
+    act(() => {
+      renderer = create(<PresetManagementTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const selectAll = findInputByAriaLabel(renderer!.root, `Select all override ${targetGroup.name} sizes`)
+    expect(selectAll).toBeDefined()
+
+    act(() => {
+      selectAll?.props.onChange({ target: { checked: true } })
+    })
+
+    expect(useCompositeV2Store.getState().presets[0]!.outputRuleGroupsOverride[1]!.rules.every((rule) => rule.enabled)).toBe(true)
+  })
+
+  it('reloads the persisted LOGO library when preset management opens', async () => {
+    const listImageFiles = vi.fn().mockResolvedValue([
+      { path: 'D:/logos/logo.png', name: 'logo.png', dataUrl: 'data:image/png;base64,AAAA' },
+    ])
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { listImageFiles },
+    })
+    useCompositeV2Store.setState({ logoLibraryPath: 'D:/logos' } as never)
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<PresetManagementTab />)
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(listImageFiles).toHaveBeenCalledWith('D:/logos')
+    expect(findInputByAriaLabel(renderer!.root, 'Logo library path')?.props.value).toBe('D:/logos')
+    expect(getNodeText(renderer!.root)).toContain('logo.png')
+  })
+
   it('uses aria-pressed and syncs store selection when switching groups', () => {
     const presetA = { ...createDefaultCompositeV2Preset(1), id: 'preset-a', name: 'Preset A' }
     const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }

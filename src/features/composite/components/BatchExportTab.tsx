@@ -66,6 +66,7 @@ export function BatchExportTab() {
   const addHistoryRecord = useCompositeV2Store((state) => state.addHistoryRecord)
   const setGlobalFitMode = useCompositeV2Store((state) => state.setGlobalFitMode)
   const updateOutputRule = useCompositeV2Store((state) => state.updateOutputRule)
+  const setOutputRuleGroupEnabled = useCompositeV2Store((state) => state.setOutputRuleGroupEnabled)
 
   const [backgroundStatus, setBackgroundStatus] = useState('选择文件夹后加载背景图片。')
   const [previewStatus, setPreviewStatus] = useState('加载背景后将随机显示一张预览。')
@@ -648,7 +649,15 @@ export function BatchExportTab() {
           <div className="mt-3 grid gap-3 lg:grid-cols-3">
             {outputRuleGroups.map((group) => (
               <div key={group.id} className="rounded-md border border-gray-200 p-3 dark:border-white/[0.08]">
-                <div className="mb-2 text-sm font-medium">{group.name}</div>
+                <label className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select all ${group.name} sizes`}
+                    checked={group.rules.length > 0 && group.rules.every((rule) => rule.enabled)}
+                    onChange={(event) => setOutputRuleGroupEnabled(group.id, event.target.checked)}
+                  />
+                  <span>{group.name}</span>
+                </label>
                 <div className="space-y-2">
                   {group.rules.map((rule) => (
                     <div key={rule.id} className="grid grid-cols-[auto_64px_auto_64px_70px] items-center gap-1 text-xs">

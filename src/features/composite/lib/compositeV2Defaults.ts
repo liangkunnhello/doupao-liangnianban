@@ -77,6 +77,7 @@ export function createDefaultCompositeV2PresetGroup(now = Date.now()): Composite
 
 export function createDefaultCompositeV2State(now = Date.now()): CompositeV2State {
   return {
+    logoLibraryPath: '',
     presets: [createDefaultCompositeV2Preset(now)],
     presetGroups: [createDefaultCompositeV2PresetGroup(now)],
     outputRuleGroups: createDefaultCompositeV2OutputRuleGroups(),
