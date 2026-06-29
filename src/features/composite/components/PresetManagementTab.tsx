@@ -62,7 +62,7 @@ export function PresetManagementTab() {
   return (
     <div
       data-layout="preset-management-workspace"
-      className="grid min-h-[680px] min-w-[1180px] flex-1 grid-cols-[300px_minmax(0,1fr)] gap-4 overflow-hidden"
+      className="grid h-full min-h-0 min-w-[1180px] flex-1 grid-cols-[300px_minmax(0,1fr)] gap-4 overflow-hidden"
     >
       <div data-layout="stacked-library-rail" className="flex min-h-0 flex-col gap-4">
         <section className="max-h-[220px] min-h-[170px] shrink-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950">

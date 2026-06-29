@@ -126,7 +126,7 @@ export function PresetCanvasEditor(props: Props) {
   }
 
   return (
-    <div className="relative h-full min-h-[680px] overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-white/[0.08] dark:bg-gray-950">
+    <div className="relative h-full min-h-0 overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-white/[0.08] dark:bg-gray-950">
       <FloatingLayerToolbar onAddText={props.onAddText} onAddImage={props.onAddImage} disabled={!preset} />
 
       <div className="flex h-full items-center justify-center px-20 py-8">

@@ -8,7 +8,7 @@ export default function CompositeWorkspace() {
   const [tab, setTab] = useState<CompositeTab>('batch')
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-gray-50 p-4 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+    <main className="flex h-[calc(100vh-var(--app-header-offset))] min-h-0 flex-col overflow-hidden bg-gray-50 p-4 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <nav aria-label="后期处理工作区" className="mb-4 flex shrink-0 items-center gap-1 border-b border-gray-200 dark:border-white/[0.08]">
         <button
           type="button"
