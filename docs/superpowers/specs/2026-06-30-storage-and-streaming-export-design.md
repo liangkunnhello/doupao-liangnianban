@@ -8,7 +8,7 @@ Prevent image history from exhausting IndexedDB or renderer memory, stop develop
 
 This change covers the active Electron origin and future data written by the application:
 
-- pin the development server to one port and keep development user data separate from packaged user data;
+- pin the development server to one port so it cannot create another localhost origin;
 - migrate image payloads in the active IndexedDB to local files incrementally;
 - delete local image files when their final database reference is removed;
 - export Electron backups as a streamed ZIP in the main process;
@@ -20,9 +20,9 @@ It does not automatically delete databases belonging to inactive origins such as
 
 ### Stable storage identity
 
-Development uses a fixed Vite port with `strictPort: true`. Electron sets a development-only `userData` directory before `app.whenReady()`, keeping localhost development databases and caches out of the packaged application's profile. If the port is occupied, startup fails visibly instead of silently switching origins.
+Development uses a fixed Vite port with `strictPort: true`. If the port is occupied, startup fails visibly instead of silently switching origins.
 
-Packaged builds continue to use their existing application profile and `file://` origin. This avoids a risky production-origin migration in the same release.
+This release deliberately keeps the existing Electron `userData` path. The active localhost history currently lives there, and switching to a fresh development profile before migrating it would make that history appear lost and would temporarily duplicate more than a gigabyte of data. Development-profile isolation is deferred until the active-origin migration has shipped and been verified. Packaged builds continue to use their existing profile and `file://` origin.
 
 ### Canonical image storage
 
@@ -97,7 +97,7 @@ The full Vitest suite and TypeScript/Vite build must pass. A manual Electron ver
 ## Success criteria
 
 - Vite never creates a 5174 IndexedDB because 5173 was occupied.
-- Development and packaged application data no longer share one Electron profile.
+- An occupied port cannot silently create another localhost IndexedDB origin.
 - Migrating legacy images never loads the complete image store into memory.
 - New Electron image records contain `localPath` and no original `dataUrl`.
 - Deleting data releases both IndexedDB records and canonical cache files.
