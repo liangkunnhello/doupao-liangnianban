@@ -474,26 +474,26 @@ export default function PostprocessWorkspace() {
   return (
     <main className="h-[calc(100vh-var(--app-header-offset))] overflow-y-auto px-3 pb-4 pt-3 sm:px-4">
       <div className="min-h-full w-full space-y-4">
-        <section className="rounded-2xl border border-gray-200 bg-white/90 p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950/70">
-          <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 pb-4 dark:border-white/[0.08]">
+        <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 pb-4 dark:border-white/[0.08]">
             <div>
-              <h2 className="text-lg font-bold text-gray-900 dark:text-gray-50">图片后期处理</h2>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">批量贴水印、保存预设，并把导出结果分配到下游路径。</p>
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">图片后期处理</h2>
+              <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">批量贴水印、保存预设，并把导出结果分配到下游路径。</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-200 dark:hover:bg-gray-900">
                 <PlusIcon className="h-4 w-4" />
                 添加图片
                 <input className="hidden" type="file" accept="image/*" multiple onChange={(event) => void handleImagesSelected(event.target.files)} />
               </label>
-              <button type="button" onClick={() => void loadRecentGalleryImages()} className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">
+              <button type="button" onClick={() => void loadRecentGalleryImages()} className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-200 dark:hover:bg-gray-900">
                 <FolderOpenIcon className="h-4 w-4" />
                 载入画廊最近图片
               </button>
-              <button type="button" onClick={savePreset} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+              <button type="button" onClick={savePreset} className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
                 保存水印预设
               </button>
-              <button type="button" disabled={isExporting} onClick={() => void exportSelected()} className="inline-flex items-center gap-2 rounded-xl bg-gray-950 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-gray-950">
+              <button type="button" disabled={isExporting} onClick={() => void exportSelected()} className="inline-flex items-center gap-2 rounded-md bg-gray-950 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-gray-950">
                 <DownloadIcon className="h-4 w-4" />
                 {isExporting ? '导出中...' : `导出 ${exportJobs.length} 张`}
               </button>
@@ -502,38 +502,38 @@ export default function PostprocessWorkspace() {
 
           <div className="grid gap-4 xl:grid-cols-[minmax(300px,0.95fr)_minmax(520px,1.45fr)_minmax(280px,0.8fr)]">
             <div className="space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <div className="rounded-lg border border-gray-200 bg-gray-50/30 p-3 dark:border-white/[0.08] dark:bg-gray-900/30">
                 <div className="mb-2 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">待处理图片</h3>
-                  <button type="button" onClick={() => setImages([])} className="text-xs text-gray-400 hover:text-red-500">清空</button>
+                  <button type="button" onClick={() => setImages([])} className="text-[11px] text-gray-400 hover:text-red-500">清空</button>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {images.length ? images.map((image, index) => (
-                    <div key={image.id} className="flex items-center gap-3 rounded-lg bg-white p-2 text-xs shadow-sm dark:bg-white/[0.04]">
+                    <div key={image.id} className="flex items-center gap-3 rounded-md bg-white p-2 text-sm dark:bg-gray-950">
                       <img src={image.dataUrl} alt="" className="h-10 w-14 rounded-md object-cover" />
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-medium text-gray-700 dark:text-gray-200">{image.name}</div>
-                        <div className="text-gray-400">图片 {index + 1}</div>
+                        <div className="text-[11px] text-gray-400">图片 {index + 1}</div>
                       </div>
                     </div>
                   )) : (
-                    <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-xs text-gray-400 dark:border-white/[0.12]">添加图片后会显示批量列表</div>
+                    <div className="rounded-md border border-dashed border-gray-300 p-6 text-center text-[11px] text-gray-400 dark:border-white/[0.12]">添加图片后会显示批量列表</div>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <div className="rounded-lg border border-gray-200 bg-gray-50/30 p-3 dark:border-white/[0.08] dark:bg-gray-900/30">
                 <h3 className="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-100">水印预设</h3>
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {presets.map((preset) => (
-                    <div key={preset.id} className={`rounded-lg border p-2 ${preset.id === activePresetId ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10' : 'border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.04]'}`}>
+                    <div key={preset.id} className={`rounded-md border p-2 ${preset.id === activePresetId ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10' : 'border-gray-200 bg-white dark:border-white/[0.08] dark:bg-gray-950'}`}>
                       <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
                           checked={preset.selected}
                           onChange={(event) => setPresets((current) => current.map((item) => item.id === preset.id ? { ...item, selected: event.target.checked } : item))}
                         />
-                        <button type="button" onClick={() => setActivePresetId(preset.id)} className="min-w-0 flex-1 truncate text-left text-xs font-medium text-gray-700 dark:text-gray-200">
+                        <button type="button" onClick={() => setActivePresetId(preset.id)} className="min-w-0 flex-1 truncate text-left text-sm font-medium text-gray-700 dark:text-gray-200">
                           {preset.name}
                         </button>
                         {presets.length > 1 && (
@@ -551,38 +551,38 @@ export default function PostprocessWorkspace() {
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">输出预览</div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
+                <div className="flex items-center gap-2 text-[11px] text-gray-500">
                   <span>选中图层：{selectedLayer?.type === 'image' ? '图片水印' : '文字水印'}</span>
-                  <button type="button" onClick={() => updateActivePreset((preset) => ({ ...preset, layers: createEditorDefaultLayers() }))} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 hover:bg-gray-50 dark:border-white/[0.08] dark:hover:bg-white/[0.06]">
+                  <button type="button" onClick={() => updateActivePreset((preset) => ({ ...preset, layers: createEditorDefaultLayers() }))} className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 hover:bg-gray-50 dark:border-white/[0.08] dark:hover:bg-gray-900">
                     <RefreshIcon className="h-3.5 w-3.5" />
                     重置
                   </button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-2 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04]">
-                <button type="button" onClick={addTextLayer} className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-white/[0.08] dark:bg-gray-950">
+                <button type="button" onClick={addTextLayer} className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
                   T 文字
                 </button>
-                <button type="button" onClick={() => addShapeLayer('rect')} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]">
+                <button type="button" onClick={() => addShapeLayer('rect')} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900">
                   矩形
                 </button>
-                <button type="button" onClick={() => addShapeLayer('ellipse')} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]">
+                <button type="button" onClick={() => addShapeLayer('ellipse')} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900">
                   椭圆
                 </button>
-                <button type="button" onClick={() => addShapeLayer('line')} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]">
+                <button type="button" onClick={() => addShapeLayer('line')} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900">
                   线条
                 </button>
                 <div className="mx-1 h-6 w-px bg-gray-200 dark:bg-white/[0.08]" />
-                <button type="button" onClick={() => moveSelectedLayer(1)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]">
+                <button type="button" onClick={() => moveSelectedLayer(1)} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900">
                   上移一层
                 </button>
-                <button type="button" onClick={() => moveSelectedLayer(-1)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]">
+                <button type="button" onClick={() => moveSelectedLayer(-1)} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900">
                   下移一层
                 </button>
               </div>
 
-              <div className="rounded-2xl border border-gray-200 bg-slate-100 p-5 shadow-inner dark:border-white/[0.08] dark:bg-white/[0.04]">
+              <div className="rounded-lg border border-gray-200 bg-slate-100 p-5 shadow-inner dark:border-white/[0.08] dark:bg-gray-900/30">
                 <div
                   ref={stageRef}
                   onPointerMove={handlePointerMove}
@@ -633,75 +633,75 @@ export default function PostprocessWorkspace() {
                     key={layer.id}
                     type="button"
                     onClick={() => setSelectedLayerId(layer.id)}
-                    className={`rounded-xl border p-3 text-left text-xs ${selectedLayerId === layer.id ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 bg-white text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300'}`}
+                    className={`rounded-md border p-3 text-left text-sm ${selectedLayerId === layer.id ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 bg-white text-gray-600 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-300'}`}
                   >
                     <div className="truncate font-semibold">{getLayerName(layer)}</div>
-                    <div className="mt-1 text-gray-400">X {Math.round(layer.x)} · Y {Math.round(layer.y)}</div>
+                    <div className="mt-1 text-[11px] text-gray-400">X {Math.round(layer.x)} · Y {Math.round(layer.y)}</div>
                   </button>
                 ))}
               </div>
 
               {selectedLayer?.type === 'text' && (
-                <div className="hidden gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.04] md:grid-cols-[1fr_120px_120px]">
-                  <label className="text-xs text-gray-500">
+                <div className="hidden gap-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-gray-950 md:grid-cols-[1fr_120px_120px]">
+                  <label className="text-[11px] font-medium text-gray-500">
                     文字
-                    <input value={selectedLayer.text} onChange={(event) => updateLayer(selectedLayer.id, { text: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" />
+                    <input value={selectedLayer.text} onChange={(event) => updateLayer(selectedLayer.id, { text: event.target.value })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" />
                   </label>
-                  <label className="text-xs text-gray-500">
+                  <label className="text-[11px] font-medium text-gray-500">
                     字号
-                    <input type="number" min={8} max={96} value={selectedLayer.fontSize} onChange={(event) => updateLayer(selectedLayer.id, { fontSize: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" />
+                    <input type="number" min={8} max={96} value={selectedLayer.fontSize} onChange={(event) => updateLayer(selectedLayer.id, { fontSize: Number(event.target.value) })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" />
                   </label>
-                  <label className="text-xs text-gray-500">
+                  <label className="text-[11px] font-medium text-gray-500">
                     颜色
-                    <input type="color" value={selectedLayer.color} onChange={(event) => updateLayer(selectedLayer.id, { color: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" />
+                    <input type="color" value={selectedLayer.color} onChange={(event) => updateLayer(selectedLayer.id, { color: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" />
                   </label>
                 </div>
               )}
             </div>
 
               {selectedLayer?.type === 'text' && (
-                <div className="xl:col-span-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.04]">
-                  <div className="mb-3 text-xs font-semibold text-gray-700 dark:text-gray-200">文字属性</div>
+                <div className="xl:col-span-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-gray-950">
+                  <div className="mb-3 text-[11px] font-semibold text-gray-700 dark:text-gray-200">文字属性</div>
                   <div className="grid gap-3 md:grid-cols-[1.5fr_0.9fr_90px_90px_90px_90px]">
-                    <label className="text-xs text-gray-500">内容<input value={selectedLayer.text} onChange={(event) => updateLayer(selectedLayer.id, { text: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" /></label>
-                    <label className="text-xs text-gray-500">字体<select value={selectedLayer.fontFamily ?? 'sans-serif'} onChange={(event) => updateLayer(selectedLayer.id, { fontFamily: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100"><option value="sans-serif">Sans</option><option value="serif">Serif</option><option value="monospace">Mono</option></select></label>
-                    <label className="text-xs text-gray-500">字号<input type="number" min={8} max={160} value={selectedLayer.fontSize} onChange={(event) => updateLayer(selectedLayer.id, { fontSize: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" /></label>
-                    <label className="text-xs text-gray-500">字色<input type="color" value={selectedLayer.color} onChange={(event) => updateLayer(selectedLayer.id, { color: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
-                    <label className="text-xs text-gray-500">描边<input type="color" value={selectedLayer.strokeColor ?? '#ffffff'} onChange={(event) => updateLayer(selectedLayer.id, { strokeColor: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
-                    <label className="text-xs text-gray-500">描边宽<input type="number" min={0} max={20} value={selectedLayer.strokeWidth ?? 0} onChange={(event) => updateLayer(selectedLayer.id, { strokeWidth: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">内容<input value={selectedLayer.text} onChange={(event) => updateLayer(selectedLayer.id, { text: event.target.value })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">字体<select value={selectedLayer.fontFamily ?? 'sans-serif'} onChange={(event) => updateLayer(selectedLayer.id, { fontFamily: event.target.value })} className="mt-1 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100"><option value="sans-serif">Sans</option><option value="serif">Serif</option><option value="monospace">Mono</option></select></label>
+                    <label className="text-[11px] font-medium text-gray-500">字号<input type="number" min={8} max={160} value={selectedLayer.fontSize} onChange={(event) => updateLayer(selectedLayer.id, { fontSize: Number(event.target.value) })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">字色<input type="color" value={selectedLayer.color} onChange={(event) => updateLayer(selectedLayer.id, { color: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">描边<input type="color" value={selectedLayer.strokeColor ?? '#ffffff'} onChange={(event) => updateLayer(selectedLayer.id, { strokeColor: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">描边宽<input type="number" min={0} max={20} value={selectedLayer.strokeWidth ?? 0} onChange={(event) => updateLayer(selectedLayer.id, { strokeWidth: Number(event.target.value) })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" /></label>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {[400, 500, 600, 700, 800].map((weight) => <button key={weight} type="button" onClick={() => updateLayer(selectedLayer.id, { fontWeight: weight as 400 | 500 | 600 | 700 | 800 })} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedLayer.fontWeight === weight ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>{weight}</button>)}
-                    <button type="button" onClick={() => updateLayer(selectedLayer.id, { italic: !selectedLayer.italic })} className={`rounded-lg border px-3 py-1.5 text-xs italic ${selectedLayer.italic ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>I</button>
-                    {(['left', 'center', 'right'] as const).map((align) => <button key={align} type="button" onClick={() => updateLayer(selectedLayer.id, { align })} className={`rounded-lg border px-3 py-1.5 text-xs ${selectedLayer.align === align ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>{align === 'left' ? '左对齐' : align === 'right' ? '右对齐' : '居中'}</button>)}
+                    {[400, 500, 600, 700, 800].map((weight) => <button key={weight} type="button" onClick={() => updateLayer(selectedLayer.id, { fontWeight: weight as 400 | 500 | 600 | 700 | 800 })} className={`rounded-md border px-3 py-1.5 text-sm ${selectedLayer.fontWeight === weight ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>{weight}</button>)}
+                    <button type="button" onClick={() => updateLayer(selectedLayer.id, { italic: !selectedLayer.italic })} className={`rounded-md border px-3 py-1.5 text-sm italic ${selectedLayer.italic ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>I</button>
+                    {(['left', 'center', 'right'] as const).map((align) => <button key={align} type="button" onClick={() => updateLayer(selectedLayer.id, { align })} className={`rounded-md border px-3 py-1.5 text-sm ${selectedLayer.align === align ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200 text-gray-600 dark:border-white/[0.08] dark:text-gray-300'}`}>{align === 'left' ? '左对齐' : align === 'right' ? '右对齐' : '居中'}</button>)}
                   </div>
                 </div>
               )}
 
               {selectedLayer?.type === 'shape' && (
-                <div className="xl:col-span-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.04]">
-                  <div className="mb-3 text-xs font-semibold text-gray-700 dark:text-gray-200">形状属性</div>
+                <div className="xl:col-span-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-gray-950">
+                  <div className="mb-3 text-[11px] font-semibold text-gray-700 dark:text-gray-200">形状属性</div>
                   <div className="grid gap-3 md:grid-cols-5">
-                    <label className="text-xs text-gray-500">类型<select value={selectedLayer.shape} onChange={(event) => updateLayer(selectedLayer.id, { shape: event.target.value as 'rect' | 'ellipse' | 'line' })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100"><option value="rect">矩形</option><option value="ellipse">椭圆</option><option value="line">线条</option></select></label>
-                    <label className="text-xs text-gray-500">填充<input type="color" value={selectedLayer.fill} onChange={(event) => updateLayer(selectedLayer.id, { fill: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
-                    <label className="text-xs text-gray-500">描边<input type="color" value={selectedLayer.strokeColor} onChange={(event) => updateLayer(selectedLayer.id, { strokeColor: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
-                    <label className="text-xs text-gray-500">描边宽<input type="number" min={0} max={20} value={selectedLayer.strokeWidth} onChange={(event) => updateLayer(selectedLayer.id, { strokeWidth: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" /></label>
-                    <label className="text-xs text-gray-500">圆角<input type="number" min={0} max={80} value={selectedLayer.radius} onChange={(event) => updateLayer(selectedLayer.id, { radius: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">类型<select value={selectedLayer.shape} onChange={(event) => updateLayer(selectedLayer.id, { shape: event.target.value as 'rect' | 'ellipse' | 'line' })} className="mt-1 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100"><option value="rect">矩形</option><option value="ellipse">椭圆</option><option value="line">线条</option></select></label>
+                    <label className="text-[11px] font-medium text-gray-500">填充<input type="color" value={selectedLayer.fill} onChange={(event) => updateLayer(selectedLayer.id, { fill: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">描边<input type="color" value={selectedLayer.strokeColor} onChange={(event) => updateLayer(selectedLayer.id, { strokeColor: event.target.value })} className="mt-1 h-10 w-full rounded-md border border-gray-200 bg-white px-2 dark:border-white/[0.08] dark:bg-gray-950" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">描边宽<input type="number" min={0} max={20} value={selectedLayer.strokeWidth} onChange={(event) => updateLayer(selectedLayer.id, { strokeWidth: Number(event.target.value) })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" /></label>
+                    <label className="text-[11px] font-medium text-gray-500">圆角<input type="number" min={0} max={80} value={selectedLayer.radius} onChange={(event) => updateLayer(selectedLayer.id, { radius: Number(event.target.value) })} className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-300 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" /></label>
                   </div>
                 </div>
               )}
-            <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <div className="rounded-lg border border-gray-200 bg-gray-50/30 p-3 dark:border-white/[0.08] dark:bg-gray-900/30">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">LOGO 库</h3>
-                <label className="cursor-pointer rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200">
+                <label className="cursor-pointer rounded-md border border-gray-200 bg-white px-2 py-1 text-sm text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-200">
                   添加
                   <input className="hidden" type="file" accept="image/*" multiple onChange={(event) => void handleLogosSelected(event.target.files)} />
                 </label>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {logos.map((logo) => (
-                  <button key={logo.id} type="button" onClick={() => replaceLogo(logo)} className="rounded-xl border border-gray-200 bg-white p-2 text-left shadow-sm hover:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04]">
-                    <img src={logo.dataUrl} alt="" className="aspect-square w-full rounded-lg object-contain bg-gray-50 dark:bg-gray-900" />
+                  <button key={logo.id} type="button" onClick={() => replaceLogo(logo)} className="rounded-md border border-gray-200 bg-white p-2 text-left hover:border-blue-300 dark:border-white/[0.08] dark:bg-gray-950">
+                    <img src={logo.dataUrl} alt="" className="aspect-square w-full rounded-md object-contain bg-gray-50 dark:bg-gray-900" />
                     <div className="mt-1 truncate text-[11px] text-gray-500 dark:text-gray-400">{logo.name}</div>
                   </button>
                 ))}
@@ -711,11 +711,11 @@ export default function PostprocessWorkspace() {
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[1fr_0.7fr]">
-          <div className="rounded-2xl border border-gray-200 bg-white/90 p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950/70">
-            <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-100 pb-3 dark:border-white/[0.08]">
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950">
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-200 pb-3 dark:border-white/[0.08]">
               <div>
-                <h3 className="text-base font-bold text-gray-900 dark:text-gray-50">扫描与分配配置</h3>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">第一版先模拟分配状态，真实目录写入和监控留给 Electron 接入。</p>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">扫描与分配配置</h3>
+                <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">第一版先模拟分配状态，真实目录写入和监控留给 Electron 接入。</p>
               </div>
               <button
                 type="button"
@@ -727,23 +727,23 @@ export default function PostprocessWorkspace() {
                   pattern: '{date}-{image}-{preset}',
                   status: 'ready',
                 }])}
-                className="rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                className="rounded-md border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-gray-900"
               >
                 添加分配路径
               </button>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2">
               {routes.map((route) => (
-                <div key={route.id} className="grid gap-3 rounded-xl bg-gray-50 p-3 dark:bg-white/[0.03] md:grid-cols-[72px_0.8fr_1.4fr_1fr_80px]">
-                  <label className="flex items-center gap-2 text-xs text-gray-500">
+                <div key={route.id} className="grid gap-3 rounded-md bg-gray-50 p-3 dark:bg-gray-900/30 md:grid-cols-[72px_0.8fr_1.4fr_1fr_80px]">
+                  <label className="flex items-center gap-2 text-[11px] font-medium text-gray-500">
                     <input type="checkbox" checked={route.enabled} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, enabled: event.target.checked } : item))} />
                     启用
                   </label>
-                  <input value={route.name} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, name: event.target.value } : item))} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" />
-                  <input value={route.path} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, path: event.target.value } : item))} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" />
-                  <input value={route.pattern} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, pattern: event.target.value } : item))} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-950 dark:text-gray-100" />
-                  <span className={`inline-flex items-center justify-center rounded-lg px-2 py-2 text-xs ${route.status === 'done' ? 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300' : route.enabled ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' : 'bg-gray-100 text-gray-400 dark:bg-white/[0.04]'}`}>
+                  <input value={route.name} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, name: event.target.value } : item))} className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" />
+                  <input value={route.path} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, path: event.target.value } : item))} className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" />
+                  <input value={route.pattern} onChange={(event) => setRoutes((current) => current.map((item) => item.id === route.id ? { ...item, pattern: event.target.value } : item))} className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-100" />
+                  <span className={`inline-flex items-center justify-center rounded-md px-2 py-2 text-sm ${route.status === 'done' ? 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300' : route.enabled ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-900/30 dark:text-gray-300'}`}>
                     {route.status === 'done' ? '已分配' : route.enabled ? '待分配' : '关闭'}
                   </span>
                 </div>
@@ -751,20 +751,20 @@ export default function PostprocessWorkspace() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-gray-200 bg-white/90 p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950/70">
-            <h3 className="text-base font-bold text-gray-900 dark:text-gray-50">导出结果</h3>
-            <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-950">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">导出结果</h3>
+            <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
               {exportedImages.length ? exportedImages.map((image) => (
-                <a key={image.id} href={image.dataUrl} download={image.fileName} className="flex items-center gap-3 rounded-xl border border-gray-200 p-2 hover:bg-gray-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
-                  <img src={image.dataUrl} alt="" className="h-12 w-16 rounded-lg object-cover" />
+                <a key={image.id} href={image.dataUrl} download={image.fileName} className="flex items-center gap-3 rounded-md border border-gray-200 p-2 hover:bg-gray-50 dark:border-white/[0.08] dark:hover:bg-gray-900">
+                  <img src={image.dataUrl} alt="" className="h-12 w-16 rounded-md object-cover" />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium text-gray-700 dark:text-gray-200">{image.fileName}</div>
+                    <div className="truncate text-sm font-medium text-gray-700 dark:text-gray-200">{image.fileName}</div>
                     <div className="text-[11px] text-gray-400">{image.presetName}</div>
                   </div>
                   <DownloadIcon className="h-4 w-4 text-gray-400" />
                 </a>
               )) : (
-                <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-xs text-gray-400 dark:border-white/[0.12]">导出后会显示结果和二次下载入口</div>
+                <div className="rounded-md border border-dashed border-gray-300 p-8 text-center text-[11px] text-gray-400 dark:border-white/[0.12]">导出后会显示结果和二次下载入口</div>
               )}
             </div>
           </div>

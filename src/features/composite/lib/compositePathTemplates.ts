@@ -10,8 +10,9 @@ type TemplateVars = {
 }
 
 type BuildPathInput = TemplateVars & {
-  subfolderTemplate: string
+  namingTemplate: string
   filenameTemplate: string
+  customVariables?: Record<string, string>
   preserveSourceDir: boolean
 }
 
@@ -28,7 +29,7 @@ export function sanitizePathSegment(value: string): string {
 }
 
 function replaceTemplate(template: string, vars: TemplateVars): string {
-  return template
+  let result = template
     .replaceAll('{date}', vars.date)
     .replaceAll('{channel}', vars.channel)
     .replaceAll('{size}', vars.size)
@@ -37,6 +38,10 @@ function replaceTemplate(template: string, vars: TemplateVars): string {
     .replaceAll('{source}', vars.source)
     .replaceAll('{sourceDir}', vars.sourceDir)
     .replaceAll('{custom}', vars.custom)
+  for (const [name, value] of Object.entries((vars as BuildPathInput).customVariables ?? {})) {
+    result = result.replaceAll(`{${name}}`, value)
+  }
+  return result
 }
 
 function splitTemplatePath(value: string): string[] {
@@ -49,13 +54,12 @@ function splitTemplatePath(value: string): string[] {
 }
 
 export function buildCompositeOutputPathParts(input: BuildPathInput) {
-  const subfolders = splitTemplatePath(replaceTemplate(input.subfolderTemplate, input))
+  const subfolders = splitTemplatePath(replaceTemplate(input.namingTemplate, input))
   if (input.preserveSourceDir && input.sourceDir) {
     subfolders.push(...splitTemplatePath(input.sourceDir))
   }
   const filenameStem = sanitizePathSegment(replaceTemplate(input.filenameTemplate, input))
   return {
-    dateFolder: sanitizePathSegment(input.date),
     subfolders,
     filename: `${filenameStem}.jpg`,
   }

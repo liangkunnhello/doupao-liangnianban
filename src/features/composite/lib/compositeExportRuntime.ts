@@ -28,14 +28,23 @@ export async function waitWhilePaused(
 async function renderWithMaxKb(
   input: Omit<Parameters<typeof renderCompositeV2ToJpegDataUrl>[0], 'quality'>,
   maxSizeKb: number,
+  callbacks?: { shouldPause: () => boolean; shouldCancel: () => boolean },
 ) {
   let low = 0.5
   let high = 0.9
   let bestDataUrl = await renderCompositeV2ToJpegDataUrl({ ...input, quality: low })
+  
+  if (callbacks?.shouldCancel()) throw new Error('渲染被取消')
+
   if (dataUrlSizeKb(bestDataUrl) > maxSizeKb) {
     return { dataUrl: bestDataUrl, warning: `最低质量 0.5 仍超过 ${maxSizeKb}KB` }
   }
   for (let iteration = 0; iteration < 8; iteration += 1) {
+    if (callbacks?.shouldPause && callbacks?.shouldCancel) {
+      await waitWhilePaused(callbacks.shouldPause, callbacks.shouldCancel)
+    }
+    if (callbacks?.shouldCancel()) throw new Error('渲染被取消')
+
     const quality = (low + high) / 2
     const dataUrl = await renderCompositeV2ToJpegDataUrl({ ...input, quality })
     if (dataUrlSizeKb(dataUrl) <= maxSizeKb) {
@@ -76,7 +85,10 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         preset: item.preset,
         targetSize: { width: item.outputRule.width, height: item.outputRule.height },
         fitMode: snapshot.fitMode,
-      }, item.outputRule.maxSizeKb)
+      }, item.outputRule.maxSizeKb, {
+        shouldPause: callbacks.shouldPause,
+        shouldCancel: callbacks.shouldCancel,
+      })
       const pathParts = buildCompositeOutputPathParts({
         date: item.date,
         channel: item.outputRule.channelName,
@@ -86,11 +98,12 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         source: item.background.name.replace(/\.[^.]+$/, ''),
         sourceDir: item.background.relativeDir,
         custom: item.custom,
-        subfolderTemplate: item.outputRule.subfolderTemplate,
-        filenameTemplate: item.outputRule.filenameTemplate,
+        customVariables: Object.fromEntries((snapshot.customVariables ?? []).map((variable) => [variable.name, variable.value])),
+        namingTemplate: item.preset.namingTemplate || item.preset.subfolderTemplate || '{date}-{preset}-{size}-{channel}',
+        filenameTemplate: item.preset.filenameTemplate || item.preset.namingTemplate || item.preset.subfolderTemplate || '{preset}-{source}-{index}',
         preserveSourceDir: snapshot.preserveSourceDir,
       })
-      const directoryParts = [item.preset.outputRootPath, pathParts.dateFolder, ...pathParts.subfolders]
+      const directoryParts = [item.preset.outputRootPath, ...pathParts.subfolders]
       const outputPath = await resolveCollision(api, directoryParts, pathParts.filename)
       const saved = await api.saveCompositeImage(outputPath, rendered.dataUrl)
       if (!saved) throw new Error('图片写入失败')

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,8 +58,8 @@ describe('ipc composite background filesystem helpers', () => {
 
     expect(listCompositeBackgroundFiles).toBeTypeOf('function')
     expect(sortBackgrounds(listCompositeBackgroundFiles!(fixtureDir, false))).toEqual([
-      { path: path.join(fixtureDir, '1.PNG'), name: '1.PNG', relativeDir: '' },
-      { path: path.join(fixtureDir, '2.jpg'), name: '2.jpg', relativeDir: '' },
+      { path: path.join(fixtureDir, '1.PNG'), name: '1.PNG', relativeDir: '', width: 0, height: 0 },
+      { path: path.join(fixtureDir, '2.jpg'), name: '2.jpg', relativeDir: '', width: 0, height: 0 },
     ])
   })
 
@@ -76,10 +76,64 @@ describe('ipc composite background filesystem helpers', () => {
 
     expect(listCompositeBackgroundFiles).toBeTypeOf('function')
     expect(sortBackgrounds(listCompositeBackgroundFiles!(fixtureDir, true))).toEqual([
-      { path: path.join(fixtureDir, 'A', '2.png'), name: '2.png', relativeDir: 'A' },
-      { path: path.join(fixtureDir, 'A', 'sub', '10.WEBP'), name: '10.WEBP', relativeDir: 'A/sub' },
-      { path: path.join(fixtureDir, 'root.jpeg'), name: 'root.jpeg', relativeDir: '' },
+      { path: path.join(fixtureDir, 'A', '2.png'), name: '2.png', relativeDir: 'A', width: 0, height: 0 },
+      { path: path.join(fixtureDir, 'A', 'sub', '10.WEBP'), name: '10.WEBP', relativeDir: 'A/sub', width: 0, height: 0 },
+      { path: path.join(fixtureDir, 'root.jpeg'), name: 'root.jpeg', relativeDir: '', width: 0, height: 0 },
     ])
+  })
+
+  it('authorizes and scans an explicitly entered background folder', async () => {
+    const mod = await import('./ipc-handlers')
+    const scanEnteredCompositeBackgroundFolder = (mod as {
+      scanEnteredCompositeBackgroundFolder?: (
+        dirPath: string,
+        recursive: boolean,
+      ) => {
+        success: boolean
+        folderPath?: string
+        files?: Array<{ path: string; name: string; relativeDir: string; width: number; height: number }>
+      }
+    }).scanEnteredCompositeBackgroundFolder
+    const enteredRoot = mkdtempSync(path.join(os.tmpdir(), 'composite-entered-'))
+    writeFixtureFile(path.join(enteredRoot, 'manual.jpg'))
+
+    expect(scanEnteredCompositeBackgroundFolder).toBeTypeOf('function')
+    expect(scanEnteredCompositeBackgroundFolder!(enteredRoot, false)).toEqual({
+      success: true,
+      folderPath: realpathSync(enteredRoot),
+      files: [{
+        path: path.join(realpathSync(enteredRoot), 'manual.jpg'),
+        name: 'manual.jpg',
+        relativeDir: '',
+        width: 0,
+        height: 0,
+      }],
+    })
+
+    rmSync(enteredRoot, { recursive: true, force: true })
+  })
+
+  it('rejects missing, file, and symlink folder inputs', async () => {
+    const mod = await import('./ipc-handlers')
+    const scanEnteredCompositeBackgroundFolder = (mod as {
+      scanEnteredCompositeBackgroundFolder?: (
+        dirPath: string,
+        recursive: boolean,
+      ) => { success: boolean; error?: string }
+    }).scanEnteredCompositeBackgroundFolder
+    const outsideRoot = mkdtempSync(path.join(os.tmpdir(), 'composite-entered-'))
+    const filePath = path.join(outsideRoot, 'not-a-folder.jpg')
+    const linkPath = path.join(outsideRoot, 'linked-folder')
+    writeFixtureFile(filePath)
+    symlinkSync(fixtureDir, linkPath, 'junction')
+
+    expect(scanEnteredCompositeBackgroundFolder).toBeTypeOf('function')
+    expect(scanEnteredCompositeBackgroundFolder!(path.join(outsideRoot, 'missing'), false).success).toBe(false)
+    expect(scanEnteredCompositeBackgroundFolder!(filePath, false).success).toBe(false)
+    expect(scanEnteredCompositeBackgroundFolder!(linkPath, false).success).toBe(false)
+
+    rmSync(linkPath, { recursive: true, force: true })
+    rmSync(outsideRoot, { recursive: true, force: true })
   })
 
   it('skips recursive symlink or junction directories instead of traversing them', async () => {
@@ -97,7 +151,7 @@ describe('ipc composite background filesystem helpers', () => {
 
     expect(listCompositeBackgroundFiles).toBeTypeOf('function')
     expect(sortBackgrounds(listCompositeBackgroundFiles!(fixtureDir, true))).toEqual([
-      { path: path.join(fixtureDir, 'safe.jpg'), name: 'safe.jpg', relativeDir: '' },
+      { path: path.join(fixtureDir, 'safe.jpg'), name: 'safe.jpg', relativeDir: '', width: 0, height: 0 },
     ])
 
     rmSync(junctionPath, { recursive: true, force: true })
@@ -174,5 +228,23 @@ describe('ipc composite background filesystem helpers', () => {
     expect(handleCompositeListBackgroundFilesPayload!(null)).toEqual([])
     expect(handleDeleteCompositeFilesPayload!({ filePaths: ['ok.jpg', 1] })).toEqual({ deleted: [], failed: [] })
     expect(handleDeleteCompositeFilesPayload!(null)).toEqual({ deleted: [], failed: [] })
+  })
+
+  it('deletes cache images only inside the configured cache directory', async () => {
+    writeFileSync(path.join(allowedRoot, 'local-settings.json'), JSON.stringify({
+      localSavePath: path.join(allowedRoot, 'local-saves'),
+    }))
+    const inside = path.join(allowedRoot, 'local-saves', 'cache-images', 'inside.png')
+    const outside = path.join(fixtureDir, 'outside.png')
+    writeFixtureFile(inside)
+    writeFixtureFile(outside)
+    const { deleteCacheImageFiles } = await import('./ipc-handlers')
+
+    expect(deleteCacheImageFiles([inside, outside])).toEqual({
+      deleted: [inside],
+      failed: [outside],
+    })
+    expect(existsSync(inside)).toBe(false)
+    expect(existsSync(outside)).toBe(true)
   })
 })

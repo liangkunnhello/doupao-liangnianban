@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from './compositeV2Defaults'
 import { addPresetToGroup, duplicatePresetIntoGroup, filterPresetsForLibrary, movePresetInGroup } from './compositePresetLibrary'
 
+import type { CompositeV2Preset } from './compositeV2Types'
+
 describe('composite preset library', () => {
   it('adds a global preset reference to a group once', () => {
     const group = createDefaultCompositeV2PresetGroup(1)
@@ -38,12 +40,14 @@ describe('composite preset library', () => {
   })
 
   it('duplicates nested preset data without sharing source references', () => {
-    const preset = {
+    const preset: CompositeV2Preset = {
       ...createDefaultCompositeV2Preset(1),
+      id: 'preset-original',
       outputRuleGroupsOverride: [
         {
           id: 'group-1',
           name: 'group',
+          distributionPaths: [],
           rules: [
             {
               id: 'rule-1',

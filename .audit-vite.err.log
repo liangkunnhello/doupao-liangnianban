@@ -1,0 +1,16 @@
+[49536:0630/235023.445:ERROR:cache_util_win.cc(20)] Unable to move the cache: 拒绝访问。 (0x5)
+[49536:0630/235023.445:ERROR:cache_util_win.cc(20)] Unable to move the cache: 拒绝访问。 (0x5)
+[49536:0630/235023.445:ERROR:cache_util_win.cc(20)] Unable to move the cache: 拒绝访问。 (0x5)
+[49536:0630/235023.518:ERROR:disk_cache.cc(208)] Unable to create cache
+[49536:0630/235023.620:ERROR:gpu_disk_cache.cc(713)] Gpu Cache Creation failed: -2
+[49536:0630/235023.649:ERROR:disk_cache.cc(208)] Unable to create cache
+[49536:0630/235023.670:ERROR:gpu_disk_cache.cc(713)] Gpu Cache Creation failed: -2
+[49536:0630/235023.693:ERROR:disk_cache.cc(208)] Unable to create cache
+[49536:0630/235023.714:ERROR:gpu_disk_cache.cc(713)] Gpu Cache Creation failed: -2
+[49536:0630/235026.456:ERROR:service_worker_storage.cc(2072)] Failed to delete the database: Database IO error
+[49536:0630/235031.641:ERROR:quota_database.cc(1062)] Could not open the quota database, resetting.
+[49536:0630/235034.552:ERROR:quota_database.cc(1062)] Could not open the quota database, resetting.
+[49536:0630/235037.462:ERROR:quota_database.cc(1067)] Failed to reset the quota database.
+[49536:0630/235037.465:ERROR:quota_database.cc(1067)] Failed to reset the quota database.
+[49536:0630/235954.507:ERROR:network_service_instance_impl.cc(613)] Network service crashed, restarting service.
+[renderer-crash] crashed -1

@@ -29,19 +29,19 @@ const VALID_ANCHORS = new Set([
 
 function assertValidSize(size: Size) {
   if (!Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) {
-    throw new Error('Invalid composite size')
+    throw new Error('无效的合成尺寸')
   }
 }
 
 function assertValidNumber(value: number) {
   if (!Number.isFinite(value)) {
-    throw new Error('Invalid composite value')
+    throw new Error('无效的合成数值')
   }
 }
 
 function assertValidAnchor(anchor: string) {
   if (!VALID_ANCHORS.has(anchor)) {
-    throw new Error('Unknown anchor')
+    throw new Error('未知的锚点')
   }
 }
 
@@ -101,7 +101,7 @@ export function planBackgroundFit(mode: CompositeV2FitMode, source: Size, target
       }
     }
     default:
-      throw new Error('Unknown background fit mode')
+      throw new Error('未知的背景适应模式')
   }
 }
 
@@ -111,6 +111,7 @@ export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Si
 
   const scaleX = target.width / base.width
   const scaleY = target.height / base.height
+  const scale = Math.min(scaleX, scaleY)
 
   if (position.mode === 'free') {
     assertValidSize({ width: position.width, height: position.height })
@@ -119,8 +120,8 @@ export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Si
     return {
       x: position.x * scaleX,
       y: position.y * scaleY,
-      width: position.width * scaleX,
-      height: position.height * scaleY,
+      width: position.width * scale,
+      height: position.height * scale,
     }
   }
 
@@ -132,12 +133,12 @@ export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Si
     assertValidNumber(position.offsetY)
     assertValidAnchor(position.anchor)
 
-    const width = position.width * scaleX
-    const height = position.height * scaleY
-    const marginX = position.marginX * scaleX
-    const marginY = position.marginY * scaleY
-    const offsetX = position.offsetX * scaleX
-    const offsetY = position.offsetY * scaleY
+    const width = position.width * scale
+    const height = position.height * scale
+    const marginX = position.marginX * scale
+    const marginY = position.marginY * scale
+    const offsetX = position.offsetX * scale
+    const offsetY = position.offsetY * scale
     const [vertical, horizontal] = position.anchor.split('-') as [string, string | undefined]
     const h = horizontal ?? vertical
     const v = horizontal ? vertical : 'center'
@@ -147,5 +148,5 @@ export function mapLayerPositionToCanvas(position: CompositeV2Position, base: Si
     return { x: x + offsetX, y: y + offsetY, width, height }
   }
 
-  throw new Error('Unknown position mode')
+  throw new Error('未知的定位模式')
 }

@@ -37,3 +37,78 @@ No actionable P0, P1, or P2 visual differences remain. The implementation intent
 - P3: revisit thumbnail density after testing with a real library containing more than 30 LOGOs.
 
 final result: passed
+
+---
+
+# Layer Properties A2 Design QA
+
+- Source visual truth: `C:/Users/tt/AppData/Local/Temp/codex-clipboard-ce0faf8f-396b-470f-b1fa-6a2d021c0784.png`
+- Implementation screenshot: `D:/AAA/GPT-IMAGE-20260629/design-qa-layer-panel-implementation-final.png`
+- Combined comparison: `D:/AAA/GPT-IMAGE-20260629/design-qa-layer-panel-comparison.png`
+- Viewport: 1539 x 1577 desktop capture
+- State: Postprocess > Preset Management, three layers, image layer selected
+
+**Full-View Comparison**
+
+The implementation preserves the approved structure: a left layer list and one continuous properties surface split into Content, Position & Size, Appearance, and Effects. The selected-layer header keeps visibility and lock controls at the top, while outline and shadow remain grouped at the right.
+
+**Focused Region Comparison**
+
+- Typography: compact system UI sizes and weights match the existing application.
+- Spacing: all three layer rows measure 48px tall with `scrollHeight` equal to row height, proving no internal wrapping.
+- Colors: neutral white/gray surfaces and blue selected states follow the existing product tokens.
+- Image quality and assets: no custom raster assets are needed; existing Lucide controls remain sharp.
+- Copy: Chinese labels clearly separate shared and layer-specific controls.
+
+**Findings**
+
+No actionable P0, P1, or P2 differences remain for the agreed desktop scope. Responsive adaptation was explicitly deferred.
+
+**Patches Made**
+
+- Restored the layer-list column to 300px and forced every layer row, title, subtitle, and action cluster to remain on one line.
+- Replaced the loose parameter grid with four stable horizontal categories.
+- Added outline controls to text, image, and LOGO layers and media-outline rendering.
+- Added disabled-state grouping for outline and shadow parameters.
+
+**Follow-up Polish**
+
+- P3: responsive behavior can be revisited separately if narrow desktop widths become a requirement.
+
+final result: passed
+
+---
+
+# Batch Folder Address Input Design QA
+
+- Source visual truth: `D:/AAA/GPT-IMAGE-20260629/design-qa-folder-input-source.png`
+- Implementation screenshot: `D:/AAA/GPT-IMAGE-20260629/design-qa-folder-input-implementation.png`
+- Combined comparison: `D:/AAA/GPT-IMAGE-20260629/design-qa-folder-input-comparison.png`
+- Viewport: 1188 x 1270 desktop capture
+- State: Postprocess > Batch Export, two empty folder address rows
+
+**Full-View Comparison**
+
+The implementation follows selected option A inside the existing 230px source-folder panel: every row contains a full address input plus browse and remove controls, and the full-width Add button appends another row.
+
+**Focused Region Comparison**
+
+- Typography: existing compact system UI sizes and weights are preserved.
+- Spacing: two 30px icon controls remain visible beside a shrinkable address input.
+- Colors: existing neutral fields and blue Add action match the application tokens.
+- Image quality and assets: no raster assets are required; controls use the existing Lucide icon library.
+- Copy: labels match the confirmed Chinese interaction design.
+
+**Findings**
+
+No actionable P0, P1, or P2 visual differences remain.
+
+**Patches Made**
+
+- Replaced the full-width input sizing with `min-w-0 flex-1` after the first capture showed the row actions being pushed outside the narrow panel.
+
+**Follow-up Polish**
+
+- None required for this scoped change.
+
+final result: passed

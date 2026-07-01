@@ -33,6 +33,6 @@ describe('chooseJpegQuality', () => {
         maxQuality: 0.5,
         estimateSizeKb: () => 90,
       }),
-    ).toThrow(/invalid/i)
+    ).toThrow(/无效的/i)
   })
 })

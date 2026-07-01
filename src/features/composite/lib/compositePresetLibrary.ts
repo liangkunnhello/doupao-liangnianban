@@ -54,8 +54,20 @@ export function filterPresetsForLibrary(
   const query = filters.query?.trim().toLowerCase()
   const group = filters.groupId ? groups.find((item) => item.id === filters.groupId) : null
 
-  return presets
-    .filter((preset) => !query || preset.name.toLowerCase().includes(query))
-    .filter((preset) => !group || group.presetIds.includes(preset.id))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+  let result = presets.filter((preset) => !query || preset.name.toLowerCase().includes(query))
+  
+  if (group) {
+    result = result.filter((preset) => group.presetIds.includes(preset.id))
+    if (!query) {
+      // Sort by the order in group.presetIds
+      result.sort((a, b) => {
+        const indexA = group.presetIds.indexOf(a.id)
+        const indexB = group.presetIds.indexOf(b.id)
+        return indexA - indexB
+      })
+      return result
+    }
+  }
+
+  return result.sort((a, b) => b.updatedAt - a.updatedAt)
 }

@@ -7,7 +7,7 @@ const record = (id: string, endedAt: number): CompositeV2HistoryRecord => ({
   status: 'completed',
   startedAt: endedAt - 1,
   endedAt,
-  backgroundFolder: 'D:/bg',
+  backgroundFolders: ['D:/bg'],
   recursive: false,
   backgroundCount: 1,
   presetGroupName: 'group',

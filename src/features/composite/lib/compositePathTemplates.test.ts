@@ -12,14 +12,14 @@ describe('composite path templates', () => {
       source: '背景/1',
       sourceDir: 'A/B',
       custom: '投放1',
-      subfolderTemplate: '{channel}/{size}/{custom}',
+      customVariables: { project: '快手极速版' },
+      namingTemplate: '{date}-{project}-{size}-{channel}',
       filenameTemplate: '{preset}-{source}-{index}',
       preserveSourceDir: true,
     })
 
     expect(parts).toEqual({
-      dateFolder: '20260627',
-      subfolders: ['百度', '1080x1920', '投放1', 'A', 'B'],
+      subfolders: ['20260627-快手极速版-1080x1920-百度', 'A', 'B'],
       filename: '产品_A-背景_1-3.jpg',
     })
   })
@@ -38,7 +38,7 @@ describe('composite path templates', () => {
       source: '背景1',
       sourceDir: '',
       custom: '..\\outside',
-      subfolderTemplate: '{custom}',
+      namingTemplate: '{custom}',
       filenameTemplate: '{preset}',
       preserveSourceDir: false,
     })
@@ -63,7 +63,7 @@ describe('composite path templates', () => {
       source: '背景1',
       sourceDir: '',
       custom: '',
-      subfolderTemplate: '',
+      namingTemplate: '',
       filenameTemplate: '{preset}',
       preserveSourceDir: true,
     })

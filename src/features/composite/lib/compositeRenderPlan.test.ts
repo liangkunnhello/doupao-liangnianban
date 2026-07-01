@@ -50,7 +50,7 @@ describe('composite render plan', () => {
   })
 
   it('rejects unknown background fit modes', () => {
-    expect(() => planBackgroundFit('mystery' as never, { width: 400, height: 200 }, { width: 300, height: 300 })).toThrow(/unknown/i)
+    expect(() => planBackgroundFit('mystery' as never, { width: 400, height: 200 }, { width: 300, height: 300 })).toThrow(/未知的/i)
   })
 
   it('maps free position from base canvas to target canvas', () => {
@@ -83,11 +83,11 @@ describe('composite render plan', () => {
   })
 
   it('rejects invalid sizes when choosing a render branch', () => {
-    expect(() => chooseRenderBranch({ width: 0, height: 720 }, { width: 1920, height: 1080 })).toThrow(/invalid/i)
+    expect(() => chooseRenderBranch({ width: 0, height: 720 }, { width: 1920, height: 1080 })).toThrow(/无效的/i)
   })
 
   it('rejects invalid sizes when planning background fit', () => {
-    expect(() => planBackgroundFit('crop-fill', { width: 1000, height: 500 }, { width: Number.NaN, height: 300 })).toThrow(/invalid/i)
+    expect(() => planBackgroundFit('crop-fill', { width: 1000, height: 500 }, { width: Number.NaN, height: 300 })).toThrow(/无效的/i)
   })
 
   it('rejects invalid sizes when mapping layer positions', () => {
@@ -95,7 +95,7 @@ describe('composite render plan', () => {
       { mode: 'free', x: 1, y: 2, width: 3, height: 4 },
       { width: 1280, height: -1 },
       { width: 640, height: 360 },
-    )).toThrow(/invalid/i)
+    )).toThrow(/无效的/i)
   })
 
   it('rejects invalid free layer dimensions', () => {
@@ -103,7 +103,7 @@ describe('composite render plan', () => {
       { mode: 'free', x: 1, y: 2, width: 0, height: 4 },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/invalid/i)
+    )).toThrow(/无效的/i)
   })
 
   it('rejects non-finite free layer coordinates', () => {
@@ -111,7 +111,7 @@ describe('composite render plan', () => {
       { mode: 'free', x: Number.POSITIVE_INFINITY, y: 2, width: 3, height: 4 },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/invalid/i)
+    )).toThrow(/无效的/i)
   })
 
   it('rejects invalid anchor layer dimensions', () => {
@@ -128,7 +128,7 @@ describe('composite render plan', () => {
       },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/invalid/i)
+    )).toThrow(/无效的/i)
   })
 
   it('rejects non-finite anchor margins and offsets', () => {
@@ -145,7 +145,7 @@ describe('composite render plan', () => {
       },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/invalid/i)
+    )).toThrow(/无效的/i)
   })
 
   it('rejects unknown position modes', () => {
@@ -153,7 +153,7 @@ describe('composite render plan', () => {
       { mode: 'mystery' as never, x: 1, y: 2, width: 3, height: 4 },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/unknown/i)
+    )).toThrow(/未知的/i)
   })
 
   it('rejects unknown anchor values', () => {
@@ -170,6 +170,6 @@ describe('composite render plan', () => {
       },
       { width: 1280, height: 720 },
       { width: 640, height: 360 },
-    )).toThrow(/unknown/i)
+    )).toThrow(/未知的/i)
   })
 })

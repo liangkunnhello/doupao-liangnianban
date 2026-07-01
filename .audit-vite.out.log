@@ -1,0 +1,35 @@
+
+> gpt-image-playground@0.6.28 dev
+> vite --host 127.0.0.1
+
+
+  [32m[1mVITE[22m v6.4.3[39m  [2mready in [0m[1m296[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[36mvite v6.4.3 [32mbuilding for development...[36m[39m
+[36m
+watching for file changes...[39m
+[36mvite v6.4.3 [32mbuilding for development...[36m[39m
+[36m
+watching for file changes...[39m
+[36m
+build started...[39m
+[36m
+build started...[39m
+transforming...
+[32m✓[39m 1 modules transformed.
+rendering chunks...
+transforming...
+computing gzip size...
+[2mdist-electron/electron/[22m[36mpreload.cjs  [39m[1m[2m4.26 kB[22m[1m[22m[2m │ gzip: 1.04 kB[22m
+[2mdist-electron/electron/[22m[36mpreload.cjs  [39m[1m[2m4.38 kB[22m[1m[22m[2m │ gzip: 1.19 kB[22m
+[36mbuilt in 726ms.[39m
+[32m✓[39m 239 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist-electron/[22m[36mmain.js  [39m[1m[33m648.92 kB[39m[22m[2m │ gzip: 135.20 kB[22m
+[36mbuilt in 1716ms.[39m
+
+[debug] app.getAppPath(): D:\AAA\GPT-IMAGE-20260629
+[debug] preload 路径: D:\AAA\GPT-IMAGE-20260629\electron\preload.cjs
+[debug] preload 是否存在: true

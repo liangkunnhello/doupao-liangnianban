@@ -13,7 +13,7 @@ describe('composite v2 defaults', () => {
     expect(state.presets[0]?.layers).toEqual([])
     expect(state.globalFitMode).toBe('crop-fill')
     expect(state.historyRetention).toBe(10)
-    expect(state.outputRuleGroups.map((group) => group.name)).toEqual(['广点通/头条', '百度', '厂商'])
+    expect(state.outputRuleGroups.map((group) => group.name)).toEqual(['广点通', '百度', '厂商', '头条'])
     expect(state.outputRuleGroups[0]?.rules[0]).toMatchObject({
       name: '1280x720',
       width: 1280,

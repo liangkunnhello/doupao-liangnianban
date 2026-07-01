@@ -41,6 +41,12 @@ export type CompositeV2Shadow = {
   opacity: number
 }
 
+export type CompositeV2Stroke = {
+  enabled: boolean
+  color: string
+  width: number
+}
+
 export type CompositeV2LayerBase = {
   id: string
   name: string
@@ -50,11 +56,14 @@ export type CompositeV2LayerBase = {
   rotation: number
   position: CompositeV2Position
   shadow: CompositeV2Shadow
+  stroke?: CompositeV2Stroke
 }
 
 export type CompositeV2ImageAssetRef =
   | { kind: 'path'; path: string }
   | { kind: 'internal'; path: string; originalPath?: string }
+  | { kind: 'dataUrl'; dataUrl: string; name?: string }
+  | { kind: 'project'; id: string }
 
 export type CompositeV2MediaLayer = CompositeV2LayerBase & {
   type: 'image' | 'logo'
@@ -82,11 +91,6 @@ export type CompositeV2TextLayer = CompositeV2LayerBase & {
   lineHeight: number
   letterSpacing: number
   padding: number
-  stroke: {
-    enabled: boolean
-    color: string
-    width: number
-  }
 }
 
 export type CompositeV2Layer = CompositeV2ImageLayer | CompositeV2LogoLayer | CompositeV2TextLayer
@@ -107,12 +111,23 @@ export type CompositeV2OutputRuleGroup = {
   id: string
   name: string
   rules: CompositeV2OutputSizeRule[]
+  distributionPaths: string[]
+}
+
+export type CompositeV2CustomVariable = {
+  id: string
+  name: string
+  value: string
 }
 
 export type CompositeV2Preset = {
   id: string
   name: string
   outputRootPath: string
+  distributionPath: string
+  namingTemplate: string
+  subfolderTemplate?: string
+  filenameTemplate?: string
   baseCanvas: { width: number; height: number }
   sampleBackgroundPath: string
   layers: CompositeV2Layer[]
@@ -132,6 +147,8 @@ export type CompositeV2BackgroundImage = {
   path: string
   name: string
   relativeDir: string
+  width: number
+  height: number
 }
 
 export type CompositeV2ExportStatus = 'idle' | 'running' | 'paused' | 'canceling' | 'completed' | 'canceled'
@@ -160,7 +177,7 @@ export type CompositeV2HistoryRecord = {
   status: 'completed' | 'canceled' | 'completed-with-failures'
   startedAt: number
   endedAt: number
-  backgroundFolder: string
+  backgroundFolders: string[]
   recursive: boolean
   backgroundCount: number
   presetGroupName: string
@@ -171,14 +188,45 @@ export type CompositeV2HistoryRecord = {
   successes: CompositeV2SuccessItem[]
   failures: CompositeV2FailureItem[]
   cleanup?: { deleted: string[]; failed: string[] }
+  distributionStatus?: 'pending' | 'running' | 'completed' | 'failed'
+  distributionSuccessCount?: number
+  distributionFailureCount?: number
+  distributionErrors?: string[]
+}
+
+export type CompositeV2DistributionConfig = {
+  enabled: boolean
+  startDate: string // YYYYMMDD
+  days: number
+  mode: 'copy' | 'move'
+  randomize: boolean
+  skipWeekends: boolean
+  renameMode: 'date' | 'sequence'
+  modifyMd5: boolean
+}
+
+export type CompositeV2ProjectLogo = {
+  id: string
+  name: string
+  dataUrl: string
+  width?: number
+  height?: number
 }
 
 export type CompositeV2State = {
   logoLibraryPath: string
+  logoOrder: string[]
+  projectLogos: CompositeV2ProjectLogo[]
+  customVariables: CompositeV2CustomVariable[]
   presets: CompositeV2Preset[]
   presetGroups: CompositeV2PresetGroup[]
   outputRuleGroups: CompositeV2OutputRuleGroup[]
   globalFitMode: CompositeV2FitMode
   historyRetention: number
   history: CompositeV2HistoryRecord[]
+  distributionConfig: CompositeV2DistributionConfig
+  backgroundFolders?: string[]
+  recursiveBackgrounds?: boolean
+  enabledPresetIdsForRun?: string[]
+  smartMatchOrientation?: boolean
 }

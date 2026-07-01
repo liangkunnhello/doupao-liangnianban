@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { CompositeV2ExportStatus, CompositeV2FailureItem, CompositeV2HistoryRecord, CompositeV2SuccessItem } from '../lib/compositeV2Types'
 import { useCompositeV2Store } from '../storeV2'
+import { runDistribution } from '../lib/compositeDistribution'
 
 type ExportResultsPanelProps = {
   status: CompositeV2ExportStatus
@@ -28,13 +30,61 @@ export function ExportResultsPanel({ status, completed, total, history, successe
   const latestHistory = history.slice(0, 3)
   const historyRetention = useCompositeV2Store((state) => state.historyRetention)
   const setHistoryRetention = useCompositeV2Store((state) => state.setHistoryRetention)
+  const updateHistoryRecord = useCompositeV2Store((state) => state.updateHistoryRecord)
+  const distributionConfig = useCompositeV2Store((state) => state.distributionConfig)
+  const presets = useCompositeV2Store((state) => state.presets)
+  
+  const [distributingId, setDistributingId] = useState<string | null>(null)
+
+  async function handleRedistribute(record: CompositeV2HistoryRecord) {
+    if (!distributionConfig.enabled) {
+      alert('请先在分配设置中启用自动分配并配置规则。')
+      return
+    }
+    if (!distributionConfig.startDate || !/^(\d{4})(\d{2})(\d{2})$/.test(distributionConfig.startDate)) {
+      alert('自动分配失败：起始日期格式错误，期望 YYYYMMDD（例如 20260701）')
+      return
+    }
+    const electronApi = typeof window !== 'undefined' ? window.electronAPI : undefined
+    if (!electronApi) {
+      alert('当前环境不支持文件操作。')
+      return
+    }
+    if (record.successes.length === 0) {
+      alert('该记录没有成功的导出文件，无法分配。')
+      return
+    }
+    if (!confirm(`将对 ${record.successes.length} 个文件执行重新分配，确认操作吗？`)) return
+
+    setDistributingId(record.id)
+    updateHistoryRecord(record.id, { distributionStatus: 'running' })
+    try {
+      const result = await runDistribution(record.successes, distributionConfig, electronApi, presets)
+      const distributionStatus = result.errors.length > 0 && result.success === 0 ? 'failed' : 'completed'
+      updateHistoryRecord(record.id, {
+        distributionStatus,
+        distributionSuccessCount: result.success,
+        distributionFailureCount: result.failed,
+        distributionErrors: result.errors
+      })
+      alert(`重新分配完成：\n成功: ${result.success}\n失败: ${result.failed}\n${result.errors.length > 0 ? '\n错误详情查看控制台' : ''}`)
+      if (result.errors.length > 0) {
+        console.error('分发错误：', result.errors)
+      }
+    } catch (error: any) {
+      updateHistoryRecord(record.id, { distributionStatus: 'failed', distributionErrors: [error.message] })
+      alert(`分配异常：${error.message}`)
+    } finally {
+      setDistributingId(null)
+    }
+  }
 
   return (
-    <section className="rounded-md border border-gray-200 bg-white p-4 dark:border-white/[0.08] dark:bg-gray-950">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">导出结果</h3>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">进度、成功警告、失败原因与历史记录。</p>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">任务与分配记录</h3>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">导出进度、分配状态与历史记录。</p>
         </div>
         <span className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 dark:border-white/[0.08] dark:text-gray-300">
           {STATUS_LABELS[status]}
@@ -87,8 +137,8 @@ export function ExportResultsPanel({ status, completed, total, history, successe
         </div>
       </div>
 
-      <div className="mt-4">
-        <div className="flex items-center justify-between">
+      <div className="mt-4 flex flex-col flex-1 min-h-0">
+        <div className="flex items-center justify-between shrink-0">
           <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400">最近记录</h4>
           <label className="flex items-center gap-2 text-xs text-gray-400">
             保留
@@ -96,17 +146,40 @@ export function ExportResultsPanel({ status, completed, total, history, successe
             次
           </label>
         </div>
-        <div className="mt-2 space-y-2">
+        <div className="mt-2 space-y-2 flex-1 overflow-y-auto min-h-0">
           {latestHistory.length ? latestHistory.map((item) => (
             <div key={item.id} className="rounded-md border border-gray-200 px-3 py-2 text-xs text-gray-600 dark:border-white/[0.08] dark:text-gray-300">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-medium text-gray-800 dark:text-gray-100">{item.presetGroupName}</span>
                 <span className="text-gray-400 dark:text-gray-500">{formatTimestamp(item.endedAt)}</span>
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-gray-500 dark:text-gray-400">
-                <span>{item.backgroundCount} 张背景</span>
-                <span>{item.successCount} 成功</span>
-                <span>{item.failureCount} 失败</span>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <div className="flex flex-wrap gap-3 text-gray-500 dark:text-gray-400">
+                  <span>{item.backgroundCount} 张背景</span>
+                  <span>{item.successCount} 成功</span>
+                  <span>{item.failureCount} 失败</span>
+                  {item.distributionStatus && (
+                    <span className="flex items-center gap-1">
+                      <span className="w-[1px] h-3 bg-gray-300 dark:bg-gray-700 mx-1"></span>
+                      <span>分配: </span>
+                      {item.distributionStatus === 'running' ? (
+                        <span className="text-blue-500">进行中...</span>
+                      ) : item.distributionStatus === 'failed' ? (
+                        <span className="text-red-500" title={item.distributionErrors?.join('\n')}>失败</span>
+                      ) : (
+                        <span>{item.distributionSuccessCount ?? 0} 成功, {item.distributionFailureCount ?? 0} 失败</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={distributingId === item.id || item.successCount === 0}
+                  onClick={() => handleRedistribute(item)}
+                  className="rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-blue-600 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
+                >
+                  {distributingId === item.id ? '分配中...' : '重新分配'}
+                </button>
               </div>
             </div>
           )) : (
@@ -116,6 +189,6 @@ export function ExportResultsPanel({ status, completed, total, history, successe
           )}
         </div>
       </div>
-    </section>
+    </div>
   )
 }

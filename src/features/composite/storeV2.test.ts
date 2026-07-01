@@ -16,7 +16,8 @@ describe('composite v2 store state factory', () => {
     const state = createCompositeV2StoreState()
 
     expect((state as unknown as Record<string, unknown>).logoLibraryPath).toBe('')
-    expect(state.backgroundFolder).toBe('')
+    expect(state.customVariables).toEqual([])
+    expect(state.backgroundFolders).toEqual([])
     expect(state.recursiveBackgrounds).toBe(false)
     expect(state.backgrounds).toEqual([])
     expect(state.previewHistory).toEqual([])
@@ -30,9 +31,9 @@ describe('composite v2 store state factory', () => {
   it('returns only persisted domain state for storage', () => {
     const store = createCompositeV2Store()
     store.setState({
-      backgroundFolder: 'D:/bg',
+      backgroundFolders: ['D:/bg'],
       recursiveBackgrounds: true,
-      backgrounds: [{ path: 'D:/bg/a.jpg', name: 'a.jpg', relativeDir: '' }],
+      backgrounds: [{ path: 'D:/bg/a.jpg', name: 'a.jpg', relativeDir: '', width: 100, height: 100 }],
       previewHistory: ['D:/bg/a.jpg'],
       previewHistoryIndex: 0,
       customValue: 'run-1',
@@ -40,6 +41,8 @@ describe('composite v2 store state factory', () => {
       exportStatus: 'running',
       exportCompleted: 2,
       exportTotal: 10,
+      logoOrder: [],
+      projectLogos: [],
     })
     store.setState({ logoLibraryPath: 'D:/logos' } as never)
 
@@ -47,19 +50,29 @@ describe('composite v2 store state factory', () => {
 
     expect(persisted).toEqual({
       logoLibraryPath: 'D:/logos',
+      logoOrder: [],
+      projectLogos: [],
+      customVariables: [],
       presets: store.getState().presets,
       presetGroups: store.getState().presetGroups,
       outputRuleGroups: store.getState().outputRuleGroups,
+      distributionConfig: {
+        ...store.getState().distributionConfig,
+        startDate: undefined,
+      },
       globalFitMode: store.getState().globalFitMode,
       historyRetention: store.getState().historyRetention,
       history: store.getState().history,
+      backgroundFolders: ['D:/bg'],
+      recursiveBackgrounds: true,
+      enabledPresetIdsForRun: store.getState().enabledPresetIdsForRun,
+      smartMatchOrientation: false,
     })
-    expect(persisted).not.toHaveProperty('backgroundFolder')
     expect(persisted).not.toHaveProperty('previewHistory')
     expect(persisted).not.toHaveProperty('exportStatus')
   })
 
-  it('resets enabled presets and preview preset when switching groups', () => {
+  it('resets enabled presets but preserves preview preset when switching groups', () => {
     const store = createCompositeV2Store()
     const presetA = { ...createDefaultCompositeV2Preset(1), id: 'preset-a', name: 'Preset A' }
     const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }
@@ -79,15 +92,15 @@ describe('composite v2 store state factory', () => {
 
     expect(store.getState().selectedPresetGroupId).toBe(groupB.id)
     expect(store.getState().enabledPresetIdsForRun).toEqual(groupB.presetIds)
-    expect(store.getState().selectedPreviewPresetId).toBe('preset-c')
+    expect(store.getState().selectedPreviewPresetId).toBe('preset-b')
   })
 
   it('chooses a deterministic random preview when backgrounds refresh', () => {
     const store = createCompositeV2Store({ pickRandomIndex: () => 1 })
     const backgrounds = [
-      { path: 'D:/bg/a.jpg', name: 'a.jpg', relativeDir: '' },
-      { path: 'D:/bg/b.jpg', name: 'b.jpg', relativeDir: '' },
-      { path: 'D:/bg/c.jpg', name: 'c.jpg', relativeDir: '' },
+      { path: 'D:/bg/a.jpg', name: 'a.jpg', relativeDir: '', width: 100, height: 100 },
+      { path: 'D:/bg/b.jpg', name: 'b.jpg', relativeDir: '', width: 100, height: 100 },
+      { path: 'D:/bg/c.jpg', name: 'c.jpg', relativeDir: '', width: 100, height: 100 },
     ]
 
     store.getState().setBackgrounds(backgrounds)
@@ -100,7 +113,7 @@ describe('composite v2 store state factory', () => {
   it('updates batch controls through minimal setters', () => {
     const store = createCompositeV2Store()
 
-    store.getState().setBackgroundFolder('D:/bg')
+    store.getState().setBackgroundFolders(['D:/bg'])
     store.getState().setRecursiveBackgrounds(true)
     store.getState().setSelectedPreviewPresetId('preset-default')
     store.getState().setEnabledPresetIdsForRun(['preset-default'])
@@ -110,7 +123,7 @@ describe('composite v2 store state factory', () => {
     store.getState().setExportStatus('paused')
 
     expect(store.getState()).toMatchObject({
-      backgroundFolder: 'D:/bg',
+      backgroundFolders: ['D:/bg'],
       recursiveBackgrounds: true,
       selectedPreviewPresetId: 'preset-default',
       enabledPresetIdsForRun: ['preset-default'],
@@ -120,6 +133,19 @@ describe('composite v2 store state factory', () => {
       exportTotal: 7,
       exportStatus: 'paused',
     })
+  })
+
+  it('stores global custom variables independently from presets', () => {
+    const store = createCompositeV2Store()
+
+    store.getState().setCustomVariables([
+      { id: 'custom-project', name: 'project', value: '项目A' },
+    ])
+
+    expect(store.getState().customVariables).toEqual([
+      { id: 'custom-project', name: 'project', value: '项目A' },
+    ])
+    expect(store.getState().presets.every((preset) => !('customVariables' in preset))).toBe(true)
   })
 
   it('collects export results and retains history', () => {
@@ -147,7 +173,7 @@ describe('composite v2 store state factory', () => {
       status: 'completed-with-failures',
       startedAt: 1,
       endedAt: 2,
-      backgroundFolder: 'D:/bg',
+      backgroundFolders: ['D:/bg'],
       recursive: false,
       backgroundCount: 2,
       presetGroupName: 'Default',
@@ -235,9 +261,14 @@ describe('composite v2 store state factory', () => {
       color: '#000000',
       padding: 5,
       shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
+      stroke: { enabled: false, color: '#111827', width: 0 },
     })
     expect(layer!.position.width).toBeGreaterThan(0)
     expect(layer!.position.height).toBeGreaterThan(0)
+    expect(layer!.position.mode).toBe('free')
+    if (layer!.position.mode !== 'free') throw new Error('Expected text layer position to use free mode')
+    expect(Math.abs(layer!.position.x + layer!.position.width / 2 - preset.baseCanvas.width / 2)).toBeLessThanOrEqual(1)
+    expect(Math.abs(layer!.position.y + layer!.position.height / 2 - preset.baseCanvas.height / 2)).toBeLessThanOrEqual(1)
     expect(store.getState().presets[0]?.updatedAt).toBe(123)
   })
 
@@ -254,8 +285,15 @@ describe('composite v2 store state factory', () => {
       type: 'image',
       name: 'Image Layer',
       asset: { kind: 'path', path: 'D:/logos/logo.png' },
-      position: { mode: 'free', x: 100, y: 100, width: 240, height: 120 },
+      position: {
+        mode: 'free',
+        x: Math.round((preset.baseCanvas.width - 240) / 2),
+        y: Math.round((preset.baseCanvas.height - 120) / 2),
+        width: 240,
+        height: 120,
+      },
       shadow: { enabled: false, color: '#000000', x: 0, y: 4, blur: 12, opacity: 0.25 },
+      stroke: { enabled: false, color: '#111827', width: 0 },
     })
     expect(store.getState().presets[0]?.updatedAt).toBe(456)
   })
@@ -282,6 +320,7 @@ describe('composite v2 store state factory', () => {
       type: 'logo',
       name: 'LOGO Layer',
       asset: { kind: 'path', path: 'D:/logos/logo-a.png' },
+      stroke: { enabled: false, color: '#111827', width: 0 },
     })
   })
 
@@ -336,6 +375,21 @@ describe('composite v2 store state factory', () => {
     expect(store.getState().presetGroups.some((group) => group.name === 'Campaign 2 copy')).toBe(true)
     store.getState().deletePresetGroup(created!.id)
     expect(store.getState().presetGroups.some((group) => group.id === created!.id)).toBe(false)
+  })
+
+  it('moves a preset group to a new position', () => {
+    const store = createCompositeV2Store()
+    store.getState().createPresetGroup('Second')
+    store.getState().createPresetGroup('Third')
+    const [first, second, third] = store.getState().presetGroups
+
+    store.getState().movePresetGroup(third!.id, 0)
+
+    expect(store.getState().presetGroups.map((group) => group.id)).toEqual([
+      third!.id,
+      first!.id,
+      second!.id,
+    ])
   })
 
   it('updates global fit mode and an output size rule', () => {

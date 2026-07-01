@@ -15,6 +15,7 @@ import { BatchExportTab } from './BatchExportTab'
 const mountedRenderers: Array<ReturnType<typeof create>> = []
 
 afterEach(() => {
+  vi.useRealTimers()
   while (mountedRenderers.length) {
     mountedRenderers.pop()?.unmount()
   }
@@ -43,6 +44,13 @@ function findInputByLabel(root: ReactTestInstance, label: string) {
   return root.findAllByType('input').find((node: ReactTestInstance) => node.props['aria-label'] === label)
 }
 
+function findFolderAddressInputs(root: ReactTestInstance) {
+  return root.findAllByType('input').filter((node: ReactTestInstance) =>
+    typeof node.props['aria-label'] === 'string'
+    && node.props['aria-label'].startsWith('文件夹地址 '),
+  )
+}
+
 describe('BatchExportTab', () => {
   it('toggles every size in a channel from its select-all checkbox', async () => {
     const outputRuleGroups = createDefaultCompositeV2OutputRuleGroups()
@@ -59,7 +67,7 @@ describe('BatchExportTab', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const selectAll = findInputByLabel(renderer!.root, `Select all ${targetGroup.name} sizes`)
+    const selectAll = findInputByLabel(renderer!.root, `全选 ${targetGroup.name} 尺寸`)
     expect(selectAll).toBeDefined()
 
     act(() => {
@@ -69,11 +77,210 @@ describe('BatchExportTab', () => {
     expect(useCompositeV2Store.getState().outputRuleGroups[1]!.rules.every((rule) => rule.enabled)).toBe(true)
   })
 
-  it('stores the folder immediately, sorts loaded backgrounds naturally, and updates recursive mode before rescanning', async () => {
+  it('renders one empty folder address by default and Add only appends another row', async () => {
+    const scanEnteredCompositeBackgroundFolder = vi.fn()
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        isElectron: true,
+        scanEnteredCompositeBackgroundFolder,
+        readImageFile: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(findFolderAddressInputs(renderer!.root)).toHaveLength(1)
+    expect(findFolderAddressInputs(renderer!.root)[0]?.props.value).toBe('')
+
+    await act(async () => {
+      findButtonByText(renderer!.root, '添加文件夹地址')?.props.onClick()
+    })
+
+    expect(findFolderAddressInputs(renderer!.root)).toHaveLength(2)
+    expect(scanEnteredCompositeBackgroundFolder).not.toHaveBeenCalled()
+  })
+
+  it('automatically scans and persists a completed folder address', async () => {
+    vi.useFakeTimers()
+    const scanEnteredCompositeBackgroundFolder = vi.fn().mockResolvedValue({
+      success: true,
+      folderPath: 'D:/images',
+      files: [{ path: 'D:/images/a.jpg', name: 'a.jpg', relativeDir: '', width: 10, height: 20 }],
+    })
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        isElectron: true,
+        scanEnteredCompositeBackgroundFolder,
+        readImageFile: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onChange({ target: { value: 'D:/images' } })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    expect(scanEnteredCompositeBackgroundFolder).toHaveBeenCalledWith('D:/images', false)
+    expect(useCompositeV2Store.getState().backgroundFolders).toEqual(['D:/images'])
+    expect(useCompositeV2Store.getState().backgrounds[0]?.name).toBe('a.jpg')
+  })
+
+  it('fills the targeted address row from Browse and removes rows independently', async () => {
+    const selectDirectory = vi.fn().mockResolvedValue('D:/picked')
+    const scanEnteredCompositeBackgroundFolder = vi.fn().mockResolvedValue({
+      success: true,
+      folderPath: 'D:/picked',
+      files: [],
+    })
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        isElectron: true,
+        selectDirectory,
+        scanEnteredCompositeBackgroundFolder,
+        readImageFile: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      findButtonByText(renderer!.root, '添加文件夹地址')?.props.onClick()
+    })
+    await act(async () => {
+      findButtonByLabel(renderer!.root, '浏览文件夹地址 2')?.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(findFolderAddressInputs(renderer!.root).map((input) => input.props.value)).toEqual(['', 'D:/picked'])
+
+    await act(async () => {
+      findButtonByLabel(renderer!.root, '删除文件夹地址 1')?.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(findFolderAddressInputs(renderer!.root).map((input) => input.props.value)).toEqual(['D:/picked'])
+  })
+
+  it('ignores an older folder scan that resolves after a newer scan', async () => {
+    let resolveFirstScan: ((value: unknown) => void) | null = null
+    let resolveSecondScan: ((value: unknown) => void) | null = null
+    const scanEnteredCompositeBackgroundFolder = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstScan = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondScan = resolve }))
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        isElectron: true,
+        scanEnteredCompositeBackgroundFolder,
+        readImageFile: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onChange({ target: { value: 'D:/old' } })
+    })
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onKeyDown({ key: 'Enter', preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onChange({ target: { value: 'D:/new' } })
+    })
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onKeyDown({ key: 'Enter', preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      resolveSecondScan?.({
+        success: true,
+        folderPath: 'D:/new',
+        files: [{ path: 'D:/new/new.jpg', name: 'new.jpg', relativeDir: '', width: 1, height: 1 }],
+      })
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveFirstScan?.({
+        success: true,
+        folderPath: 'D:/old',
+        files: [{ path: 'D:/old/old.jpg', name: 'old.jpg', relativeDir: '', width: 1, height: 1 }],
+      })
+      await Promise.resolve()
+    })
+
+    expect(useCompositeV2Store.getState().backgroundFolders).toEqual(['D:/new'])
+    expect(useCompositeV2Store.getState().backgrounds[0]?.name).toBe('new.jpg')
+  })
+
+  it('leaves loading state when the address is cleared during a scan', async () => {
+    const scanEnteredCompositeBackgroundFolder = vi.fn().mockImplementation(() => new Promise(() => {}))
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        isElectron: true,
+        selectDirectory: vi.fn(),
+        scanEnteredCompositeBackgroundFolder,
+        readImageFile: vi.fn().mockResolvedValue(null),
+      },
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<BatchExportTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onChange({ target: { value: 'D:/pending' } })
+    })
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onKeyDown({ key: 'Enter', preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+    expect(findButtonByLabel(renderer!.root, '浏览文件夹地址 1')?.props.disabled).toBe(true)
+
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onChange({ target: { value: '' } })
+    })
+    await act(async () => {
+      findFolderAddressInputs(renderer!.root)[0]?.props.onKeyDown({ key: 'Enter', preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+
+    expect(findButtonByLabel(renderer!.root, '浏览文件夹地址 1')?.props.disabled).toBe(false)
+  })
+
+  it('browses into an address row, sorts loaded backgrounds, and rescans after recursive mode changes', async () => {
     const selectDirectory = vi.fn().mockResolvedValue('D:/backgrounds')
-    let resolveFirstScan: ((value: Array<{ path: string; name: string; relativeDir: string }>) => void) | null = null
-    let resolveSecondScan: ((value: Array<{ path: string; name: string; relativeDir: string }>) => void) | null = null
-    const listCompositeBackgroundFiles = vi
+    let resolveFirstScan: ((value: unknown) => void) | null = null
+    let resolveSecondScan: ((value: unknown) => void) | null = null
+    const scanEnteredCompositeBackgroundFolder = vi
       .fn()
       .mockImplementationOnce(() => new Promise((resolve) => {
         resolveFirstScan = resolve
@@ -87,7 +294,7 @@ describe('BatchExportTab', () => {
       value: {
         isElectron: true,
         selectDirectory,
-        listCompositeBackgroundFiles,
+        scanEnteredCompositeBackgroundFolder,
         readImageFile: vi.fn().mockResolvedValue(null),
       },
     })
@@ -99,66 +306,75 @@ describe('BatchExportTab', () => {
     mountedRenderers.push(renderer!)
 
     await act(async () => {
-      void findButtonByText(renderer!.root, '选择背景文件夹')?.props.onClick()
+      const btn = findButtonByLabel(renderer!.root, '浏览文件夹地址 1')
+      void btn?.props.onClick()
       await Promise.resolve()
     })
 
     expect(selectDirectory).toHaveBeenCalledTimes(1)
-    expect(listCompositeBackgroundFiles).toHaveBeenNthCalledWith(1, 'D:/backgrounds', false)
-    expect(useCompositeV2Store.getState().backgroundFolder).toBe('D:/backgrounds')
+    expect(scanEnteredCompositeBackgroundFolder).toHaveBeenNthCalledWith(1, 'D:/backgrounds', false)
+    expect(findFolderAddressInputs(renderer!.root)[0]?.props.value).toBe('D:/backgrounds')
+    expect(useCompositeV2Store.getState().backgroundFolders).toEqual([])
     expect(useCompositeV2Store.getState().backgrounds).toEqual([])
 
     await act(async () => {
-      resolveFirstScan?.([
-        { path: 'D:/backgrounds/10.jpg', name: '10.jpg', relativeDir: '' },
-        { path: 'D:/backgrounds/2.jpg', name: '2.jpg', relativeDir: '' },
-        { path: 'D:/backgrounds/nested/1.jpg', name: '1.jpg', relativeDir: 'nested' },
-      ])
+      resolveFirstScan?.({
+        success: true,
+        folderPath: 'D:/backgrounds',
+        files: [
+          { path: 'D:/backgrounds/10.jpg', name: '10.jpg', relativeDir: '', width: 1, height: 1 },
+          { path: 'D:/backgrounds/2.jpg', name: '2.jpg', relativeDir: '', width: 1, height: 1 },
+          { path: 'D:/backgrounds/nested/1.jpg', name: '1.jpg', relativeDir: 'nested', width: 1, height: 1 },
+        ],
+      })
       await Promise.resolve()
     })
 
+    expect(useCompositeV2Store.getState().backgroundFolders).toEqual(['D:/backgrounds'])
     expect(useCompositeV2Store.getState().backgrounds.map((item) => item.path)).toEqual([
       'D:/backgrounds/2.jpg',
       'D:/backgrounds/10.jpg',
       'D:/backgrounds/nested/1.jpg',
     ])
 
-    const recursiveToggle = findInputByLabel(renderer!.root, 'Recursive backgrounds')
+    const recursiveToggle = findInputByLabel(renderer!.root, '包含子文件夹背景')
     await act(async () => {
       void recursiveToggle?.props.onChange({ target: { checked: true } })
       await Promise.resolve()
     })
 
-    expect(listCompositeBackgroundFiles).toHaveBeenNthCalledWith(2, 'D:/backgrounds', true)
+    expect(scanEnteredCompositeBackgroundFolder).toHaveBeenNthCalledWith(2, 'D:/backgrounds', true)
     expect(useCompositeV2Store.getState().recursiveBackgrounds).toBe(true)
 
     await act(async () => {
-      resolveSecondScan?.([
-        { path: 'D:/backgrounds/nested/b.jpg', name: 'b.jpg', relativeDir: 'nested' },
-      ])
+      resolveSecondScan?.({
+        success: true,
+        folderPath: 'D:/backgrounds',
+        files: [{ path: 'D:/backgrounds/nested/b.jpg', name: 'b.jpg', relativeDir: 'nested', width: 1, height: 1 }],
+      })
       await Promise.resolve()
     })
 
     expect(useCompositeV2Store.getState().backgrounds[0]?.path).toBe('D:/backgrounds/nested/b.jpg')
   })
 
-  it('keeps the selected folder, clears backgrounds, and shows feedback when scanning fails', async () => {
+  it('keeps the entered address visible, clears backgrounds, and shows feedback when scanning fails', async () => {
     const selectDirectory = vi.fn().mockResolvedValue('D:/backgrounds')
-    const listCompositeBackgroundFiles = vi.fn().mockRejectedValue(new Error('scan failed'))
+    const scanEnteredCompositeBackgroundFolder = vi.fn().mockResolvedValue({ success: false, error: 'scan failed' })
 
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
         isElectron: true,
         selectDirectory,
-        listCompositeBackgroundFiles,
+        scanEnteredCompositeBackgroundFolder,
         readImageFile: vi.fn().mockResolvedValue(null),
       },
     })
 
     useCompositeV2Store.setState({
-      backgroundFolder: 'D:/old',
-      backgrounds: [{ path: 'D:/old/a.jpg', name: 'a.jpg', relativeDir: '' }],
+      backgroundFolders: [],
+      backgrounds: [],
     })
 
     let renderer: ReturnType<typeof create>
@@ -168,10 +384,13 @@ describe('BatchExportTab', () => {
     mountedRenderers.push(renderer!)
 
     await act(async () => {
-      await findButtonByText(renderer!.root, '选择背景文件夹')?.props.onClick()
+      const btn = findButtonByLabel(renderer!.root, '浏览文件夹地址 1')
+      void btn?.props.onClick()
+      await Promise.resolve()
     })
 
-    expect(useCompositeV2Store.getState().backgroundFolder).toBe('D:/backgrounds')
+    expect(findFolderAddressInputs(renderer!.root)[0]?.props.value).toBe('D:/backgrounds')
+    expect(useCompositeV2Store.getState().backgroundFolders).toEqual([])
     expect(useCompositeV2Store.getState().backgrounds).toEqual([])
     expect(getNodeText(renderer!.root)).toContain('scan failed')
   })
@@ -202,8 +421,17 @@ describe('BatchExportTab', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const previewButton = findButtonByLabel(renderer!.root, 'Preview preset Preset A')
-    const includeCheckbox = findInputByLabel(renderer!.root, 'Include preset Preset A')
+    await act(async () => {
+      const toggleButton = renderer!.root.findAllByType('button').find(node => {
+        const text = getNodeText(node.parent?.parent as ReactTestInstance)
+        return text.includes('Group A') && node.props.className?.includes('p-0.5')
+      })
+      toggleButton?.props.onClick({ stopPropagation: () => {} })
+      await Promise.resolve()
+    })
+
+    const previewButton = renderer!.root.findAllByType('button').find((node: ReactTestInstance) => node.props['aria-label'] === `预览预设 ${presetA.name}`)
+    const includeCheckbox = renderer!.root.findAllByType('input').find((node: ReactTestInstance) => node.props.type === 'checkbox' && node.props['aria-label'] === `包含预设 ${presetA.name}`)
 
     expect(previewButton).toBeDefined()
     expect(includeCheckbox).toBeDefined()
@@ -223,11 +451,11 @@ describe('BatchExportTab', () => {
       outputRuleGroups,
       selectedPresetGroupId: group.id,
       selectedPreviewPresetId: presetA.id,
-      enabledPresetIdsForRun: [presetA.id, presetB.id],
-      backgroundFolder: 'D:/backgrounds',
+      enabledPresetIdsForRun: ['preset-a', 'preset-b'],
+      backgroundFolders: ['D:/backgrounds'],
       backgrounds: [
-        { path: 'D:/backgrounds/a.jpg', name: 'a.jpg', relativeDir: '' },
-        { path: 'D:/backgrounds/b.jpg', name: 'b.jpg', relativeDir: '' },
+        { path: 'D:/backgrounds/a.jpg', name: 'a.jpg', relativeDir: '', width: 1280, height: 720 },
+        { path: 'D:/backgrounds/b.jpg', name: 'b.jpg', relativeDir: '', width: 1280, height: 720 }
       ],
       previewHistory: ['D:/backgrounds/a.jpg'],
       previewHistoryIndex: 0,
@@ -248,22 +476,32 @@ describe('BatchExportTab', () => {
     })
     mountedRenderers.push(renderer!)
 
+    await act(async () => {
+      const toggleButton = renderer!.root.findAllByType('button').find(node => {
+        const text = getNodeText(node.parent?.parent as ReactTestInstance)
+        return text.includes('Group A') && node.props.className?.includes('p-0.5')
+      })
+      toggleButton?.props.onClick({ stopPropagation: () => {} })
+      await Promise.resolve()
+    })
+
     const startButton = findButtonByText(renderer!.root, '开始导出')
     expect(startButton?.props.disabled).toBe(true)
 
     await act(async () => {
-      await findButtonByLabel(renderer!.root, 'Random preview')?.props.onClick()
+      await findButtonByLabel(renderer!.root, '随机预览')?.props.onClick()
     })
 
     expect(useCompositeV2Store.getState().previewHistory).toEqual(['D:/backgrounds/a.jpg', 'D:/backgrounds/b.jpg'])
     expect(useCompositeV2Store.getState().previewHistoryIndex).toBe(1)
 
-    const presetBCheckbox = renderer!.root.findAllByType('input').find((node: ReactTestInstance) => node.props.type === 'checkbox' && node.props.checked === true && node.props.value === presetB.id)
+    const presetBCheckbox = renderer!.root.findAllByType('input').find((node: ReactTestInstance) => node.props.type === 'checkbox' && node.props['aria-label'] === `包含预设 ${presetB.name}`)
     act(() => {
       presetBCheckbox?.props.onChange({ target: { checked: false } })
     })
 
-    expect(useCompositeV2Store.getState().enabledPresetIdsForRun).toEqual([presetA.id])
+    expect(useCompositeV2Store.getState().enabledPresetIdsForRun).toEqual(['preset-a'])
+
     expect(findButtonByText(renderer!.root, '开始导出')?.props.disabled).toBe(false)
 
     await act(async () => {

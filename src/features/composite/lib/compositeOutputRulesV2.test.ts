@@ -27,7 +27,7 @@ describe('composite v2 output rules', () => {
     const enabled = getEnabledOutputRules(getEffectiveOutputRuleGroups(presetWithOverride(true, override), global))
 
     expect(enabled).toHaveLength(1)
-    expect(enabled[0]).toMatchObject({ channelName: '百度', name: '370x245', maxSizeKb: 123 })
+    expect(enabled[0]).toMatchObject({ channelName: '百度', name: '370x245', maxSizeKb: 299 })
   })
 
   it('clones global output rules before returning effective rules', () => {

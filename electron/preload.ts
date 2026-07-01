@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
   selectFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-file', { filters }),
+  selectFiles: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-files', { filters }),
   saveImage: (filePath: string, dataUrl: string) => ipcRenderer.invoke('fs:save-image', { filePath, dataUrl }),
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => ipcRenderer.invoke('composite:save-image', { filePath, dataUrl, maxSizeKb }),
   saveJson: (filePath: string, data: unknown) => ipcRenderer.invoke('fs:save-json', { filePath, data }),
@@ -14,8 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readImageFile: (filePath: string) => ipcRenderer.invoke('composite:read-image-file', { filePath }),
   listImageFiles: (dirPath: string) => ipcRenderer.invoke('composite:list-image-files', { dirPath }),
   listCompositeBackgroundFiles: (dirPath: string, recursive: boolean) => ipcRenderer.invoke('composite:list-background-files', { dirPath, recursive }),
+  scanEnteredCompositeBackgroundFolder: (dirPath: string, recursive: boolean) => ipcRenderer.invoke('composite:scan-entered-background-folder', { dirPath, recursive }),
   pickImageFile: (input: { path: string; mode: 'random' | 'sequential'; index: number }) => ipcRenderer.invoke('composite:pick-image-file', input),
   deleteCompositeFiles: (filePaths: string[]) => ipcRenderer.invoke('composite:delete-files', { filePaths }),
+  distributeFile: (input: { sourcePath: string; targetPath: string; mode: 'copy' | 'move'; appendRandomByte?: boolean }) => ipcRenderer.invoke('composite:distribute-file', input),
   readFileBuffer: (filePath: string) => ipcRenderer.invoke('fs:read-file-buffer', { filePath }),
   getDefaultPath: () => ipcRenderer.invoke('fs:get-default-path'),
   openInExplorer: (filePath: string) => ipcRenderer.invoke('fs:open-in-explorer', { filePath }),
@@ -28,6 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   restoreFromBackup: (backupPath: string, targetPath: string) => ipcRenderer.invoke('fs:restore-from-backup', { backupPath, targetPath }),
   deleteBackup: (backupPath: string) => ipcRenderer.invoke('fs:delete-backup', { backupPath }),
   saveZipBuffer: (filePath: string, buffer: ArrayBuffer) => ipcRenderer.invoke('fs:save-zip-buffer', { filePath, buffer }),
+  selectZipSavePath: (defaultName: string) => ipcRenderer.invoke('fs:select-zip-save-path', { defaultName }),
+  exportZipToPath: (request: unknown) => ipcRenderer.invoke('fs:export-zip', request),
+  deleteCacheImages: (filePaths: string[]) => ipcRenderer.invoke('store:delete-cache-images', { filePaths }),
+  reconcileCacheImages: (referencedFileNames: string[]) => ipcRenderer.invoke('store:reconcile-cache-images', { referencedFileNames }),
   getDesktopPath: () => ipcRenderer.invoke('fs:get-desktop-path'),
   onUpdateStatus: (callback: (status: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...args)

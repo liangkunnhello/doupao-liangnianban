@@ -17,14 +17,14 @@ function isValidNumber(value: number): boolean {
 
 function assertQualityRange(name: string, value: number): void {
   if (!isValidNumber(value) || value < 0 || value > 1) {
-    throw new Error(`invalid ${name}`)
+    throw new Error(`无效的 ${name}`)
   }
 }
 
 function measureSizeKb(estimateSizeKb: (quality: number) => number, quality: number): number {
   const sizeKb = estimateSizeKb(quality)
   if (!isValidNumber(sizeKb)) {
-    throw new Error('invalid estimateSizeKb result')
+    throw new Error('无效的 estimateSizeKb 返回值')
   }
   return sizeKb
 }
@@ -35,18 +35,18 @@ export function chooseJpegQuality(input: ChooseJpegQualityInput): ChooseJpegQual
   const iterations = input.iterations ?? 8
 
   if (!isValidNumber(input.maxSizeKb) || input.maxSizeKb < 0) {
-    throw new Error('invalid maxSizeKb')
+    throw new Error('无效的 maxSizeKb')
   }
   assertQualityRange('minQuality', minQuality)
   assertQualityRange('maxQuality', maxQuality)
   if (minQuality > maxQuality) {
-    throw new Error('invalid quality range')
+    throw new Error('无效的质量范围')
   }
   if (!Number.isInteger(iterations) || iterations < 1) {
-    throw new Error('invalid iterations')
+    throw new Error('无效的迭代次数')
   }
   if (typeof input.estimateSizeKb !== 'function') {
-    throw new Error('invalid estimateSizeKb')
+    throw new Error('无效的 estimateSizeKb')
   }
 
   const minSizeKb = measureSizeKb(input.estimateSizeKb, minQuality)

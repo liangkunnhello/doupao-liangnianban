@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'path'
-import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync } from 'fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync, openSync, readSync, closeSync, rmdirSync } from 'fs'
+import sizeOf from 'image-size'
+import { writeStreamingZip, type StreamingZipRequest } from './streaming-zip'
 
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
 const sessionAllowedRoots = new Set<string>()
@@ -103,6 +105,55 @@ function writeLocalSettings(settings: Record<string, unknown>): void {
   writeFileSync(getLocalSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8')
 }
 
+function getCacheImagesDir(): string | null {
+  const settings = readLocalSettings()
+  return typeof settings.localSavePath === 'string'
+    ? path.join(settings.localSavePath, 'cache-images')
+    : null
+}
+
+export function deleteCacheImageFiles(filePaths: string[]): { deleted: string[]; failed: string[] } {
+  const deleted: string[] = []
+  const failed: string[] = []
+  const cacheDir = getCacheImagesDir()
+  if (!cacheDir) return { deleted, failed: [...filePaths] }
+  for (const filePath of filePaths) {
+    try {
+      const normalized = normalizeFsPath(filePath)
+      if (!isPathInside(normalized, cacheDir) || path.dirname(normalized).toLowerCase() !== normalizeFsPath(cacheDir).toLowerCase()) {
+        throw new Error('outside cache')
+      }
+      if (existsSync(normalized)) {
+        if (!statSync(normalized).isFile()) throw new Error('not a file')
+        unlinkSync(normalized)
+      }
+      deleted.push(filePath)
+    } catch {
+      failed.push(filePath)
+    }
+  }
+  return { deleted, failed }
+}
+
+export function reconcileCacheImageFiles(referencedFileNames: string[]): { deleted: string[]; failed: string[] } {
+  const cacheDir = getCacheImagesDir()
+  if (!cacheDir || !existsSync(cacheDir)) return { deleted: [], failed: [] }
+  const keep = new Set(referencedFileNames)
+  return deleteCacheImageFiles(
+    readdirSync(cacheDir).filter((name) => !keep.has(name)).map((name) => path.join(cacheDir, name)),
+  )
+}
+
+function parseStreamingZipRequest(payload: unknown): StreamingZipRequest | null {
+  if (!payload || typeof payload !== 'object') return null
+  const value = payload as StreamingZipRequest
+  if (typeof value.destinationPath !== 'string' || typeof value.manifestJson !== 'string' || !Array.isArray(value.entries)) return null
+  if (!value.entries.every((entry) =>
+    entry && typeof entry.sourcePath === 'string' && typeof entry.archivePath === 'string' &&
+    (entry.mtime === undefined || typeof entry.mtime === 'number'))) return null
+  return value
+}
+
 function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
   const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
   if (!matches) throw new Error('Invalid data URL format')
@@ -121,12 +172,18 @@ type CompositeBackgroundFile = {
   path: string
   name: string
   relativeDir: string
+  width: number
+  height: number
 }
 
 type CompositeDeleteFilesResult = {
   deleted: string[]
   failed: string[]
 }
+
+type CompositeBackgroundScanResult =
+  | { success: true; folderPath: string; files: CompositeBackgroundFile[] }
+  | { success: false; error: string }
 
 type CompositeListBackgroundFilesPayload = {
   dirPath: string
@@ -146,6 +203,20 @@ function mimeFromImagePath(filePath: string): string {
 
 function normalizeRelativeDir(relativeDir: string): string {
   return relativeDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+function getImageSizeSync(filePath: string) {
+  let fd: number | null = null
+  try {
+    fd = openSync(filePath, 'r')
+    const buffer = Buffer.alloc(128 * 1024)
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0)
+    return sizeOf(buffer.subarray(0, bytesRead))
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* ignore */ }
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,10 +284,24 @@ export function listCompositeBackgroundFiles(dirPath: string, recursive: boolean
         const stat = lstatSync(filePath)
         if (stat.isSymbolicLink() || !stat.isFile() || !isCompositeImagePath(filePath)) return []
         assertAllowedRealPath(filePath)
+        
+        let width = 0
+        let height = 0
+        try {
+          const dimensions = getImageSizeSync(filePath)
+          width = dimensions.width || 0
+          height = dimensions.height || 0
+          console.log(`[image-size] ${filePath}: ${width}x${height}`)
+        } catch (err) {
+          console.error(`[image-size] failed for ${filePath}:`, err)
+        }
+
         return [{
           path: filePath,
           name,
           relativeDir: '',
+          width,
+          height,
         }]
       } catch {
         return []
@@ -224,6 +309,34 @@ export function listCompositeBackgroundFiles(dirPath: string, recursive: boolean
     })
   }
   return listCompositeBackgroundFilesRecursive(safeDirPath)
+}
+
+export function scanEnteredCompositeBackgroundFolder(
+  dirPath: string,
+  recursive: boolean,
+): CompositeBackgroundScanResult {
+  try {
+    const trimmedPath = dirPath.trim()
+    if (!trimmedPath) throw new Error('请输入文件夹地址。')
+    const normalizedPath = normalizeFsPath(trimmedPath)
+    if (!existsSync(normalizedPath)) throw new Error('文件夹不存在。')
+    const stat = lstatSync(normalizedPath)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error('地址不是可读取的文件夹。')
+    }
+    const realDirectory = realpathSync(normalizedPath)
+    addAllowedRoot(realDirectory)
+    return {
+      success: true,
+      folderPath: realDirectory,
+      files: listCompositeBackgroundFiles(realDirectory, recursive),
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '无法读取文件夹。',
+    }
+  }
 }
 
 function listCompositeBackgroundFilesRecursive(dirPath: string, rootPath = dirPath): CompositeBackgroundFile[] {
@@ -240,10 +353,24 @@ function listCompositeBackgroundFilesRecursive(dirPath: string, rootPath = dirPa
       if (!stat.isFile() || !isCompositeImagePath(filePath)) return []
       assertAllowedRealPath(filePath)
       const relativeDir = path.relative(rootPath, path.dirname(filePath))
+      
+      let width = 0
+      let height = 0
+      try {
+        const dimensions = getImageSizeSync(filePath)
+        width = dimensions.width || 0
+        height = dimensions.height || 0
+        console.log(`[image-size recursive] ${filePath}: ${width}x${height}`)
+      } catch (err) {
+        console.error(`[image-size recursive] failed for ${filePath}:`, err)
+      }
+
       return [{
         path: filePath,
         name: path.basename(filePath),
         relativeDir: relativeDir === '.' ? '' : normalizeRelativeDir(relativeDir),
+        width,
+        height,
       }]
     } catch {
       return []
@@ -285,6 +412,40 @@ export function handleDeleteCompositeFilesPayload(payload: unknown): CompositeDe
   return deleteCompositeFiles(filePaths)
 }
 
+export async function distributeCompositeFile(payload: unknown): Promise<{ success: boolean }> {
+  if (!payload || typeof payload !== 'object') return { success: false }
+  const input = payload as { sourcePath: string; targetPath: string; mode: 'copy' | 'move'; appendRandomByte?: boolean }
+  try {
+    const sourceSafe = assertAllowedRealPath(input.sourcePath)
+    if (!existsSync(sourceSafe)) return { success: false }
+    
+    // Add target to allowed roots before asserting
+    const targetDir = path.dirname(input.targetPath)
+    if (!getAllowedRoots().some((root) => targetDir.startsWith(root))) {
+      addAllowedRoot(targetDir)
+    }
+    const targetSafe = assertAllowedRealPath(input.targetPath)
+    
+    mkdirSync(path.dirname(targetSafe), { recursive: true })
+
+    if (input.mode === 'move') {
+      renameSync(sourceSafe, targetSafe)
+    } else {
+      copyFileSync(sourceSafe, targetSafe)
+    }
+
+    if (input.appendRandomByte) {
+      const buffer = Buffer.from([Math.floor(Math.random() * 256)])
+      appendFileSync(targetSafe, buffer)
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error('distributeCompositeFile error', error)
+    return { success: false }
+  }
+}
+
 export function registerIpcHandlers(): void {
   ipcMain.handle('fs:select-directory', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -307,6 +468,18 @@ export function registerIpcHandlers(): void {
     if (result.canceled || result.filePaths.length === 0) return null
     addAllowedRoot(path.dirname(result.filePaths[0]))
     return result.filePaths[0]
+  })
+
+  ipcMain.handle('fs:select-files', async (event, { filters }: { filters?: Electron.FileFilter[] }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openFile', 'multiSelections'],
+      title: '选择本地文件',
+      filters: filters ?? [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    result.filePaths.forEach(p => addAllowedRoot(path.dirname(p)))
+    return result.filePaths
   })
 
   ipcMain.handle('fs:save-image', async (_event, { filePath, dataUrl }: { filePath: string; dataUrl: string }) => {
@@ -360,6 +533,23 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('fs:remove-empty-dir', async (_event, { dirPath }: { dirPath: string }) => {
+    try {
+      const safeDirPath = assertAllowedPath(dirPath)
+      if (existsSync(safeDirPath) && statSync(safeDirPath).isDirectory()) {
+        const files = readdirSync(safeDirPath)
+        if (files.length === 0) {
+          rmdirSync(safeDirPath)
+          return true
+        }
+      }
+      return false
+    } catch (err) {
+      console.error('删除空目录失败:', err)
+      return false
+    }
+  })
+
   ipcMain.handle('fs:path-join', async (_event, { paths }: { paths: string[] }) => {
     return path.join(...paths)
   })
@@ -409,6 +599,12 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('composite:scan-entered-background-folder', async (_event, payload: unknown) => {
+    const parsed = parseCompositeListBackgroundFilesPayload(payload)
+    if (!parsed) return { success: false, error: '文件夹参数无效。' }
+    return scanEnteredCompositeBackgroundFolder(parsed.dirPath, parsed.recursive)
+  })
+
   ipcMain.handle('composite:pick-image-file', async (_event, { path: inputPath, mode, index }: { path: string; mode: 'random' | 'sequential'; index: number }) => {
     try {
       const safePath = assertAllowedPath(inputPath)
@@ -435,6 +631,8 @@ export function registerIpcHandlers(): void {
       return { deleted: [], failed: [] }
     }
   })
+
+  ipcMain.handle('composite:distribute-file', async (_event, payload) => distributeCompositeFile(payload))
 
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
     try {
@@ -645,6 +843,37 @@ export function registerIpcHandlers(): void {
     } catch (err) {
       console.error('保存 ZIP 文件失败:', err)
       return false
+    }
+  })
+
+  ipcMain.handle('fs:select-zip-save-path', async (event, payload: { defaultName?: unknown }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showSaveDialog(win!, {
+      title: '导出数据',
+      defaultPath: typeof payload?.defaultName === 'string' ? payload.defaultName : 'gpt-image-playground-backup.zip',
+      filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+    })
+    return result.canceled ? null : result.filePath ?? null
+  })
+
+  ipcMain.handle('store:delete-cache-images', (_event, payload: { filePaths?: unknown }) =>
+    deleteCacheImageFiles(Array.isArray(payload?.filePaths) ? payload.filePaths.filter((item): item is string => typeof item === 'string') : []))
+
+  ipcMain.handle('store:reconcile-cache-images', (_event, payload: { referencedFileNames?: unknown }) =>
+    reconcileCacheImageFiles(Array.isArray(payload?.referencedFileNames) ? payload.referencedFileNames.filter((item): item is string => typeof item === 'string') : []))
+
+  ipcMain.handle('fs:export-zip', async (_event, payload: unknown) => {
+    try {
+      const request = parseStreamingZipRequest(payload)
+      if (!request) return { success: false, error: '导出参数无效' }
+      const destinationPath = assertAllowedPath(request.destinationPath)
+      const entries = request.entries.map((entry) => ({
+        ...entry,
+        sourcePath: assertAllowedRealPath(entry.sourcePath),
+      }))
+      return writeStreamingZip({ ...request, destinationPath, entries })
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
 }

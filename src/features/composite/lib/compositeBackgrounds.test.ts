@@ -6,6 +6,8 @@ const image = (path: string, relativeDir = ''): CompositeV2BackgroundImage => ({
   path,
   name: path.split(/[\\/]/).pop() ?? path,
   relativeDir,
+  width: 100,
+  height: 100,
 })
 
 describe('composite backgrounds', () => {

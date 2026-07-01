@@ -1,11 +1,36 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BatchExportTab } from './components/BatchExportTab'
 import { PresetManagementTab } from './components/PresetManagementTab'
+import { useCompositeV2Store } from './storeV2'
 
 type CompositeTab = 'batch' | 'presets'
 
 export default function CompositeWorkspace() {
   const [tab, setTab] = useState<CompositeTab>('batch')
+  const canUndo = useCompositeV2Store((state) => state.canUndo)
+  const undo = useCompositeV2Store((state) => state.undo)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return
+      if (event.key.toLowerCase() !== 'z' || !canUndo) return
+      const target = event.target as HTMLElement | null
+      if (
+        target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || Boolean(target?.isContentEditable)
+      ) {
+        return
+      }
+      event.preventDefault()
+      undo()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [canUndo, undo])
 
   return (
     <main className="flex h-[calc(100vh-var(--app-header-offset))] min-h-0 flex-col overflow-hidden bg-gray-50 p-4 text-gray-900 dark:bg-gray-950 dark:text-gray-100">

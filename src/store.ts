@@ -50,6 +50,7 @@ import {
   getStoredFreshImageThumbnail,
   getAllImageIds,
   getAllImages,
+  getLegacyImageBatch,
   putImage,
   putImageThumbnail,
   deleteImage,
@@ -71,7 +72,9 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath } from './lib/localSave'
+import { migrateLegacyImages } from './lib/imageStorageMigration'
+import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -103,6 +106,7 @@ let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 let wordLibraryPersistenceReady = false
 let wordLibraryMigrationPending = false
+let imageStorageMigrationPromise: Promise<number> | null = null
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
@@ -3411,6 +3415,19 @@ async function recoverFalTask(taskId: string) {
   }
 }
 
+export function ensureImageStorageMigrated(): Promise<number> {
+  if (!isElectronEnv()) return Promise.resolve(0)
+  imageStorageMigrationPromise ??= migrateLegacyImages({
+    readBatch: getLegacyImageBatch,
+    saveImage: (image) => image.dataUrl ? saveRawCacheImageToLocal(image.id, image.dataUrl) : Promise.resolve(null),
+    replaceImage: putImage,
+  }).catch((error) => {
+    imageStorageMigrationPromise = null
+    throw error
+  })
+  return imageStorageMigrationPromise
+}
+
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
@@ -3766,6 +3783,9 @@ export async function initStore() {
         : {}),
     })
   }
+  void ensureImageStorageMigrated().catch((error) => {
+    console.error('图片存储迁移失败:', error)
+  })
 }
 
 /** 提交新任务（使用显式数据，不依赖全局状态） */
@@ -7159,6 +7179,15 @@ export interface ExportOptions {
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
   try {
+    if (isElectronEnv()) {
+      const exportedAt = Date.now()
+      const defaultName = `gpt-image-playground-backup_${formatExportFileTime(new Date(exportedAt))}.zip`
+      const filePath = await selectZipSavePath(defaultName)
+      if (!filePath) return
+      const success = await exportDataToPath(filePath, options)
+      if (success) useStore.getState().showToast('数据已导出', 'success')
+      return
+    }
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks || options.exportImages ? await getAllImages() : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
@@ -7276,105 +7305,58 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
 
 /** 导出数据到指定路径 */
 export async function exportDataToPath(filePath: string, options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<boolean> {
-  const tasks = options.exportTasks ? await getAllTasks() : []
-  const images = options.exportTasks || options.exportImages ? await getAllImages() : []
-  const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
-  const exportedAt = Date.now()
-  const imageCreatedAtFallback = new Map<string, number>()
-
-  if (options.exportTasks || options.exportImages) {
-    for (const task of tasks) {
-      for (const id of [
-        ...(task.inputImageIds || []),
-        ...(task.maskImageId ? [task.maskImageId] : []),
-        ...(task.outputImages || []),
-        ...(task.streamPartialImageIds || []),
-      ]) {
-        const prev = imageCreatedAtFallback.get(id)
-        if (prev == null || task.createdAt < prev) {
-          imageCreatedAtFallback.set(id, task.createdAt)
-        }
+  try {
+    if (!isElectronEnv()) throw new Error('当前环境不支持流式导出')
+    await ensureImageStorageMigrated()
+    const allTasks = options.exportTasks || options.exportImages ? await getAllTasks() : []
+    const state = useStore.getState()
+    const exportedAt = Date.now()
+    const ids = options.exportImages
+      ? collectReferencedExportImageIds(allTasks, state.agentConversations)
+      : []
+    const entries = await buildElectronImageExportEntries(ids, getImage)
+    const imageFiles: ExportData['imageFiles'] = {}
+    for (const entry of entries) {
+      const image = await getImage(entry.imageId)
+      imageFiles[entry.imageId] = {
+        path: entry.archivePath,
+        createdAt: entry.createdAt ?? exportedAt,
+        source: image?.source,
+        width: image?.width,
+        height: image?.height,
       }
     }
-  }
-
-  const imageFiles: ExportData['imageFiles'] = {}
-  const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
-  const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
-
-  if (options.exportTasks || options.exportImages) {
-    for (const img of images) {
-      const dataUrl = await ensureImageCached(img.id)
-      if (!dataUrl) continue
-
-      const { ext, bytes } = dataUrlToBytes(dataUrl)
-      const path = `images/${img.id}.${ext}`
-      const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
-      
-      if (options.exportImages) {
-        imageFiles[img.id] = {
-          path,
-          createdAt,
-          source: img.source,
-          width: img.width,
-          height: img.height,
-        }
-        zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
-      }
-
-      if (options.exportTasks) {
-        const thumbnail = await getImageThumbnail(img.id)
-        if (thumbnail?.thumbnailDataUrl) {
-          const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
-          const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
-          if (options.exportImages) {
-            imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
-            imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
-          }
-          thumbnailFiles[img.id] = {
-            path: thumbnailPath,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            thumbnailVersion: thumbnail.thumbnailVersion,
-          }
-          zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
-          cacheThumbnail(img.id, {
-            dataUrl: thumbnail.thumbnailDataUrl,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            thumbnailVersion: thumbnail.thumbnailVersion,
-          })
-        }
-      }
+    const manifest: ExportData = {
+      version: 3,
+      exportedAt: new Date(exportedAt).toISOString(),
+      ...(options.exportConfig ? {
+        settings: state.settings,
+        favoriteCollections: state.favoriteCollections,
+        defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
+        wordLibraryGroups: state.wordLibraryGroups,
+        wordLibraryEntries: state.wordLibraryEntries,
+      } : {}),
+      ...(options.exportTasks ? {
+        tasks: allTasks,
+        agentConversations: getPersistableAgentConversations(state.agentConversations),
+      } : {}),
+      ...(options.exportImages ? { imageFiles } : {}),
     }
+    const result = await exportZipToPath({
+      destinationPath: filePath,
+      manifestJson: JSON.stringify(manifest, null, 2),
+      entries: entries.map((entry) => ({
+        sourcePath: entry.sourcePath,
+        archivePath: entry.archivePath,
+        mtime: entry.createdAt,
+      })),
+    })
+    if (!result.success) throw new Error(result.error || '导出失败')
+    return true
+  } catch (error) {
+    useStore.getState().showToast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+    return false
   }
-
-  const manifest: ExportData = {
-    version: 3,
-    exportedAt: new Date(exportedAt).toISOString(),
-  }
-
-  if (options.exportConfig) {
-    manifest.settings = settings
-    manifest.favoriteCollections = favoriteCollections
-    manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
-    manifest.wordLibraryGroups = wordLibraryGroups
-    manifest.wordLibraryEntries = wordLibraryEntries
-  }
-  if (options.exportTasks) {
-    manifest.tasks = tasks
-    manifest.agentConversations = getPersistableAgentConversations(agentConversations)
-    manifest.thumbnailFiles = thumbnailFiles
-  }
-  if (options.exportImages) {
-    manifest.imageFiles = imageFiles
-  }
-
-  zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
-
-  const zipped = zipSync(zipFiles, { level: 6 })
-  const { saveZipToPath } = await import('./lib/localSave')
-  return saveZipToPath(filePath, zipped.buffer as ArrayBuffer)
 }
 
 /** 导入选项 */

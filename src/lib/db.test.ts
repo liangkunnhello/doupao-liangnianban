@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { batchGetImages } from './db'
+import { batchGetImages, getLegacyImageBatch } from './db'
 
 describe('batchGetImages', () => {
   afterEach(() => {
@@ -36,6 +36,47 @@ describe('batchGetImages', () => {
     expect([...result.keys()]).toEqual(['image-a', 'image-c'])
     expect(getCalls).toEqual(['image-a', 'image-c'])
     expect(getAll).not.toHaveBeenCalled()
+  })
+})
+
+describe('getLegacyImageBatch', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('returns a bounded batch and skips migrated records', async () => {
+    const values = [
+      { id: 'migrated', localPath: '/cache/a.png' },
+      { id: 'legacy-a', dataUrl: 'data:image/png;base64,YQ==' },
+      { id: 'metadata-only' },
+      { id: 'legacy-b', dataUrl: 'data:image/png;base64,Yg==' },
+      { id: 'legacy-c', dataUrl: 'data:image/png;base64,Yw==' },
+    ]
+    let index = 0
+    const request: any = {}
+    const cursor = {
+      get value() { return values[index] },
+      continue() {
+        index++
+        queueMicrotask(() => {
+          request.result = index < values.length ? cursor : null
+          request.onsuccess?.()
+        })
+      },
+    }
+    const store = {
+      openCursor: () => {
+        queueMicrotask(() => {
+          request.result = cursor
+          request.onsuccess?.()
+        })
+        return request
+      },
+    }
+    vi.stubGlobal('indexedDB', {
+      open: () => requestWithResult({ transaction: () => ({ objectStore: () => store }) }),
+    })
+
+    const result = await getLegacyImageBatch(2)
+    expect(result.map((image) => image.id)).toEqual(['legacy-a', 'legacy-b'])
   })
 })
 

@@ -1,6 +1,7 @@
 import { getEffectiveOutputRuleGroups, getEnabledOutputRules, type CompositeV2EnabledOutputRule } from './compositeOutputRulesV2'
 import type {
   CompositeV2BackgroundImage,
+  CompositeV2CustomVariable,
   CompositeV2FitMode,
   CompositeV2OutputRuleGroup,
   CompositeV2Preset,
@@ -10,14 +11,16 @@ import type {
 export type CompositeV2ExportSnapshotInput = {
   id: string
   date: string
-  backgroundFolder: string
+  backgroundFolders: string[]
   recursive: boolean
   backgrounds: CompositeV2BackgroundImage[]
   presets: CompositeV2Preset[]
   presetGroup: CompositeV2PresetGroup
   enabledPresetIds: string[]
   outputRuleGroups: CompositeV2OutputRuleGroup[]
+  smartMatchOrientation: boolean
   custom: string
+  customVariables: CompositeV2CustomVariable[]
   fitMode: CompositeV2FitMode
   preserveSourceDir: boolean
 }
@@ -48,16 +51,31 @@ export function expandCompositeExportItems(snapshot: CompositeV2ExportSnapshot):
     .map((presetId) => presetsById.get(presetId))
     .filter((preset): preset is CompositeV2Preset => Boolean(preset))
 
+  const getOrientation = (w: number, h: number) => Number(w) > Number(h) ? 'landscape' : Number(h) > Number(w) ? 'portrait' : 'square'
+
   return orderedPresets.flatMap((preset) => {
     const rules = getEnabledOutputRules(getEffectiveOutputRuleGroups(preset, snapshot.outputRuleGroups))
-    return rules.flatMap((rule) => snapshot.backgrounds.map((background, backgroundIndex) => ({
-      snapshotId: snapshot.id,
-      background,
-      preset,
-      outputRule: rule,
-      index: backgroundIndex + 1,
-      date: snapshot.date,
-      custom: snapshot.custom,
-    })))
+    return rules.flatMap((rule) => {
+      const ruleOrientation = getOrientation(rule.width, rule.height)
+      
+      return snapshot.backgrounds
+        .filter((background) => {
+          if (!snapshot.smartMatchOrientation) return true
+          // 智能比例匹配：横版配横版，竖版配竖版，方形配方形
+          const bgOrientation = getOrientation(background.width || 0, background.height || 0)
+          return bgOrientation === ruleOrientation
+        })
+        .map((background, backgroundIndex) => {
+          return {
+            snapshotId: snapshot.id,
+            background,
+            preset,
+            outputRule: rule,
+            index: backgroundIndex + 1,
+            date: snapshot.date,
+            custom: snapshot.custom,
+          }
+        })
+    })
   })
 }

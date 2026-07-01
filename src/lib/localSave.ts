@@ -4,6 +4,7 @@ import type { UpdateStatus } from '../hooks/useAutoUpdate'
 type ElectronAPI = {
   selectDirectory: () => Promise<string | null>
   selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
+  selectFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<string[] | null>
   saveImage: (filePath: string, dataUrl: string) => Promise<boolean>
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => Promise<boolean>
   saveJson: (filePath: string, data: unknown) => Promise<boolean>
@@ -14,9 +15,14 @@ type ElectronAPI = {
   readDir: (dirPath: string) => Promise<string[]>
   readImageFile: (filePath: string) => Promise<{ path: string; name: string; dataUrl: string } | null>
   listImageFiles: (dirPath: string) => Promise<{ path: string; name: string; dataUrl?: string }[]>
-  listCompositeBackgroundFiles?: (dirPath: string, recursive: boolean) => Promise<Array<{ path: string; name: string; relativeDir: string }>>
+  listCompositeBackgroundFiles?: (dirPath: string, recursive: boolean) => Promise<Array<{ path: string; name: string; relativeDir: string; width: number; height: number }>>
+  scanEnteredCompositeBackgroundFolder?: (dirPath: string, recursive: boolean) => Promise<
+    | { success: true; folderPath: string; files: Array<{ path: string; name: string; relativeDir: string; width: number; height: number }> }
+    | { success: false; error: string }
+  >
   pickImageFile: (input: { path: string; mode: 'random' | 'sequential'; index: number }) => Promise<{ path: string; name: string; dataUrl: string } | null>
   deleteCompositeFiles?: (filePaths: string[]) => Promise<{ deleted: string[]; failed: string[] }>
+  distributeFile?: (input: { sourcePath: string; targetPath: string; mode: 'copy' | 'move'; appendRandomByte?: boolean }) => Promise<{ success: boolean }>
   readFileBuffer: (filePath: string) => Promise<{ data: ArrayBuffer; name: string } | null>
   getDefaultPath: () => Promise<string>
   openInExplorer: (filePath: string) => Promise<void>
@@ -29,6 +35,10 @@ type ElectronAPI = {
   restoreFromBackup: (backupPath: string, targetPath: string) => Promise<boolean>
   deleteBackup: (backupPath: string) => Promise<boolean>
   saveZipBuffer: (filePath: string, buffer: ArrayBuffer) => Promise<boolean>
+  selectZipSavePath?: (defaultName: string) => Promise<string | null>
+  exportZipToPath?: (request: ElectronZipExportRequest) => Promise<{ success: boolean; error?: string }>
+  deleteCacheImages?: (filePaths: string[]) => Promise<{ deleted: string[]; failed: string[] }>
+  reconcileCacheImages?: (referencedFileNames: string[]) => Promise<{ deleted: string[]; failed: string[] }>
   getDesktopPath: () => Promise<string>
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   checkForUpdate: () => Promise<{ success: boolean; error?: string }>
@@ -36,6 +46,12 @@ type ElectronAPI = {
   installUpdate: () => Promise<{ success: boolean }>
   getAppVersion: () => Promise<string>
   isElectron: boolean
+}
+
+export type ElectronZipExportRequest = {
+  destinationPath: string
+  manifestJson: string
+  entries: Array<{ sourcePath: string; archivePath: string; mtime?: number }>
 }
 
 declare global {
@@ -430,6 +446,25 @@ export async function saveZipToPath(filePath: string, buffer: ArrayBuffer): Prom
   const api = getAPI()
   if (!api) return false
   return api.saveZipBuffer(filePath, buffer)
+}
+
+export async function exportZipToPath(request: ElectronZipExportRequest): Promise<{ success: boolean; error?: string }> {
+  const api = getAPI()
+  return api?.exportZipToPath ? api.exportZipToPath(request) : { success: false, error: '当前环境不支持流式导出' }
+}
+
+export async function selectZipSavePath(defaultName: string): Promise<string | null> {
+  return getAPI()?.selectZipSavePath?.(defaultName) ?? null
+}
+
+export async function deleteRawCacheImages(filePaths: string[]): Promise<void> {
+  const api = getAPI()
+  if (api?.deleteCacheImages && filePaths.length > 0) await api.deleteCacheImages(filePaths)
+}
+
+export async function reconcileRawCacheImages(referencedFileNames: string[]): Promise<void> {
+  const api = getAPI()
+  if (api?.reconcileCacheImages) await api.reconcileCacheImages(referencedFileNames)
 }
 
 export async function getDesktopPath(): Promise<string | null> {

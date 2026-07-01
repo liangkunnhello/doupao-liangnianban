@@ -1,5 +1,5 @@
 import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
-import { isElectron, saveRawCacheImageToLocal } from './localSave'
+import { deleteRawCacheImages, isElectron, saveRawCacheImageToLocal } from './localSave'
 
 const DB_NAME = 'gpt-image-playground'
 const DB_VERSION = 4
@@ -47,7 +47,7 @@ function dbTransaction<T>(
 ): Promise<T> {
   return openDB().then(
     (db) =>
-      new Promise((resolve, reject) => {
+      new Promise<T>((resolve, reject) => {
         const tx = db.transaction(storeName, mode)
         const store = tx.objectStore(storeName)
         const req = fn(store)
@@ -224,12 +224,33 @@ export function getAllImageIds(): Promise<string[]> {
   )
 }
 
+export function getLegacyImageBatch(limit: number): Promise<StoredImage[]> {
+  if (limit <= 0) return Promise.resolve([])
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_IMAGES, 'readonly').objectStore(STORE_IMAGES).openCursor()
+    const images: StoredImage[] = []
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) {
+        resolve(images)
+        return
+      }
+      const image = cursor.value as StoredImage
+      if (image.dataUrl && !image.localPath) images.push(image)
+      if (images.length >= limit) resolve(images)
+      else cursor.continue()
+    }
+    request.onerror = () => reject(request.error)
+  }))
+}
+
 export function putImage(image: StoredImage): Promise<IDBValidKey> {
   return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.put(image))
 }
 
-export function deleteImage(id: string): Promise<undefined> {
-  return openDB().then(
+export async function deleteImage(id: string): Promise<undefined> {
+  const image = await getImage(id)
+  await openDB().then(
     (db) =>
       new Promise((resolve, reject) => {
         const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
@@ -239,10 +260,13 @@ export function deleteImage(id: string): Promise<undefined> {
         tx.onerror = () => reject(tx.error)
       }),
   )
+  if (image?.localPath) await deleteRawCacheImages([image.localPath])
+  return undefined
 }
 
-export function clearImages(): Promise<undefined> {
-  return openDB().then(
+export async function clearImages(): Promise<undefined> {
+  const localPaths = await getAllLocalImagePaths()
+  await openDB().then(
     (db) =>
       new Promise((resolve, reject) => {
         const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
@@ -252,6 +276,23 @@ export function clearImages(): Promise<undefined> {
         tx.onerror = () => reject(tx.error)
       }),
   )
+  await deleteRawCacheImages(localPaths)
+  return undefined
+}
+
+export function getAllLocalImagePaths(): Promise<string[]> {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_IMAGES, 'readonly').objectStore(STORE_IMAGES).openCursor()
+    const paths: string[] = []
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return resolve(paths)
+      const localPath = (cursor.value as StoredImage).localPath
+      if (localPath) paths.push(localPath)
+      cursor.continue()
+    }
+    request.onerror = () => reject(request.error)
+  }))
 }
 
 // ===== Image hashing & dedup =====
@@ -343,11 +384,12 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
   return id
 }
 
-export function batchDeleteImages(ids: string[]): Promise<void> {
+export async function batchDeleteImages(ids: string[]): Promise<void> {
   if (ids.length === 0) return Promise.resolve()
-  return openDB().then(
+  const images = await batchGetImages(ids)
+  await openDB().then(
     (db) =>
-      new Promise((resolve, reject) => {
+      new Promise<void>((resolve, reject) => {
         const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
         const imageStore = tx.objectStore(STORE_IMAGES)
         const thumbStore = tx.objectStore(STORE_THUMBNAILS)
@@ -360,6 +402,7 @@ export function batchDeleteImages(ids: string[]): Promise<void> {
         tx.onabort = () => reject(tx.error)
       }),
   )
+  await deleteRawCacheImages([...images.values()].flatMap((image) => image.localPath ? [image.localPath] : []))
 }
 
 export function batchGetImages(ids: string[]): Promise<Map<string, StoredImage>> {

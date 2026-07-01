@@ -47,6 +47,8 @@ vi.mock('./lib/db', () => {
     getStoredFreshImageThumbnail: async (id: string) => thumbnails.get(id),
     getAllImageIds: async () => [...images.keys()],
     getAllImages: async () => [...images.values()],
+    getAllLocalImagePaths: async () => [...images.values()].flatMap((image) => image.localPath ? [image.localPath] : []),
+    getLegacyImageBatch: async () => [],
     putImage: async (image: StoredImage) => {
       images.set(image.id, image)
       return image.id
