@@ -69,6 +69,38 @@ describe('composite v2 store state factory', () => {
     expect(migrated.presets[0]?.customVariableValues).toEqual({ project: '全局项目' })
   })
 
+  it('preserves an explicit empty preset value map during normalization', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+    const migrated = migrateCompositeV2PersistedState({
+      presets: [preset],
+      customVariables: [{ id: 'project', name: 'project', value: '全局项目' }],
+    }, 3)
+
+    expect(migrated.presets[0]?.customVariableValues).toEqual({})
+  })
+
+  it('normalizes legacy naming fields while merging restored state', () => {
+    const current = createCompositeV2Store().getState()
+    const legacyPreset = {
+      ...createDefaultCompositeV2Preset(1),
+      namingTemplate: '{project}',
+      subfolderTemplate: undefined,
+      filenameTemplate: undefined,
+      customVariableValues: undefined,
+    }
+    const restored = mergeCompositeV2PersistedState({
+      ...getCompositeV2PersistedState(current),
+      presets: [legacyPreset],
+      customVariables: [{ id: 'project', name: 'project', value: '恢复项目' }],
+    }, current)
+
+    expect(restored.presets[0]).toMatchObject({
+      subfolderTemplate: '{project}',
+      filenameTemplate: '{project}',
+      customVariableValues: { project: '恢复项目' },
+    })
+  })
+
   it('creates batch state separate from persisted preset state', () => {
     const state = createCompositeV2StoreState()
 

@@ -245,7 +245,7 @@ export function mergeCompositeV2PersistedState(
 ): CompositeV2StoreState {
   if (!persistedState || typeof persistedState !== 'object') return currentState
 
-  const persisted = persistedState as Partial<CompositeV2PersistedState>
+  const persisted = migrateCompositeV2PersistedState(persistedState, 2) as Partial<CompositeV2PersistedState>
   const merged = {
     ...currentState,
     ...persisted,
@@ -293,7 +293,6 @@ export function migrateCompositeV2PersistedState(
     : collectLegacyCustomVariables(presets as Array<CompositeV2State['presets'][number] & {
       customVariables?: CompositeV2State['customVariables']
     }>)
-  const globalValues = Object.fromEntries(customVariables.map((variable) => [variable.name, variable.value]))
 
   return {
     ...legacyState,
@@ -304,7 +303,8 @@ export function migrateCompositeV2PersistedState(
         ...rest
       } = preset
       const customVariableValues = preset.customVariableValues
-        ?? Object.fromEntries(
+        ? { ...preset.customVariableValues }
+        : Object.fromEntries(
           (presetCustomVariables?.length ? presetCustomVariables : customVariables)
             .map((variable) => [variable.name, variable.value]),
         )
@@ -312,7 +312,7 @@ export function migrateCompositeV2PersistedState(
         ...rest,
         subfolderTemplate: preset.subfolderTemplate || preset.namingTemplate || DEFAULT_PRESET_SUBFOLDER_TEMPLATE,
         filenameTemplate: preset.filenameTemplate || preset.namingTemplate || DEFAULT_PRESET_FILENAME_TEMPLATE,
-        customVariableValues: { ...globalValues, ...customVariableValues },
+        customVariableValues,
       } as CompositeV2State['presets'][number]
     }),
   } as CompositeV2PersistedState
