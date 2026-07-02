@@ -64,6 +64,7 @@ export type CompositeV2ImageAssetRef =
   | { kind: 'internal'; path: string; originalPath?: string }
   | { kind: 'dataUrl'; dataUrl: string; name?: string }
   | { kind: 'project'; id: string }
+  | { kind: 'stored'; assetId: string; name?: string }
 
 export type CompositeV2MediaLayer = CompositeV2LayerBase & {
   type: 'image' | 'logo'
@@ -205,13 +206,17 @@ export type CompositeV2DistributionConfig = {
   modifyMd5: boolean
 }
 
-export type CompositeV2ProjectLogo = {
+type CompositeV2ProjectLogoBase = {
   id: string
   name: string
-  dataUrl: string
   width?: number
   height?: number
 }
+
+export type CompositeV2ProjectLogo = CompositeV2ProjectLogoBase & (
+  | { assetId: string; dataUrl?: never }
+  | { assetId?: never; dataUrl: string }
+)
 
 export type CompositeV2State = {
   logoLibraryPath: string

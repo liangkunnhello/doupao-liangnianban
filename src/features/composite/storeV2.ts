@@ -5,6 +5,7 @@ import { createPreviewHistory } from './lib/compositeBackgrounds'
 import { addCompositeHistoryRecord } from './lib/compositeExportHistoryV2'
 import { createDefaultCompositeV2State } from './lib/compositeV2Defaults'
 import { fitCompositeTextLayer } from './lib/compositeTextLayout'
+import { hasLegacyCompositeAssets, migrateLegacyCompositeAssets } from './lib/compositeAssetMigration'
 import type {
   CompositeV2BackgroundImage,
   CompositeV2ExportStatus,
@@ -76,7 +77,7 @@ type CompositeV2StoreActions = {
   redo: () => void
   setLogoLibraryPath: (path: string) => void
   setLogoOrder: (order: string[]) => void
-  addProjectLogos: (logos: { id: string; name: string; dataUrl: string }[]) => void
+  addProjectLogos: (logos: CompositeV2State['projectLogos']) => void
   removeProjectLogo: (id: string) => void
   renameProjectLogo: (id: string, name: string) => void
   setCustomVariables: (variables: CompositeV2State['customVariables']) => void
@@ -267,6 +268,15 @@ export function createCompositeV2Store(options: CreateCompositeV2StoreOptions = 
 }
 
 export const useCompositeV2Store = create<CompositeV2StoreState>()(createCompositeV2StoreInitializer())
+
+queueMicrotask(() => {
+  const state = useCompositeV2Store.getState()
+  if (!hasLegacyCompositeAssets(state)) return
+  void migrateLegacyCompositeAssets({
+    getState: useCompositeV2Store.getState,
+    setState: (patch) => useCompositeV2Store.setState(patch),
+  }).catch((error) => console.error('后期处理资源迁移失败:', error))
+})
 
 function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOptions = {}) {
   const pickRandomIndex = options.pickRandomIndex ?? defaultPickRandomIndex
