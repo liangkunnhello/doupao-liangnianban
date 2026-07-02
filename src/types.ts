@@ -585,6 +585,7 @@ export interface ExportData {
   }>
   compositeState?: CompositeV2PersistedSnapshot
   postprocessState?: import('./storePostprocess').PostprocessPersistedState
+  workspaceState?: WorkspaceBackupState
   compositeAssetFiles?: Record<string, {
     path: string
     createdAt: number
@@ -616,4 +617,27 @@ export interface WorkspaceTab {
   createdAt: number
   updatedAt: number
   order: number
+}
+
+export interface WorkspaceBackupTab {
+  id: string
+  name: string
+  groupId: string | null
+  prompt: string
+  inputImageIds: string[]
+  inputImageFolder: InputImageFolder | null
+  params: TaskParams
+  maskDraft: MaskDraft | null
+  maskEditorImageId: string | null
+  customOutputPath: string
+  taskIds: string[]
+  createdAt: number
+  updatedAt: number
+  order: number
+}
+
+export interface WorkspaceBackupState {
+  tabs: WorkspaceBackupTab[]
+  groups: WorkspaceTabGroup[]
+  activeTabId: string | null
 }
