@@ -1,4 +1,5 @@
 import { mapLayerPositionToCanvas, planBackgroundFit } from './compositeRenderPlan'
+import { getCompositeAssetObjectUrl } from './compositeAssets'
 import type { CompositeV2MediaLayer, CompositeV2Preset, CompositeV2FitMode, CompositeV2Stroke, CompositeV2TextLayer } from './compositeV2Types'
 
 type Size = { width: number; height: number }
@@ -67,9 +68,17 @@ async function resolveLayerImage(layer: CompositeV2MediaLayer) {
   if (layer.asset.kind === 'dataUrl' && layer.asset.dataUrl) {
     return loadImage(layer.asset.dataUrl)
   }
+  if (layer.asset.kind === 'stored') {
+    const objectUrl = await getCompositeAssetObjectUrl(layer.asset.assetId)
+    return objectUrl ? loadImage(objectUrl) : null
+  }
   if (layer.asset.kind === 'project') {
     const { useCompositeV2Store } = await import('../storeV2')
     const logo = useCompositeV2Store.getState().projectLogos.find(l => l.id === (layer.asset as any).id)
+    if (logo?.assetId) {
+      const objectUrl = await getCompositeAssetObjectUrl(logo.assetId)
+      return objectUrl ? loadImage(objectUrl) : null
+    }
     return logo?.dataUrl ? loadImage(logo.dataUrl) : null
   }
   const path = 'path' in layer.asset ? layer.asset.path : undefined

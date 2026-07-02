@@ -8,7 +8,9 @@ import {
   createDefaultCompositeV2PresetGroup,
 } from '../lib/compositeV2Defaults'
 import { createCompositeV2StoreState, useCompositeV2Store } from '../storeV2'
+import * as compositeAssets from '../lib/compositeAssets'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
+import { FloatingLogoLibrary } from './FloatingLogoLibrary'
 import { PresetManagementTab } from './PresetManagementTab'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -39,6 +41,37 @@ function findInputByAriaLabel(root: ReactTestInstance, label: string) {
 }
 
 describe('PresetManagementTab', () => {
+  it('stores imported LOGO bytes before adding metadata', async () => {
+    let resolveIds!: (ids: string[]) => void
+    vi.spyOn(compositeAssets, 'storeCompositeBlobs').mockReturnValue(new Promise((resolve) => {
+      resolveIds = resolve
+    }))
+    const files = {
+      0: new File(['logo'], 'logo.png', { type: 'image/png' }),
+      length: 1,
+      item: () => null,
+      [Symbol.iterator]: function* () { yield this[0] },
+    } as unknown as FileList
+    let renderer: ReturnType<typeof create>
+    await act(async () => { renderer = create(<PresetManagementTab />) })
+    mountedRenderers.push(renderer!)
+
+    let importing!: Promise<void>
+    act(() => {
+      importing = renderer!.root.findByType(FloatingLogoLibrary).props.onImportFiles(files)
+    })
+    expect(useCompositeV2Store.getState().projectLogos).toEqual([])
+
+    await act(async () => {
+      resolveIds(['asset-logo'])
+      await importing
+    })
+    expect(useCompositeV2Store.getState().projectLogos[0]).toMatchObject({
+      name: 'logo.png',
+      assetId: 'asset-logo',
+    })
+  })
+
   it('uses a stacked library rail beside a full preview workspace', () => {
     let renderer: ReturnType<typeof create>
     act(() => {

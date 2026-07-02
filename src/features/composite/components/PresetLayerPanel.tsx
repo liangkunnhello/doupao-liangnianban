@@ -24,6 +24,7 @@ function getAssetLabel(layer: CompositeV2Layer) {
     return layer.asset.path.split(/[\\/]/).pop() || layer.asset.path
   }
   if (layer.asset.kind === 'dataUrl') return layer.asset.name ?? 'Base64 图片'
+  if (layer.asset.kind === 'stored') return layer.asset.name ?? '项目图片'
   return '项目 LOGO'
 }
 

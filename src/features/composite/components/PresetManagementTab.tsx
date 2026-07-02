@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Plus, Trash2, ChevronRight, ChevronDown, Folder, FolderOpen, FileText } from 'lucide-react'
 import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import type { CompositeFsImage } from '../lib/compositeTypes'
+import {
+  dataUrlToCompositeBlob,
+  getCompositeAssetObjectUrl,
+  isCompositeAssetReferenced,
+  removeCompositeAsset,
+  storeCompositeBlobs,
+} from '../lib/compositeAssets'
 import { useCompositeV2Store } from '../storeV2'
 import { FloatingLogoLibrary } from './FloatingLogoLibrary'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
@@ -20,6 +27,7 @@ export function PresetManagementTab() {
   const [query, setQuery] = useState('')
   const [logoStatusText, setLogoStatusText] = useState('支持拖拽添加 LOGO。')
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
+  const [logoObjectUrls, setLogoObjectUrls] = useState<Record<string, string>>({})
   const [selectedLayerId, setSelectedLayerId] = useState('')
   const [editingGroupId, setEditingGroupId] = useState('')
   const [editingGroupName, setEditingGroupName] = useState('')
@@ -57,7 +65,7 @@ export function PresetManagementTab() {
     const assets = store.projectLogos?.map(logo => ({
       path: logo.id, // Use ID as path to satisfy CompositeFsImage interface
       name: logo.name,
-      dataUrl: logo.dataUrl,
+      dataUrl: logo.assetId ? logoObjectUrls[logo.assetId] : logo.dataUrl,
     })) || []
     
     if (!store.logoOrder || store.logoOrder.length === 0) return assets
@@ -67,7 +75,21 @@ export function PresetManagementTab() {
       const indexB = orderMap.get(b.path) ?? Infinity
       return indexA - indexB
     })
-  }, [store.projectLogos, store.logoOrder])
+  }, [logoObjectUrls, store.projectLogos, store.logoOrder])
+
+  useEffect(() => {
+    let active = true
+    const logos = store.projectLogos.filter((logo) => logo.assetId)
+    void Promise.all(logos.map(async (logo) => [
+      logo.assetId!,
+      await getCompositeAssetObjectUrl(logo.assetId!).catch(() => null),
+    ] as const))
+      .then((entries) => {
+        if (!active) return
+        setLogoObjectUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry[1]))))
+      })
+    return () => { active = false }
+  }, [store.projectLogos])
 
   useEffect(() => {
     try {
@@ -126,17 +148,15 @@ export function PresetManagementTab() {
     const paths = await window.electronAPI.selectFiles([{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'] }])
     if (paths && paths.length > 0) {
       let imported = 0
-      const newLogos: { id: string; name: string; dataUrl: string }[] = []
+      const names: string[] = []
+      const blobs: Blob[] = []
       for (const path of paths) {
         try {
           const fileName = path.split(/[\\/]/).pop() || 'logo.png'
           const payload = await window.electronAPI.readImageFile(path)
           if (payload?.dataUrl) {
-            newLogos.push({
-              id: `logo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              name: fileName,
-              dataUrl: payload.dataUrl,
-            })
+            names.push(fileName)
+            blobs.push(await dataUrlToCompositeBlob(payload.dataUrl))
             imported++
           }
         } catch (e) {
@@ -144,40 +164,52 @@ export function PresetManagementTab() {
         }
       }
       if (imported > 0) {
-        store.addProjectLogos(newLogos)
+        const assetIds = await storeCompositeBlobs(blobs)
+        store.addProjectLogos(names.map((name, index) => ({
+          id: `logo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name,
+          assetId: assetIds[index]!,
+        })))
       }
     }
   }
 
   async function importLogoFiles(files: FileList) {
     let imported = 0
-    const newLogos: { id: string; name: string; dataUrl: string }[] = []
+    const names: string[] = []
+    const blobs: Blob[] = []
     
     for (const file of Array.from(files)) {
       try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = (e) => resolve(e.target?.result as string)
-          reader.onerror = reject
-          reader.readAsDataURL(file)
-        })
-        newLogos.push({
-          id: `logo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: file.name,
-          dataUrl,
-        })
+        names.push(file.name)
+        blobs.push(file)
         imported++
       } catch (e) {
         console.error('Failed to import logo:', e)
       }
     }
     if (imported > 0) {
-      store.addProjectLogos(newLogos)
+      const assetIds = await storeCompositeBlobs(blobs)
+      store.addProjectLogos(names.map((name, index) => ({
+        id: `logo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name,
+        assetId: assetIds[index]!,
+      })))
     }
   }
 
   async function deleteLogoAsset(asset: CompositeFsImage) {
+    const logo = useCompositeV2Store.getState().projectLogos.find((item) => item.id === asset.path)
     store.removeProjectLogo(asset.path)
+    if (!logo?.assetId) return
+    const latest = useCompositeV2Store.getState()
+    if (!isCompositeAssetReferenced(latest, logo.assetId)) {
+      try {
+        await removeCompositeAsset(logo.assetId)
+      } catch (error) {
+        console.error('删除后期处理资源失败:', error)
+      }
+    }
   }
 
   async function renameLogoAsset(asset: CompositeFsImage, newName: string) {
@@ -698,9 +730,11 @@ export function PresetManagementTab() {
             onImportFiles={importLogoFiles}
             onPickAsset={(asset) => {
               if (!activePreset) return
+              const logo = store.projectLogos.find((item) => item.id === asset.path)
+              if (!logo?.assetId) return
               const layerId = store.replaceOrAddLogoLayer(
                 activePreset.id,
-                { kind: 'dataUrl', dataUrl: asset.dataUrl || '', name: asset.name },
+                { kind: 'stored', assetId: logo.assetId, name: logo.name },
                 selectedLayerId,
               )
               setSelectedLayerId(layerId)
