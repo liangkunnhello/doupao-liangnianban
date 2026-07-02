@@ -7,6 +7,38 @@ import { writeStreamingZip, type StreamingZipRequest } from './streaming-zip'
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
 const sessionAllowedRoots = new Set<string>()
 
+export function pruneBackupFiles(pathsByNewestFirst: string[], keep: number): void {
+  for (const filePath of pathsByNewestFirst.slice(Math.max(0, keep))) {
+    try {
+      unlinkSync(filePath)
+    } catch {
+      // Retention cleanup is best-effort and must not block the current save.
+    }
+  }
+}
+
+export function backupJsonHasData(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const root = value as Record<string, unknown>
+  const state = (root.state && typeof root.state === 'object' ? root.state : root) as Record<string, unknown>
+  const nonEmptyArray = (key: string) => Array.isArray(state[key]) && state[key].length > 0
+  const nonEmptyRecord = (key: string) => Boolean(
+    state[key] &&
+    typeof state[key] === 'object' &&
+    !Array.isArray(state[key]) &&
+    Object.keys(state[key] as Record<string, unknown>).length > 0,
+  )
+  return (
+    nonEmptyArray('tasks') ||
+    nonEmptyArray('agentConversations') ||
+    nonEmptyArray('workspaceTabs') ||
+    nonEmptyArray('favoriteCollections') ||
+    nonEmptyArray('wordLibraryEntries') ||
+    nonEmptyRecord('settings') ||
+    nonEmptyRecord('agentInputDrafts')
+  )
+}
+
 function getLocalSettingsPath(): string {
   return path.join(app.getPath('userData'), LOCAL_SETTINGS_FILE)
 }
@@ -752,9 +784,7 @@ export function registerIpcHandlers(): void {
             .map((name) => ({ name, fullPath: path.join(backupDir, name) }))
             .filter((f) => f.name.startsWith(baseName + '-'))
             .sort((a, b) => statSync(b.fullPath).mtimeMs - statSync(a.fullPath).mtimeMs)
-          for (let i = 30; i < backups.length; i++) {
-            try { writeFileSync(backups[i].fullPath, '') } catch { }
-          }
+          pruneBackupFiles(backups.map((backup) => backup.fullPath), 30)
         } catch (backupErr) {
           console.error('自动备份失败（不影响写入）:', backupErr)
         }
@@ -799,11 +829,7 @@ export function registerIpcHandlers(): void {
       const safeBackupPath = assertAllowedPath(backupPath)
       if (!existsSync(safeBackupPath)) return false
       const content = readFileSync(safeBackupPath, 'utf-8')
-      const data = JSON.parse(content)
-      const state = data?.state ?? data
-      const hasTasks = Array.isArray(state?.tasks) && state.tasks.length > 0
-      const hasConversations = Array.isArray(state?.agentConversations) && state.agentConversations.length > 0
-      return hasTasks || hasConversations
+      return backupJsonHasData(JSON.parse(content))
     } catch (err) {
       return false
     }

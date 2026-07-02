@@ -36,6 +36,7 @@ const UpdateReleaseNotesModal = React.lazy(() => import('./components/UpdateRele
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 let customProviderConfigUrlImportStarted = false
+let storeInitializationPromise: Promise<void> | null = null
 
 export default function App() {
   const appMode = useStore((s) => s.appMode)
@@ -83,7 +84,7 @@ export default function App() {
     if (!(window as unknown as Record<string, unknown>).__storeInitialized) {
       (window as unknown as Record<string, unknown>).__storeInitialized = true
       const startupModePromise = window.electronAPI?.getStartupMode?.() ?? Promise.resolve({ safeMode: false })
-      startupModePromise.then(({ safeMode }) => {
+      storeInitializationPromise = startupModePromise.then(({ safeMode }) => {
         setStartupSafeMode(safeMode)
         return initStore({ safeMode })
       }).catch((error) => {
@@ -93,6 +94,7 @@ export default function App() {
     }
 
     // 首次使用备份提醒
+    void (storeInitializationPromise ?? Promise.resolve()).then(() => {
     const state = useStore.getState()
     const MAX_BACKUP_REMINDERS = 3
     if (isElectronEnv() && !state.firstBackupReminderShown && state.backupReminderCount < MAX_BACKUP_REMINDERS && state.tasks.length === 0 && state.agentConversations.length === 0) {
@@ -182,6 +184,7 @@ export default function App() {
         })
       }
     }
+    })
   }, [])
 
   useEffect(() => {

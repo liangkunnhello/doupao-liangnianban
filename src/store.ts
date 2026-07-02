@@ -78,6 +78,8 @@ import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDat
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 import { ByteLruCache } from './lib/byteLruCache'
+import { sanitizeSettingsForBackup } from './lib/backupManifest'
+import { validateBackupArchive } from './lib/backupImport'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -7121,16 +7123,18 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
   }
 
   const manifest: ExportData = {
-    version: 3,
+    version: 4,
     exportedAt: new Date(exportedAt).toISOString(),
+    includesSecrets: options.includeSecrets === true,
   }
 
   if (options.exportConfig) {
-      manifest.settings = settings
+      manifest.settings = sanitizeSettingsForBackup(settings, options.includeSecrets === true)
       manifest.favoriteCollections = favoriteCollections
       manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
       manifest.wordLibraryGroups = wordLibraryGroups
       manifest.wordLibraryEntries = wordLibraryEntries
+      manifest.postprocessState = await getPostprocessBackupState()
     }
   if (options.exportTasks) {
     manifest.tasks = tasks
@@ -7152,6 +7156,7 @@ export interface ExportOptions {
   exportConfig?: boolean
   exportTasks?: boolean
   exportImages?: boolean
+  includeSecrets?: boolean
 }
 
 async function buildCompositeBackup() {
@@ -7184,6 +7189,11 @@ async function buildCompositeBackup() {
     }
   }
   return { compositeState, compositeAssetFiles, assets }
+}
+
+async function getPostprocessBackupState() {
+  const { getPostprocessPersistedState } = await import('./storePostprocess')
+  return getPostprocessPersistedState()
 }
 
 function getCompositeAssetExtension(type: string) {
@@ -7315,16 +7325,18 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
 
     const manifest: ExportData = {
-      version: 3,
+      version: 4,
       exportedAt: new Date(exportedAt).toISOString(),
+      includesSecrets: options.includeSecrets === true,
     }
 
     if (options.exportConfig) {
-      manifest.settings = settings
+      manifest.settings = sanitizeSettingsForBackup(settings, options.includeSecrets === true)
       manifest.favoriteCollections = favoriteCollections
       manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
       manifest.wordLibraryGroups = wordLibraryGroups
       manifest.wordLibraryEntries = wordLibraryEntries
+      manifest.postprocessState = await getPostprocessBackupState()
       manifest.compositeState = compositeBackup!.compositeState
       manifest.compositeAssetFiles = compositeBackup!.compositeAssetFiles
     }
@@ -7383,14 +7395,16 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
       }
     }
     const manifest: ExportData = {
-      version: 3,
+      version: 4,
       exportedAt: new Date(exportedAt).toISOString(),
+      includesSecrets: options.includeSecrets === true,
       ...(options.exportConfig ? {
-        settings: state.settings,
+        settings: sanitizeSettingsForBackup(state.settings, options.includeSecrets === true),
         favoriteCollections: state.favoriteCollections,
         defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
         wordLibraryGroups: state.wordLibraryGroups,
         wordLibraryEntries: state.wordLibraryEntries,
+        postprocessState: await getPostprocessBackupState(),
         compositeState: compositeBackup!.compositeState,
         compositeAssetFiles: compositeBackup!.compositeAssetFiles,
       } : {}),
@@ -7441,6 +7455,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
     if (!manifestBytes) throw new Error('ZIP 中缺少 manifest.json')
 
     const data: ExportData = JSON.parse(strFromU8(manifestBytes))
+    validateBackupArchive(data, unzipped, options)
 
     const importedImageIds: string[] = []
     
@@ -7522,6 +7537,10 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
     if (options.importConfig) {
       await restoreCompositeBackup(data, unzipped)
+      if (data.postprocessState) {
+        const { replacePostprocessPersistedState } = await import('./storePostprocess')
+        replacePostprocessPersistedState(data.postprocessState)
+      }
       const state = useStore.getState()
       
       if (data.settings) {

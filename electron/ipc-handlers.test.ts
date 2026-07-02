@@ -63,6 +63,37 @@ describe('ipc composite background filesystem helpers', () => {
     ])
   })
 
+  it('deletes backup files beyond the retention limit', async () => {
+    const mod = await import('./ipc-handlers')
+    const pruneBackupFiles = (mod as {
+      pruneBackupFiles?: (paths: string[], keep: number) => void
+    }).pruneBackupFiles
+    const backupPaths = Array.from({ length: 31 }, (_, index) => path.join(fixtureDir, `backup-${index}.json`))
+    backupPaths.forEach(writeFixtureFile)
+
+    expect(pruneBackupFiles).toBeTypeOf('function')
+    pruneBackupFiles!(backupPaths, 30)
+
+    expect(existsSync(backupPaths[29])).toBe(true)
+    expect(existsSync(backupPaths[30])).toBe(false)
+  })
+
+  it('recognizes current metadata-only state backups as usable', async () => {
+    const mod = await import('./ipc-handlers')
+    const backupJsonHasData = (mod as {
+      backupJsonHasData?: (value: unknown) => boolean
+    }).backupJsonHasData
+
+    expect(backupJsonHasData).toBeTypeOf('function')
+    expect(backupJsonHasData!({
+      state: {
+        settings: { backupInterval: 600 },
+        workspaceTabs: [{ id: 'tab-a' }],
+      },
+    })).toBe(true)
+    expect(backupJsonHasData!({ state: {} })).toBe(false)
+  })
+
   it('lists supported background files recursively with relative directories', async () => {
     const mod = await import('./ipc-handlers')
     const listCompositeBackgroundFiles = (mod as {

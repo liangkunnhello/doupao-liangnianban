@@ -560,6 +560,7 @@ export interface WordLibraryEntry {
 export interface ExportData {
   version: number
   exportedAt: string
+  includesSecrets?: boolean
   settings?: AppSettings
   tasks?: TaskRecord[]
   favoriteCollections?: FavoriteCollection[]
@@ -583,6 +584,7 @@ export interface ExportData {
     thumbnailVersion?: number
   }>
   compositeState?: CompositeV2PersistedSnapshot
+  postprocessState?: import('./storePostprocess').PostprocessPersistedState
   compositeAssetFiles?: Record<string, {
     path: string
     createdAt: number

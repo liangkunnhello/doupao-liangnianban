@@ -147,3 +147,18 @@ export const usePostprocessStore = create<PostprocessState>()(
     }
   )
 )
+
+export type PostprocessPersistedState = Pick<PostprocessState, 'templates' | 'rules' | 'groups'>
+
+export function getPostprocessPersistedState(): PostprocessPersistedState {
+  const { templates, rules, groups } = usePostprocessStore.getState()
+  return { templates, rules, groups }
+}
+
+export function replacePostprocessPersistedState(snapshot: PostprocessPersistedState): void {
+  usePostprocessStore.setState({
+    templates: Array.isArray(snapshot.templates) ? snapshot.templates : [],
+    rules: Array.isArray(snapshot.rules) ? snapshot.rules : [],
+    groups: Array.isArray(snapshot.groups) ? snapshot.groups : [],
+  })
+}
