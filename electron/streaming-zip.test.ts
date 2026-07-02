@@ -45,4 +45,22 @@ describe('writeStreamingZip', () => {
     expect(existsSync(destinationPath)).toBe(false)
     expect(existsSync(`${destinationPath}.partial`)).toBe(false)
   })
+
+  it('writes inline composite asset bytes', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'stream-zip-'))
+    dirs.push(dir)
+    const destinationPath = path.join(dir, 'backup.zip')
+
+    expect(await writeStreamingZip({
+      destinationPath,
+      manifestJson: '{}',
+      entries: [{
+        archivePath: 'composite-assets/asset-a.png',
+        data: new Uint8Array([1, 2, 3]),
+      }],
+    })).toEqual({ success: true })
+
+    const archive = unzipSync(readFileSync(destinationPath))
+    expect([...archive['composite-assets/asset-a.png']]).toEqual([1, 2, 3])
+  })
 })

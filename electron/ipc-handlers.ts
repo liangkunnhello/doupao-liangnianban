@@ -148,9 +148,12 @@ function parseStreamingZipRequest(payload: unknown): StreamingZipRequest | null 
   if (!payload || typeof payload !== 'object') return null
   const value = payload as StreamingZipRequest
   if (typeof value.destinationPath !== 'string' || typeof value.manifestJson !== 'string' || !Array.isArray(value.entries)) return null
-  if (!value.entries.every((entry) =>
-    entry && typeof entry.sourcePath === 'string' && typeof entry.archivePath === 'string' &&
-    (entry.mtime === undefined || typeof entry.mtime === 'number'))) return null
+  if (!value.entries.every((entry) => {
+    if (!entry || typeof entry.archivePath !== 'string' || (entry.mtime !== undefined && typeof entry.mtime !== 'number')) return false
+    const hasSourcePath = 'sourcePath' in entry && typeof entry.sourcePath === 'string'
+    const hasData = 'data' in entry && entry.data instanceof Uint8Array
+    return hasSourcePath !== hasData
+  })) return null
   return value
 }
 
@@ -867,10 +870,9 @@ export function registerIpcHandlers(): void {
       const request = parseStreamingZipRequest(payload)
       if (!request) return { success: false, error: '导出参数无效' }
       const destinationPath = assertAllowedPath(request.destinationPath)
-      const entries = request.entries.map((entry) => ({
-        ...entry,
-        sourcePath: assertAllowedRealPath(entry.sourcePath),
-      }))
+      const entries = request.entries.map((entry) => 'sourcePath' in entry
+        ? { ...entry, sourcePath: assertAllowedRealPath(entry.sourcePath) }
+        : entry)
       return writeStreamingZip({ ...request, destinationPath, entries })
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

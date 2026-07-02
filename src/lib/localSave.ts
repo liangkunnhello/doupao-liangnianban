@@ -51,7 +51,10 @@ type ElectronAPI = {
 export type ElectronZipExportRequest = {
   destinationPath: string
   manifestJson: string
-  entries: Array<{ sourcePath: string; archivePath: string; mtime?: number }>
+  entries: Array<
+    | { sourcePath: string; archivePath: string; mtime?: number }
+    | { data: Uint8Array; archivePath: string; mtime?: number }
+  >
 }
 
 declare global {

@@ -3,10 +3,12 @@ import path from 'path'
 import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from 'fflate'
 
 export type StreamingZipEntry = {
-  sourcePath: string
   archivePath: string
   mtime?: number
-}
+} & (
+  | { sourcePath: string; data?: never }
+  | { sourcePath?: never; data: Uint8Array }
+)
 
 export type StreamingZipRequest = {
   destinationPath: string
@@ -15,7 +17,9 @@ export type StreamingZipRequest = {
 }
 
 function validArchivePath(value: string) {
-  return value.startsWith('images/') && !value.includes('\\') && !value.split('/').includes('..')
+  return (value.startsWith('images/') || value.startsWith('composite-assets/'))
+    && !value.includes('\\')
+    && !value.split('/').includes('..')
 }
 
 export async function writeStreamingZip(request: StreamingZipRequest): Promise<{ success: boolean; error?: string }> {
@@ -23,7 +27,7 @@ export async function writeStreamingZip(request: StreamingZipRequest): Promise<{
   try {
     for (const entry of request.entries) {
       if (!validArchivePath(entry.archivePath)) throw new Error(`无效 ZIP 路径：${entry.archivePath}`)
-      if (!existsSync(entry.sourcePath) || !statSync(entry.sourcePath).isFile()) {
+      if ('sourcePath' in entry && (!existsSync(entry.sourcePath) || !statSync(entry.sourcePath).isFile())) {
         throw new Error(`源文件不存在：${entry.sourcePath}`)
       }
     }
@@ -66,6 +70,10 @@ export async function writeStreamingZip(request: StreamingZipRequest): Promise<{
             entry.mtime = new Date(item.mtime)
           }
           zip.add(entry)
+          if ('data' in item) {
+            entry.push(item.data, true)
+            continue
+          }
           await new Promise<void>((done, failed) => {
             active = createReadStream(item.sourcePath)
             active.on('data', (chunk) => entry.push(new Uint8Array(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)), false))

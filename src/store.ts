@@ -58,6 +58,8 @@ import {
   storeImage,
   batchDeleteImages,
   batchGetImages,
+  batchGetCompositeAssets,
+  putCompositeAssets,
   batchPutTasks,
 } from './lib/db'
 import { callImageApi } from './lib/api'
@@ -7176,6 +7178,74 @@ export interface ExportOptions {
   exportImages?: boolean
 }
 
+async function buildCompositeBackup() {
+  const [
+    { useCompositeV2Store, getCompositeV2PersistedState },
+    { collectCompositeAssetIds },
+    { migrateLegacyCompositeAssets },
+  ] = await Promise.all([
+    import('./features/composite/storeV2'),
+    import('./features/composite/lib/compositeAssets'),
+    import('./features/composite/lib/compositeAssetMigration'),
+  ])
+  await migrateLegacyCompositeAssets({
+    getState: useCompositeV2Store.getState,
+    setState: (patch) => useCompositeV2Store.setState(patch),
+  })
+  const compositeState = getCompositeV2PersistedState(useCompositeV2Store.getState())
+  const ids = collectCompositeAssetIds(compositeState)
+  const assets = await batchGetCompositeAssets(ids)
+  for (const id of ids) {
+    if (!assets.has(id)) throw new Error(`后期处理资源 ${id} 不存在`)
+  }
+  const compositeAssetFiles: NonNullable<ExportData['compositeAssetFiles']> = {}
+  for (const id of ids) {
+    const asset = assets.get(id)!
+    compositeAssetFiles[id] = {
+      path: `composite-assets/${id}.${getCompositeAssetExtension(asset.blob.type)}`,
+      createdAt: asset.createdAt,
+      type: asset.blob.type || 'application/octet-stream',
+    }
+  }
+  return { compositeState, compositeAssetFiles, assets }
+}
+
+function getCompositeAssetExtension(type: string) {
+  if (type === 'image/jpeg') return 'jpg'
+  if (type === 'image/webp') return 'webp'
+  if (type === 'image/svg+xml') return 'svg'
+  return 'png'
+}
+
+async function restoreCompositeBackup(
+  data: ExportData,
+  unzipped: Record<string, Uint8Array>,
+): Promise<void> {
+  if (!data.compositeState) return
+
+  const [{ collectCompositeAssetIds }, { replaceCompositeV2PersistedState }] = await Promise.all([
+    import('./features/composite/lib/compositeAssets'),
+    import('./features/composite/storeV2'),
+  ])
+  const ids = collectCompositeAssetIds(data.compositeState)
+  const assets = ids.map((id) => {
+    const info = data.compositeAssetFiles?.[id]
+    if (!info) throw new Error(`后期处理资源 ${id} 缺少备份索引`)
+    const bytes = unzipped[info.path]
+    if (!bytes) throw new Error(`后期处理资源 ${id} 缺少二进制文件`)
+    return {
+      id,
+      blob: new Blob([
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      ], { type: info.type }),
+      createdAt: info.createdAt,
+    }
+  })
+
+  await putCompositeAssets(assets)
+  replaceCompositeV2PersistedState(data.compositeState)
+}
+
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
   try {
@@ -7213,6 +7283,13 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const imageFiles: ExportData['imageFiles'] = {}
     const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
     const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
+    const compositeBackup = options.exportConfig ? await buildCompositeBackup() : null
+    if (compositeBackup) {
+      for (const [id, asset] of compositeBackup.assets) {
+        const info = compositeBackup.compositeAssetFiles[id]!
+        zipFiles[info.path] = [new Uint8Array(await asset.blob.arrayBuffer()), { mtime: new Date(info.createdAt) }]
+      }
+    }
 
     if (options.exportTasks || options.exportImages) {
       for (const img of images) {
@@ -7272,6 +7349,8 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
       manifest.wordLibraryGroups = wordLibraryGroups
       manifest.wordLibraryEntries = wordLibraryEntries
+      manifest.compositeState = compositeBackup!.compositeState
+      manifest.compositeAssetFiles = compositeBackup!.compositeAssetFiles
     }
     if (options.exportTasks) {
       manifest.tasks = tasks
@@ -7311,6 +7390,7 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
     const allTasks = options.exportTasks || options.exportImages ? await getAllTasks() : []
     const state = useStore.getState()
     const exportedAt = Date.now()
+    const compositeBackup = options.exportConfig ? await buildCompositeBackup() : null
     const ids = options.exportImages
       ? collectReferencedExportImageIds(allTasks, state.agentConversations)
       : []
@@ -7335,6 +7415,8 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
         defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
         wordLibraryGroups: state.wordLibraryGroups,
         wordLibraryEntries: state.wordLibraryEntries,
+        compositeState: compositeBackup!.compositeState,
+        compositeAssetFiles: compositeBackup!.compositeAssetFiles,
       } : {}),
       ...(options.exportTasks ? {
         tasks: allTasks,
@@ -7345,11 +7427,18 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
     const result = await exportZipToPath({
       destinationPath: filePath,
       manifestJson: JSON.stringify(manifest, null, 2),
-      entries: entries.map((entry) => ({
-        sourcePath: entry.sourcePath,
-        archivePath: entry.archivePath,
-        mtime: entry.createdAt,
-      })),
+      entries: [
+        ...entries.map((entry) => ({
+          sourcePath: entry.sourcePath,
+          archivePath: entry.archivePath,
+          mtime: entry.createdAt,
+        })),
+        ...(compositeBackup ? await Promise.all([...compositeBackup.assets].map(async ([id, asset]) => ({
+          archivePath: compositeBackup.compositeAssetFiles[id]!.path,
+          data: new Uint8Array(await asset.blob.arrayBuffer()),
+          mtime: asset.createdAt,
+        }))) : []),
+      ],
     })
     if (!result.success) throw new Error(result.error || '导出失败')
     return true
@@ -7456,6 +7545,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
     }
 
     if (options.importConfig) {
+      await restoreCompositeBackup(data, unzipped)
       const state = useStore.getState()
       
       if (data.settings) {

@@ -3,12 +3,13 @@ import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultScheduleRows } from './lib/schedule'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
+import type { AgentConversation, ExportData, StoredCompositeAsset, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 vi.mock('./lib/db', () => {
   const tasks = new Map<string, TaskRecord>()
   const images = new Map<string, StoredImage>()
   const thumbnails = new Map<string, StoredImageThumbnail>()
+  const compositeAssets = new Map<string, StoredCompositeAsset>()
   const agentConversations = new Map<string, AgentConversation>()
   let imageSeq = 0
 
@@ -84,6 +85,21 @@ vi.mock('./lib/db', () => {
       }
       return map
     },
+    getCompositeAsset: async (id: string) => compositeAssets.get(id),
+    putCompositeAssets: async (assets: StoredCompositeAsset[]) => {
+      for (const asset of assets) compositeAssets.set(asset.id, asset)
+    },
+    batchGetCompositeAssets: async (ids: string[]) => {
+      const map = new Map<string, StoredCompositeAsset>()
+      for (const id of ids) {
+        const asset = compositeAssets.get(id)
+        if (asset) map.set(id, asset)
+      }
+      return map
+    },
+    deleteCompositeAsset: async (id: string) => {
+      compositeAssets.delete(id)
+    },
     batchPutTasks: async (taskList: TaskRecord[]) => {
       for (const task of taskList) tasks.set(task.id, task)
     },
@@ -117,7 +133,7 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
@@ -186,8 +202,8 @@ function workspaceTab(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
   }
 }
 
-function importFile(data: ExportData): File {
-  const zipped = zipSync({ 'manifest.json': strToU8(JSON.stringify(data)) })
+function importFile(data: ExportData, files: Record<string, Uint8Array> = {}): File {
+  const zipped = zipSync({ 'manifest.json': strToU8(JSON.stringify(data)), ...files })
   const buffer = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength)
   return { arrayBuffer: async () => buffer } as File
 }
@@ -1251,6 +1267,50 @@ describe('data import', () => {
       showToast: vi.fn(),
     })
     await clearAgentConversations()
+  })
+
+  it('restores composite assets before replacing the composite store snapshot', async () => {
+    const {
+      createCompositeV2StoreState,
+      getCompositeV2PersistedState,
+      useCompositeV2Store,
+    } = await import('./features/composite/storeV2')
+    useCompositeV2Store.persist.setOptions({
+      storage: {
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      },
+    })
+    const assetId = 'composite-asset-a'
+    const assetPath = `composite-assets/${assetId}.png`
+    const assetBytes = new Uint8Array([1, 2, 3, 4])
+    const snapshot = {
+      ...getCompositeV2PersistedState(createCompositeV2StoreState() as ReturnType<typeof useCompositeV2Store.getState>),
+      projectLogos: [{ id: 'logo-a', name: 'Logo A', assetId }],
+    }
+    useCompositeV2Store.setState({ projectLogos: [] })
+
+    const imported = await importData(importFile({
+      version: 3,
+      exportedAt: new Date(0).toISOString(),
+      compositeState: snapshot,
+      compositeAssetFiles: {
+        [assetId]: {
+          path: assetPath,
+          createdAt: 123,
+          type: 'image/png',
+        },
+      },
+    }, { [assetPath]: assetBytes }), { importConfig: true, importTasks: false })
+
+    const storedAsset = await getCompositeAsset(assetId)
+    expect(imported).toBe(true)
+    expect(useCompositeV2Store.getState().projectLogos).toEqual([
+      { id: 'logo-a', name: 'Logo A', assetId },
+    ])
+    expect(storedAsset?.createdAt).toBe(123)
+    expect(new Uint8Array(await storedAsset!.blob.arrayBuffer())).toEqual(assetBytes)
   })
 
   it('restores favorite collections and default collection when importing task data', async () => {

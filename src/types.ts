@@ -1,5 +1,7 @@
 // ===== 设置 =====
 
+import type { CompositeV2PersistedSnapshot } from './features/composite/lib/compositeV2Types'
+
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent' | 'postprocess'
 export type ThemeMode = 'light' | 'dark'
@@ -579,6 +581,12 @@ export interface ExportData {
     width?: number
     height?: number
     thumbnailVersion?: number
+  }>
+  compositeState?: CompositeV2PersistedSnapshot
+  compositeAssetFiles?: Record<string, {
+    path: string
+    createdAt: number
+    type: string
   }>
 }
 

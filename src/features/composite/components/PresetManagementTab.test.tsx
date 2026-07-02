@@ -46,11 +46,12 @@ describe('PresetManagementTab', () => {
     vi.spyOn(compositeAssets, 'storeCompositeBlobs').mockReturnValue(new Promise((resolve) => {
       resolveIds = resolve
     }))
+    const file = new File(['logo'], 'logo.png', { type: 'image/png' })
     const files = {
-      0: new File(['logo'], 'logo.png', { type: 'image/png' }),
+      0: file,
       length: 1,
       item: () => null,
-      [Symbol.iterator]: function* () { yield this[0] },
+      [Symbol.iterator]: function* () { yield file },
     } as unknown as FileList
     let renderer: ReturnType<typeof create>
     await act(async () => { renderer = create(<PresetManagementTab />) })

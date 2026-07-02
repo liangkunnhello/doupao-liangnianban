@@ -235,3 +235,8 @@ export type CompositeV2State = {
   enabledPresetIdsForRun?: string[]
   smartMatchOrientation?: boolean
 }
+
+export type CompositeV2PersistedSnapshot = CompositeV2State & {
+  selectedPresetGroupId?: string
+  selectedPreviewPresetId?: string
+}

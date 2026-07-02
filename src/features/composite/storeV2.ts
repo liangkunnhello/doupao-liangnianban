@@ -16,6 +16,7 @@ import type {
   CompositeV2Layer,
   CompositeV2OutputSizeRule,
   CompositeV2OutputRuleGroup,
+  CompositeV2PersistedSnapshot,
   CompositeV2SuccessItem,
   CompositeV2State,
 } from './lib/compositeV2Types'
@@ -133,10 +134,7 @@ type CompositeV2StoreActions = {
 
 export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2UndoState & CompositeV2State & CompositeV2StoreActions
 
-type CompositeV2PersistedState = CompositeV2State & {
-  selectedPresetGroupId?: string
-  selectedPreviewPresetId?: string
-}
+export type CompositeV2PersistedState = CompositeV2PersistedSnapshot
 
 export type CreateCompositeV2StoreOptions = {
   pickRandomIndex?: (length: number) => number
@@ -261,6 +259,11 @@ export function mergeCompositeV2PersistedState(
     selectedPreviewPresetId,
     enabledPresetIdsForRun: validEnabledPresetIds.length > 0 ? validEnabledPresetIds : groupPresetIds,
   }
+}
+
+export function replaceCompositeV2PersistedState(snapshot: CompositeV2PersistedState): void {
+  const merged = mergeCompositeV2PersistedState(snapshot, useCompositeV2Store.getState())
+  useCompositeV2Store.setState(getCompositeV2PersistedState(merged))
 }
 
 export function createCompositeV2Store(options: CreateCompositeV2StoreOptions = {}) {
