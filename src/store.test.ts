@@ -16,6 +16,15 @@ vi.mock('./lib/db', () => {
   return {
     CURRENT_THUMBNAIL_VERSION: 2,
     getAllTasks: async () => [...tasks.values()],
+    loadTasksIncrementally: async (migrate: (task: TaskRecord) => TaskRecord) => {
+      const loaded: TaskRecord[] = []
+      for (const task of tasks.values()) {
+        const migrated = migrate(task)
+        tasks.set(task.id, migrated)
+        loaded.push(migrated)
+      }
+      return loaded
+    },
     putTask: async (task: TaskRecord) => {
       tasks.set(task.id, task)
       return task.id
@@ -102,6 +111,15 @@ vi.mock('./lib/db', () => {
     },
     batchPutTasks: async (taskList: TaskRecord[]) => {
       for (const task of taskList) tasks.set(task.id, task)
+    },
+    commitImportedRecords: async (records: {
+      images: StoredImage[]
+      thumbnails: StoredImageThumbnail[]
+      tasks: TaskRecord[]
+    }) => {
+      for (const image of records.images) images.set(image.id, image)
+      for (const thumbnail of records.thumbnails) thumbnails.set(thumbnail.id, thumbnail)
+      for (const task of records.tasks) tasks.set(task.id, task)
     },
   }
 })

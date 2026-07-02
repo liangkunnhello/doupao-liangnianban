@@ -90,6 +90,7 @@ export default function App() {
       }).catch((error) => {
         console.error('Store initialization failed:', error)
         useStore.getState().showToast(`启动数据加载失败：${error instanceof Error ? error.message : String(error)}`, 'error')
+        throw error
       })
     }
 
@@ -184,6 +185,8 @@ export default function App() {
         })
       }
     }
+    }).catch(() => {
+      // Initialization already reported the error; never create an incomplete backup.
     })
   }, [])
 

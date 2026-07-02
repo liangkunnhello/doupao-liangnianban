@@ -6,6 +6,7 @@ export type ImageStorageMigrationDeps = {
   replaceImage: (image: StoredImage) => Promise<unknown>
   batchSize?: number
   yieldToEventLoop?: () => Promise<void>
+  onProgress?: (migrated: number) => Promise<void>
 }
 
 export async function migrateLegacyImages(deps: ImageStorageMigrationDeps): Promise<number> {
@@ -21,6 +22,7 @@ export async function migrateLegacyImages(deps: ImageStorageMigrationDeps): Prom
       if (!localPath) throw new Error(`图片 ${image.id} 迁移失败`)
       await deps.replaceImage({ ...image, localPath, dataUrl: undefined })
       migrated++
+      await deps.onProgress?.(migrated)
     }
     await yieldToEventLoop()
   }

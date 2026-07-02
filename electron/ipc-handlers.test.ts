@@ -94,6 +94,27 @@ describe('ipc composite background filesystem helpers', () => {
     expect(backupJsonHasData!({ state: {} })).toBe(false)
   })
 
+  it('copies cache files to a new storage root without deleting the source', async () => {
+    const mod = await import('./ipc-handlers')
+    const copyCacheImageDirectory = (mod as {
+      copyCacheImageDirectory?: (sourceDir: string, targetDir: string) => Array<{ from: string; to: string }>
+    }).copyCacheImageDirectory
+    const sourceDir = path.join(fixtureDir, 'old-cache')
+    const targetDir = path.join(fixtureDir, 'new-cache')
+    writeFixtureFile(path.join(sourceDir, 'image-a.png'))
+    writeFixtureFile(path.join(sourceDir, 'image-b.webp'))
+
+    expect(copyCacheImageDirectory).toBeTypeOf('function')
+    const mappings = copyCacheImageDirectory!(sourceDir, targetDir)
+
+    expect(mappings).toEqual([
+      { from: path.join(sourceDir, 'image-a.png'), to: path.join(targetDir, 'image-a.png') },
+      { from: path.join(sourceDir, 'image-b.webp'), to: path.join(targetDir, 'image-b.webp') },
+    ])
+    expect(existsSync(path.join(sourceDir, 'image-a.png'))).toBe(true)
+    expect(existsSync(path.join(targetDir, 'image-a.png'))).toBe(true)
+  })
+
   it('lists supported background files recursively with relative directories', async () => {
     const mod = await import('./ipc-handlers')
     const listCompositeBackgroundFiles = (mod as {

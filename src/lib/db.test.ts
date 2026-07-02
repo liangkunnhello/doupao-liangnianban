@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   batchGetCompositeAssets,
   batchGetImages,
+  commitImportedRecords,
   getCompositeAsset,
   getLegacyImageBatch,
+  loadTasksIncrementally,
   putCompositeAssets,
   putImage,
 } from './db'
@@ -32,6 +34,39 @@ describe('database transaction completion', () => {
     tx.onabort?.()
 
     await expect(write).rejects.toThrow('quota exceeded')
+  })
+
+  it('commits imported images, thumbnails and tasks in one transaction', async () => {
+    const puts: Record<string, string[]> = { images: [], thumbnails: [], tasks: [] }
+    let complete: (() => void) | null = null
+    const tx = {
+      objectStore: (name: keyof typeof puts) => ({
+        put: (value: { id: string }) => puts[name].push(value.id),
+      }),
+      set oncomplete(handler: (() => void) | null) {
+        complete = handler
+        queueMicrotask(() => complete?.())
+      },
+      onerror: null,
+      onabort: null,
+    }
+    const transaction = vi.fn(() => tx)
+    vi.stubGlobal('indexedDB', {
+      open: () => requestWithResult({ transaction }),
+    })
+
+    await commitImportedRecords({
+      images: [{ id: 'image-a', dataUrl: 'data:image/png;base64,a' }],
+      thumbnails: [{ id: 'image-a', thumbnailDataUrl: 'data:image/webp;base64,a' }],
+      tasks: [{ id: 'task-a' } as any],
+    })
+
+    expect(transaction).toHaveBeenCalledWith(['images', 'thumbnails', 'tasks'], 'readwrite')
+    expect(puts).toEqual({
+      images: ['image-a'],
+      thumbnails: ['image-a'],
+      tasks: ['task-a'],
+    })
   })
 })
 
@@ -111,6 +146,67 @@ describe('getLegacyImageBatch', () => {
 
     const result = await getLegacyImageBatch(2)
     expect(result.map((image) => image.id)).toEqual(['legacy-a', 'legacy-b'])
+  })
+})
+
+describe('loadTasksIncrementally', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('migrates one cursor record at a time before retaining it', async () => {
+    const values = [
+      { id: 'task-a', payload: 'large-a' },
+      { id: 'task-b', payload: 'large-b' },
+    ]
+    const updated: unknown[] = []
+    let index = 0
+    const request: any = {}
+    let complete: (() => void) | null = null
+    const cursor: any = {
+      get value() {
+        return values[index]
+      },
+      update(value: unknown) {
+        updated.push(value)
+      },
+      continue() {
+        index++
+        queueMicrotask(() => {
+          request.result = index < values.length ? cursor : null
+          request.onsuccess?.()
+          if (index >= values.length) complete?.()
+        })
+      },
+    }
+    const tx = {
+      objectStore: () => ({
+        openCursor: () => {
+          queueMicrotask(() => {
+            request.result = cursor
+            request.onsuccess?.()
+          })
+          return request
+        },
+      }),
+      set oncomplete(handler: (() => void) | null) {
+        complete = handler
+      },
+      onerror: null,
+      onabort: null,
+    }
+    vi.stubGlobal('indexedDB', {
+      open: () => requestWithResult({ transaction: () => tx }),
+    })
+
+    const result = await loadTasksIncrementally((task: any) => ({
+      ...task,
+      payload: undefined,
+    }))
+
+    expect(result).toEqual([
+      { id: 'task-a', payload: undefined },
+      { id: 'task-b', payload: undefined },
+    ])
+    expect(updated).toEqual(result)
   })
 })
 

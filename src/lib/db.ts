@@ -1,14 +1,16 @@
 import type { AgentConversation, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
 import { deleteRawCacheImages, isElectron, saveRawCacheImageToLocal } from './localSave'
+import type { MigrationJournal } from './migrations/registry'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 5
+const DB_VERSION = 6
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
 const STORE_WORD_LIBRARY = 'wordLibrary'
 const STORE_COMPOSITE_ASSETS = 'compositeAssets'
+const STORE_META = 'meta'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
@@ -37,6 +39,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_COMPOSITE_ASSETS)) {
         db.createObjectStore(STORE_COMPOSITE_ASSETS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_META)) {
+        db.createObjectStore(STORE_META, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -73,10 +78,41 @@ function dbTransaction<T>(
   )
 }
 
+export function getMigrationJournal(id: string): Promise<MigrationJournal | undefined> {
+  return dbTransaction(STORE_META, 'readonly', (store) => store.get(id))
+}
+
+export async function putMigrationJournal(record: MigrationJournal): Promise<void> {
+  await dbTransaction(STORE_META, 'readwrite', (store) => store.put(record))
+}
+
 // ===== Tasks =====
 
 export function getAllTasks(): Promise<TaskRecord[]> {
   return dbTransaction(STORE_TASKS, 'readonly', (s) => s.getAll())
+}
+
+export function loadTasksIncrementally(
+  migrate: (task: TaskRecord) => TaskRecord,
+): Promise<TaskRecord[]> {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_TASKS, 'readwrite')
+    const request = tx.objectStore(STORE_TASKS).openCursor()
+    const tasks: TaskRecord[] = []
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      const original = cursor.value as TaskRecord
+      const migrated = migrate(original)
+      tasks.push(migrated)
+      if (migrated !== original) cursor.update(migrated)
+      cursor.continue()
+    }
+    request.onerror = () => reject(request.error)
+    tx.oncomplete = () => resolve(tasks)
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB task migration aborted'))
+  }))
 }
 
 export function putTask(task: TaskRecord): Promise<IDBValidKey> {
@@ -507,6 +543,58 @@ export function batchPutTasks(tasks: TaskRecord[]): Promise<void> {
         tx.onabort = () => reject(tx.error)
       }),
   )
+}
+
+export async function getStorageRecordCounts() {
+  const [tasks, images, thumbnails, conversations, compositeAssets] = await Promise.all([
+    dbTransaction<number>(STORE_TASKS, 'readonly', (store) => store.count()),
+    dbTransaction<number>(STORE_IMAGES, 'readonly', (store) => store.count()),
+    dbTransaction<number>(STORE_THUMBNAILS, 'readonly', (store) => store.count()),
+    dbTransaction<number>(STORE_AGENT_CONVERSATIONS, 'readonly', (store) => store.count()),
+    dbTransaction<number>(STORE_COMPOSITE_ASSETS, 'readonly', (store) => store.count()),
+  ])
+  return { tasks, images, thumbnails, conversations, compositeAssets }
+}
+
+export function commitImportedRecords(records: {
+  images: StoredImage[]
+  thumbnails: StoredImageThumbnail[]
+  tasks: TaskRecord[]
+}): Promise<void> {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS, STORE_TASKS], 'readwrite')
+    const imageStore = tx.objectStore(STORE_IMAGES)
+    const thumbnailStore = tx.objectStore(STORE_THUMBNAILS)
+    const taskStore = tx.objectStore(STORE_TASKS)
+    for (const image of records.images) imageStore.put(image)
+    for (const thumbnail of records.thumbnails) thumbnailStore.put(thumbnail)
+    for (const task of records.tasks) taskStore.put(task)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB import transaction aborted'))
+  }))
+}
+
+export function updateImageLocalPaths(mappings: Array<{ from: string; to: string }>): Promise<void> {
+  if (mappings.length === 0) return Promise.resolve()
+  const bySource = new Map(mappings.map((mapping) => [mapping.from, mapping.to]))
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_IMAGES, 'readwrite')
+    const store = tx.objectStore(STORE_IMAGES)
+    const request = store.openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      const image = cursor.value as StoredImage
+      const localPath = image.localPath ? bySource.get(image.localPath) : undefined
+      if (localPath) cursor.update({ ...image, localPath })
+      cursor.continue()
+    }
+    request.onerror = () => reject(request.error)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB path migration aborted'))
+  }))
 }
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {

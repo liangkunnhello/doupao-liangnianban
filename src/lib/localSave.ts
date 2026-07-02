@@ -28,6 +28,7 @@ type ElectronAPI = {
   openInExplorer: (filePath: string) => Promise<void>
   getLocalSavePath: () => Promise<string | null>
   setLocalSavePath: (path: string) => Promise<void>
+  copyCacheToRoot?: (newRoot: string) => Promise<Array<{ from: string; to: string }>>
   readJsonText: (filePath: string) => Promise<string | null>
   writeJsonText: (filePath: string, content: string, backupIntervalOrSkip?: number | boolean) => Promise<boolean>
   listBackups: (filePath: string) => Promise<string[]>
@@ -96,6 +97,10 @@ export async function setLocalSavePath(path: string): Promise<void> {
   const api = getAPI()
   if (!api) return
   await api.setLocalSavePath(path)
+}
+
+export async function copyRawCacheImagesToRoot(newRoot: string): Promise<Array<{ from: string; to: string }>> {
+  return await getAPI()?.copyCacheToRoot?.(newRoot) ?? []
 }
 
 export async function getDefaultLocalSavePath(): Promise<string> {

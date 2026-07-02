@@ -27,7 +27,7 @@ import type {
   WordLibraryGroup,
   WordLibraryEntry,
 } from './types'
-import type { StoredImage } from './types'
+import type { StoredImage, StoredImageThumbnail } from './types'
 import type { CallApiOptions, CallApiResult } from './lib/imageApiShared'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { createDefaultScheduleRows, formatDateKey, getScheduleRunKey, getWeekStartDate, parseDateKey, resolveScheduleOutputTarget } from './lib/schedule'
@@ -37,6 +37,7 @@ import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/pr
 import {
   CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
+  loadTasksIncrementally,
   putTask as dbPutTask,
   deleteTask as dbDeleteTask,
   clearTasks as dbClearTasks,
@@ -61,6 +62,11 @@ import {
   batchGetCompositeAssets,
   putCompositeAssets,
   batchPutTasks,
+  commitImportedRecords,
+  getMigrationJournal,
+  putMigrationJournal,
+  updateImageLocalPaths,
+  getAllLocalImagePaths,
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
@@ -74,12 +80,14 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath } from './lib/localSave'
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 import { ByteLruCache } from './lib/byteLruCache'
 import { sanitizeSettingsForBackup } from './lib/backupManifest'
 import { validateBackupArchive } from './lib/backupImport'
+import { runMigration } from './lib/migrations/registry'
+import { shouldDeleteOrphanImage } from './lib/storageCleanup'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -3401,11 +3409,25 @@ async function recoverFalTask(taskId: string) {
 
 export function ensureImageStorageMigrated(): Promise<number> {
   if (!isElectronEnv()) return Promise.resolve(0)
-  imageStorageMigrationPromise ??= migrateLegacyImages({
-    readBatch: getLegacyImageBatch,
-    saveImage: (image) => image.dataUrl ? saveRawCacheImageToLocal(image.id, image.dataUrl) : Promise.resolve(null),
-    replaceImage: putImage,
-  }).catch((error) => {
+  imageStorageMigrationPromise ??= (async () => {
+    let migrated = 0
+    await runMigration(
+      'electron-image-files-v1',
+      {
+        get: getMigrationJournal,
+        put: putMigrationJournal,
+      },
+      async ({ checkpoint }) => {
+        migrated = await migrateLegacyImages({
+          readBatch: getLegacyImageBatch,
+          saveImage: (image) => image.dataUrl ? saveRawCacheImageToLocal(image.id, image.dataUrl) : Promise.resolve(null),
+          replaceImage: putImage,
+          onProgress: (count) => checkpoint(String(count)),
+        })
+      },
+    )
+    return migrated
+  })().catch((error) => {
     imageStorageMigrationPromise = null
     throw error
   })
@@ -3415,15 +3437,8 @@ export function ensureImageStorageMigrated(): Promise<number> {
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore(options: { safeMode?: boolean } = {}) {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
-  const storedTasks = await getAllTasks()
-  // 确保所有任务都具有合法的 params 对象，以兼容旧版无参数记录的数据
-  for (const task of storedTasks) {
-    if (!task.params) {
-      task.params = { ...DEFAULT_PARAMS }
-    } else {
-      task.params = { ...DEFAULT_PARAMS, ...task.params }
-    }
-  }
+  const storedTasks = await loadTasksIncrementally((task) =>
+    getPersistableTask(normalizeTaskRecordFields(task)))
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
   let loadedAgentConversations = mergeAgentConversationsForStorage(storedAgentConversations, legacyAgentConversations)
   const currentAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
@@ -3641,7 +3656,14 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
       orphanIds.push(imgId)
     }
   }
-  if (orphanIds.length > 0) await batchDeleteImages(orphanIds)
+  if (orphanIds.length > 0) {
+    const orphanRecords = await batchGetImages(orphanIds)
+    const expiredOrphanIds = orphanIds.filter((id) => {
+      const image = orphanRecords.get(id)
+      return image ? shouldDeleteOrphanImage(image, Date.now(), 7) : false
+    })
+    if (expiredOrphanIds.length > 0) await batchDeleteImages(expiredOrphanIds)
+  }
 
   const idsToFetch = new Set<string>()
   for (const img of persistedInputImages) {
@@ -3766,6 +3788,28 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   if (!options.safeMode) void ensureImageStorageMigrated().catch((error) => {
     console.error('图片存储迁移失败:', error)
   })
+}
+
+export async function migrateLocalSaveRoot(newRoot: string): Promise<void> {
+  const previousRoot = await getLocalSavePath()
+  if (!previousRoot || previousRoot === newRoot) {
+    await setLocalSavePath(newRoot)
+    return
+  }
+  const mappings = await copyRawCacheImagesToRoot(newRoot)
+  const mappedSources = new Set(mappings.map((mapping) => mapping.from.toLowerCase()))
+  const unmappedPaths = (await getAllLocalImagePaths())
+    .filter((localPath) => !mappedSources.has(localPath.toLowerCase()))
+  if (unmappedPaths.length > 0) {
+    throw new Error(`仍有 ${unmappedPaths.length} 个历史图片文件不在当前缓存目录中，请先导出完整备份后再迁移保存目录`)
+  }
+  await setLocalSavePath(newRoot)
+  try {
+    await updateImageLocalPaths(mappings)
+  } catch (error) {
+    await setLocalSavePath(previousRoot)
+    throw error
+  }
 }
 
 /** 提交新任务（使用显式数据，不依赖全局状态） */
@@ -4347,23 +4391,28 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
 }
 
 export async function cleanupAllOrphanedImages(): Promise<number> {
+  const orphanIds = await getAllOrphanedImageIds()
+  for (const imgId of orphanIds) {
+    await deleteImage(imgId)
+    imageCache.delete(imgId)
+    thumbnailCache.delete(imgId)
+  }
+  return orphanIds.length
+}
+
+export async function getAllOrphanedImageIds(): Promise<string[]> {
   const allImageIds = await getAllImageIds()
-  const { tasks, inputImages, galleryInputDraft } = useStore.getState()
+  const { tasks, inputImages, galleryInputDraft, workspaceTabs } = useStore.getState()
   const stillUsed = new Set<string>()
   for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
-
-  let deletedCount = 0
-  for (const imgId of allImageIds) {
-    if (stillUsed.has(imgId)) continue
-    await deleteImage(imgId)
-    imageCache.delete(imgId)
-    thumbnailCache.delete(imgId)
-    deletedCount++
+  for (const tab of workspaceTabs) {
+    for (const image of tab.inputImages) stillUsed.add(image.id)
+    for (const imageId of tab.inputImageFolder?.imageIds ?? []) stillUsed.add(imageId)
   }
-  return deletedCount
+  return allImageIds.filter((imageId) => !stillUsed.has(imageId))
 }
 
 async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
@@ -7458,6 +7507,9 @@ export async function importData(file: File, options: ImportOptions = { importCo
     validateBackupArchive(data, unzipped, options)
 
     const importedImageIds: string[] = []
+    const importedImages: StoredImage[] = []
+    const importedThumbnails: StoredImageThumbnail[] = []
+    const importedTasks: TaskRecord[] = []
     
     // Import Images
     if (options.importImages && data.imageFiles) {
@@ -7473,7 +7525,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
           localPath = await saveRawCacheImageToLocal(id, dataUrl) || undefined
         }
 
-        await putImage({
+        importedImages.push({
           id,
           dataUrl: localPath ? undefined : dataUrl,
           localPath,
@@ -7488,13 +7540,16 @@ export async function importData(file: File, options: ImportOptions = { importCo
         importedImageIds.push(id)
       }
     }
+    if (!options.importTasks && importedImages.length > 0) {
+      await commitImportedRecords({ images: importedImages, thumbnails: [], tasks: [] })
+    }
 
     if (options.importTasks) {
       for (const [id, info] of Object.entries(data.thumbnailFiles ?? {})) {
         const bytes = unzipped[info.path]
         if (!bytes) continue
         const thumbnailDataUrl = bytesToDataUrl(bytes, info.path)
-        await putImageThumbnail({
+        importedThumbnails.push({
           id,
           thumbnailDataUrl,
           width: info.width,
@@ -7511,9 +7566,15 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
       if (data.tasks) {
         for (const task of data.tasks) {
-          await putTask(task)
+          importedTasks.push(getPersistableTask(task))
         }
       }
+
+      await commitImportedRecords({
+        images: importedImages,
+        thumbnails: importedThumbnails,
+        tasks: importedTasks,
+      })
 
       const tasks = await getAllTasks()
       const state = useStore.getState()

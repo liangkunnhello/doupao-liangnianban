@@ -39,6 +39,28 @@ export function backupJsonHasData(value: unknown): boolean {
   )
 }
 
+export function copyCacheImageDirectory(
+  sourceDir: string,
+  targetDir: string,
+): Array<{ from: string; to: string }> {
+  if (!existsSync(sourceDir)) return []
+  mkdirSync(targetDir, { recursive: true })
+  const mappings: Array<{ from: string; to: string }> = []
+  const supported = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+  for (const name of readdirSync(sourceDir).sort()) {
+    if (!supported.has(path.extname(name).toLowerCase())) continue
+    const from = path.join(sourceDir, name)
+    if (!statSync(from).isFile()) continue
+    const to = path.join(targetDir, name)
+    copyFileSync(from, to)
+    if (statSync(from).size !== statSync(to).size) {
+      throw new Error(`Cache file verification failed: ${name}`)
+    }
+    mappings.push({ from, to })
+  }
+  return mappings
+}
+
 function getLocalSettingsPath(): string {
   return path.join(app.getPath('userData'), LOCAL_SETTINGS_FILE)
 }
@@ -724,6 +746,14 @@ export function registerIpcHandlers(): void {
     addAllowedRoot(safeSavePath)
     settings.localSavePath = safeSavePath
     writeLocalSettings(settings)
+  })
+
+  ipcMain.handle('store:copy-cache-to-root', async (_event, { newRoot }: { newRoot: string }) => {
+    const safeNewRoot = assertAllowedPath(newRoot)
+    addAllowedRoot(safeNewRoot)
+    const sourceDir = getCacheImagesDir()
+    if (!sourceDir) return []
+    return copyCacheImageDirectory(sourceDir, path.join(safeNewRoot, 'cache-images'))
   })
 
   ipcMain.handle('fs:read-json-text', async (_event, { filePath }: { filePath: string }) => {

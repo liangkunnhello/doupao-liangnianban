@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { useStore, exportData, importData, clearData, type SettingsTab, cleanupAllOrphanedImages, getErrorToastMessage } from '../store'
+import { useStore, exportData, importData, clearData, type SettingsTab, cleanupAllOrphanedImages, getErrorToastMessage, migrateLocalSaveRoot } from '../store'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_FAL_BASE_URL,
@@ -30,7 +30,7 @@ import {
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath as setLocalSavePathFn, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getBackupPath } from '../lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, selectLocalSaveDirectory, openInExplorer, getBackupList, restoreFromBackupFile, deleteBackupFile, getBackupPath } from '../lib/localSave'
 import { useAutoUpdate } from '../hooks/useAutoUpdate'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { formatUpdateReleaseNotes } from '../lib/updateReleaseNotes'
@@ -39,6 +39,7 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
 import { shouldCopyProfileImportUrl } from '../lib/profileImportUrl'
+import { formatStorageBytes, getStorageOverview, type StorageOverview } from '../lib/storageStats'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
@@ -366,6 +367,7 @@ export default function SettingsModal() {
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
   const [exportImages, setExportImages] = useState(true)
+  const [includeBackupSecrets, setIncludeBackupSecrets] = useState(false)
   const [importConfig, setImportConfig] = useState(true)
   const [importTasks, setImportTasks] = useState(true)
   const [importImages, setImportImages] = useState(true)
@@ -380,6 +382,8 @@ export default function SettingsModal() {
   const [isSelectingPath, setIsSelectingPath] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isCleaningData, setIsCleaningData] = useState(false)
+  const [storageOverview, setStorageOverview] = useState<StorageOverview | null>(null)
+  const [storageOverviewLoading, setStorageOverviewLoading] = useState(false)
 
   const handleCleanupOrphaned = async () => {
     setIsCleaningData(true)
@@ -391,6 +395,17 @@ export default function SettingsModal() {
       showToast(getErrorToastMessage(err instanceof Error ? err.message : '清理失败'), 'error')
     } finally {
       setIsCleaningData(false)
+    }
+  }
+
+  const refreshStorageOverview = async () => {
+    setStorageOverviewLoading(true)
+    try {
+      setStorageOverview(await getStorageOverview())
+    } catch (error) {
+      console.error('读取存储概览失败:', error)
+    } finally {
+      setStorageOverviewLoading(false)
     }
   }
   const [isImportingJson, setIsImportingJson] = useState(false)
@@ -526,6 +541,10 @@ export default function SettingsModal() {
   }, [activeTab])
 
   useEffect(() => {
+    if (activeTab === 'data') void refreshStorageOverview()
+  }, [activeTab])
+
+  useEffect(() => {
     if (!showSettings || !draft.agentUseCustomProfile) {
       setAgentModels([])
       setAgentModelsError(null)
@@ -566,7 +585,7 @@ export default function SettingsModal() {
     try {
       const path = await selectLocalSaveDirectory()
       if (path) {
-        await setLocalSavePathFn(path)
+        await migrateLocalSaveRoot(path)
         setLocalSavePath(path)
       } else {
         const api = typeof window !== 'undefined' ? (window as any).electronAPI : undefined
@@ -2318,6 +2337,31 @@ export default function SettingsModal() {
                   </div>
                 </div>
 
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">存储概览</h4>
+                    <button type="button" onClick={() => void refreshStorageOverview()} className="text-xs text-blue-500 hover:text-blue-600">
+                      {storageOverviewLoading ? '读取中…' : '刷新'}
+                    </button>
+                  </div>
+                  {storageOverview && (
+                    <>
+                      <div className="text-sm text-gray-600 dark:text-gray-300">
+                        已使用 {formatStorageBytes(storageOverview.usageBytes)}
+                        {storageOverview.quotaBytes != null ? ` / ${formatStorageBytes(storageOverview.quotaBytes)}` : ''}
+                        {storageOverview.usagePercent != null ? `（${storageOverview.usagePercent}%）` : ''}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-500 dark:text-gray-400 sm:grid-cols-5">
+                        <span>任务 {storageOverview.counts.tasks}</span>
+                        <span>图片 {storageOverview.counts.images}</span>
+                        <span>缩略图 {storageOverview.counts.thumbnails}</span>
+                        <span>对话 {storageOverview.counts.conversations}</span>
+                        <span>合成资源 {storageOverview.counts.compositeAssets}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
                 <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
@@ -2339,9 +2383,16 @@ export default function SettingsModal() {
                       onChange={setExportImages}
                       label="包含原始图片"
                     />
+                    {exportConfig && (
+                      <Checkbox
+                        checked={includeBackupSecrets}
+                        onChange={setIncludeBackupSecrets}
+                        label="包含 API Key（明文，谨慎使用）"
+                      />
+                    )}
                   </div>
                   <button
-                    onClick={() => exportData({ exportConfig, exportTasks, exportImages })}
+                    onClick={() => exportData({ exportConfig, exportTasks, exportImages, includeSecrets: includeBackupSecrets })}
                     disabled={!exportConfig && !exportTasks && !exportImages}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
