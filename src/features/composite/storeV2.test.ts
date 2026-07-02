@@ -3,6 +3,7 @@ import {
   createCompositeV2Store,
   createCompositeV2StoreState,
   getCompositeV2PersistedState,
+  mergeCompositeV2PersistedState,
 } from './storeV2'
 import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from './lib/compositeV2Defaults'
 import type { CompositeV2ImageLayer, CompositeV2TextLayer } from './lib/compositeV2Types'
@@ -65,11 +66,86 @@ describe('composite v2 store state factory', () => {
       history: store.getState().history,
       backgroundFolders: ['D:/bg'],
       recursiveBackgrounds: true,
+      selectedPresetGroupId: store.getState().selectedPresetGroupId,
+      selectedPreviewPresetId: store.getState().selectedPreviewPresetId,
       enabledPresetIdsForRun: store.getState().enabledPresetIdsForRun,
       smartMatchOrientation: false,
     })
     expect(persisted).not.toHaveProperty('previewHistory')
     expect(persisted).not.toHaveProperty('exportStatus')
+  })
+
+  it('hydrates distribution settings with the fresh runtime start date', () => {
+    const source = createCompositeV2Store()
+    source.setState({
+      distributionConfig: {
+        ...source.getState().distributionConfig,
+        enabled: true,
+        days: 7,
+        startDate: '20200101',
+      },
+    })
+    const persisted = JSON.parse(JSON.stringify(getCompositeV2PersistedState(source.getState())))
+    const current = createCompositeV2Store().getState()
+    current.distributionConfig.startDate = '20260702'
+
+    const hydrated = mergeCompositeV2PersistedState(persisted, current)
+
+    expect(hydrated.distributionConfig).toMatchObject({
+      enabled: true,
+      days: 7,
+      startDate: '20260702',
+    })
+  })
+
+  it('hydrates a coherent non-default preset group selection', () => {
+    const source = createCompositeV2Store()
+    const presetA = { ...createDefaultCompositeV2Preset(1), id: 'preset-a', name: 'Preset A' }
+    const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }
+    const groupA = { ...createDefaultCompositeV2PresetGroup(1), id: 'group-a', presetIds: ['preset-a'] }
+    const groupB = { ...createDefaultCompositeV2PresetGroup(2), id: 'group-b', presetIds: ['preset-b'] }
+    source.setState({
+      presets: [presetA, presetB],
+      presetGroups: [groupA, groupB],
+      selectedPresetGroupId: groupB.id,
+      selectedPreviewPresetId: presetB.id,
+      enabledPresetIdsForRun: [presetB.id],
+    })
+    const persisted = JSON.parse(JSON.stringify(getCompositeV2PersistedState(source.getState())))
+
+    const hydrated = mergeCompositeV2PersistedState(persisted, createCompositeV2Store().getState())
+
+    expect(hydrated).toMatchObject({
+      selectedPresetGroupId: 'group-b',
+      selectedPreviewPresetId: 'preset-b',
+      enabledPresetIdsForRun: ['preset-b'],
+    })
+  })
+
+  it('falls back to a coherent preset selection when persisted IDs are invalid', () => {
+    const currentStore = createCompositeV2Store()
+    const presetA = { ...createDefaultCompositeV2Preset(1), id: 'preset-a', name: 'Preset A' }
+    const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }
+    const groupA = { ...createDefaultCompositeV2PresetGroup(1), id: 'group-a', presetIds: ['preset-a'] }
+    const groupB = { ...createDefaultCompositeV2PresetGroup(2), id: 'group-b', presetIds: ['preset-b'] }
+    currentStore.setState({ presets: [presetA, presetB], presetGroups: [groupA, groupB] })
+    const persisted = {
+      ...getCompositeV2PersistedState(currentStore.getState()),
+      selectedPresetGroupId: 'missing-group',
+      selectedPreviewPresetId: 'missing-preset',
+      enabledPresetIdsForRun: ['missing-preset'],
+    }
+
+    const hydrated = mergeCompositeV2PersistedState(
+      JSON.parse(JSON.stringify(persisted)),
+      currentStore.getState(),
+    )
+
+    expect(hydrated).toMatchObject({
+      selectedPresetGroupId: 'group-a',
+      selectedPreviewPresetId: 'preset-a',
+      enabledPresetIdsForRun: ['preset-a'],
+    })
   })
 
   it('resets enabled presets but preserves preview preset when switching groups', () => {

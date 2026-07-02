@@ -132,6 +132,11 @@ type CompositeV2StoreActions = {
 
 export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2UndoState & CompositeV2State & CompositeV2StoreActions
 
+type CompositeV2PersistedState = CompositeV2State & {
+  selectedPresetGroupId?: string
+  selectedPreviewPresetId?: string
+}
+
 export type CreateCompositeV2StoreOptions = {
   pickRandomIndex?: (length: number) => number
 }
@@ -193,7 +198,7 @@ export function createCompositeV2StoreState(): CompositeV2BatchState & Composite
   }
 }
 
-export function getCompositeV2PersistedState(state: CompositeV2StoreState): CompositeV2State {
+export function getCompositeV2PersistedState(state: CompositeV2StoreState): CompositeV2PersistedState {
   return {
     logoLibraryPath: state.logoLibraryPath,
     logoOrder: state.logoOrder ?? [],
@@ -211,8 +216,49 @@ export function getCompositeV2PersistedState(state: CompositeV2StoreState): Comp
     },
     backgroundFolders: state.backgroundFolders,
     recursiveBackgrounds: state.recursiveBackgrounds,
+    selectedPresetGroupId: state.selectedPresetGroupId,
+    selectedPreviewPresetId: state.selectedPreviewPresetId,
     enabledPresetIdsForRun: state.enabledPresetIdsForRun,
     smartMatchOrientation: state.smartMatchOrientation,
+  }
+}
+
+export function mergeCompositeV2PersistedState(
+  persistedState: unknown,
+  currentState: CompositeV2StoreState,
+): CompositeV2StoreState {
+  if (!persistedState || typeof persistedState !== 'object') return currentState
+
+  const persisted = persistedState as Partial<CompositeV2PersistedState>
+  const merged = {
+    ...currentState,
+    ...persisted,
+    distributionConfig: {
+      ...currentState.distributionConfig,
+      ...(persisted.distributionConfig ?? {}),
+      startDate: currentState.distributionConfig.startDate,
+    },
+  } as CompositeV2StoreState
+  const selectedGroup = getSelectedGroup(
+    merged.presetGroups,
+    persisted.selectedPresetGroupId ?? currentState.selectedPresetGroupId,
+  )
+  const selectedPresetGroupId = selectedGroup?.id ?? ''
+  const groupPresetIds = [...(selectedGroup?.presetIds ?? [])]
+  const requestedPreviewPresetId = persisted.selectedPreviewPresetId ?? currentState.selectedPreviewPresetId
+  const selectedPreviewPresetId = groupPresetIds.includes(requestedPreviewPresetId)
+    ? requestedPreviewPresetId
+    : groupPresetIds[0] ?? ''
+  const requestedEnabledPresetIds = Array.isArray(persisted.enabledPresetIdsForRun)
+    ? persisted.enabledPresetIdsForRun
+    : currentState.enabledPresetIdsForRun
+  const validEnabledPresetIds = requestedEnabledPresetIds.filter((id) => groupPresetIds.includes(id))
+
+  return {
+    ...merged,
+    selectedPresetGroupId,
+    selectedPreviewPresetId,
+    enabledPresetIdsForRun: validEnabledPresetIds.length > 0 ? validEnabledPresetIds : groupPresetIds,
   }
 }
 
@@ -225,7 +271,7 @@ export const useCompositeV2Store = create<CompositeV2StoreState>()(createComposi
 function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOptions = {}) {
   const pickRandomIndex = options.pickRandomIndex ?? defaultPickRandomIndex
 
-  return persist<CompositeV2StoreState, [], [], CompositeV2State>(
+  return persist<CompositeV2StoreState, [], [], CompositeV2PersistedState>(
     (set, get) => {
       const setWithHistory = (
         updater: (state: CompositeV2StoreState) => Partial<CompositeV2StoreState> | {},
@@ -584,11 +630,12 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
       name: STORAGE_NAME,
       version: 2,
       partialize: getCompositeV2PersistedState,
+      merge: mergeCompositeV2PersistedState,
       migrate: (persistedState, version) => {
         if (!persistedState || typeof persistedState !== 'object' || version >= 2) {
-          return persistedState as CompositeV2StoreState
+          return persistedState as CompositeV2PersistedState
         }
-        const legacyState = persistedState as CompositeV2StoreState & {
+        const legacyState = persistedState as CompositeV2PersistedState & {
           presets?: Array<CompositeV2State['presets'][number] & { customVariables?: CompositeV2State['customVariables'] }>
           customVariables?: CompositeV2State['customVariables']
         }
@@ -604,7 +651,7 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
             }
             return nextPreset
           }),
-        } as CompositeV2StoreState
+        } as CompositeV2PersistedState
       },
     },
   )
