@@ -87,6 +87,17 @@ describe('insertNamingVariable', () => {
     })
   })
 
+  it('replaces a selected range in an absolute Windows path', () => {
+    expect(insertNamingVariable(
+      'D:\\Exports\\daily',
+      'date',
+      { start: 11, end: 16 },
+    )).toEqual({
+      template: 'D:\\Exports\\{date}',
+      caret: 17,
+    })
+  })
+
   it('appends when there is no valid editor selection', () => {
     expect(insertNamingVariable('{date}', 'index', null)).toEqual({
       template: '{date}{index}',
@@ -235,6 +246,49 @@ describe('PresetNamingFields interactions', () => {
 
     expect(onUpdate).toHaveBeenLastCalledWith({
       subfolderTemplate: `${preset.subfolderTemplate}{index}`,
+    })
+  })
+
+  it('inserts a variable at the output root caret', () => {
+    const preset = {
+      ...createDefaultCompositeV2Preset(1),
+      outputRootPath: 'D:\\Exports\\',
+    }
+    const { renderer, onUpdate } = renderFields(preset)
+    const outputRoot = renderer.root.findByProps({ 'aria-label': '输出根目录' })
+
+    act(() => outputRoot.props.onFocus({
+      currentTarget: {
+        selectionStart: preset.outputRootPath.length,
+        selectionEnd: preset.outputRootPath.length,
+      },
+    }))
+    act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {date}' }).props.onClick())
+
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      outputRootPath: 'D:\\Exports\\{date}',
+    })
+  })
+
+  it('appends to the output root when the browser does not expose a selection', () => {
+    const preset = {
+      ...createDefaultCompositeV2Preset(1),
+      outputRootPath: 'D:\\Exports',
+    }
+    const { renderer, onUpdate } = renderFields(preset)
+    const outputRoot = renderer.root.findByProps({ 'aria-label': '输出根目录' })
+
+    act(() => outputRoot.props.onFocus({
+      currentTarget: {
+        value: preset.outputRootPath,
+        selectionStart: null,
+        selectionEnd: null,
+      },
+    }))
+    act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {date}' }).props.onClick())
+
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      outputRootPath: 'D:\\Exports{date}',
     })
   })
 

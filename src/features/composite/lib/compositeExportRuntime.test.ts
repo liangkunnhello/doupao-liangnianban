@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultCompositeV2Preset } from './compositeV2Defaults'
-import { buildPresetOutputPathParts, dataUrlSizeKb, waitWhilePaused } from './compositeExportRuntime'
+import * as exportRuntime from './compositeExportRuntime'
 import type { CompositeV2ExportItem } from './compositeExportPlan'
+
+const {
+  buildPresetOutputPathParts,
+  dataUrlSizeKb,
+  waitWhilePaused,
+} = exportRuntime
 
 describe('composite export runtime helpers', () => {
   it('measures base64 data URLs in kilobytes', () => {
@@ -64,5 +70,47 @@ describe('composite export runtime helpers', () => {
       subfolders: ['项目B', '1280x720'],
       filename: 'Preset b-source-1.jpg',
     })
+  })
+
+  it('resolves built-in and custom variables in the preset output root', () => {
+    const item: CompositeV2ExportItem = {
+      snapshotId: 'snapshot',
+      preset: {
+        ...createDefaultCompositeV2Preset(1),
+        name: '横版',
+        outputRootPath: 'D:\\Exports\\{date}\\{project}',
+        customVariableValues: { project: '项目A' },
+      },
+      outputRule: {
+        id: 'rule',
+        name: '1280x720',
+        channelId: 'kuaishou',
+        channelName: '快手',
+        enabled: true,
+        width: 1280,
+        height: 720,
+        maxSizeKb: 399,
+        format: 'jpg',
+        subfolderTemplate: '',
+        filenameTemplate: '',
+      },
+      background: {
+        path: 'D:/source.png',
+        name: 'source.png',
+        relativeDir: '',
+        width: 1280,
+        height: 720,
+      },
+      date: '20260702',
+      index: 1,
+      custom: '',
+    }
+    const buildPresetOutputRootPath = (
+      exportRuntime as typeof exportRuntime & {
+        buildPresetOutputRootPath: (item: CompositeV2ExportItem) => string
+      }
+    ).buildPresetOutputRootPath
+
+    expect(buildPresetOutputRootPath(item)).toBe('D:\\Exports\\20260702\\项目A')
   })
 })

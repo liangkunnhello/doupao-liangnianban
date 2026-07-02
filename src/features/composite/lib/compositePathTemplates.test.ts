@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildCompositeOutputPathParts, sanitizePathSegment, withCollisionSuffix } from './compositePathTemplates'
+import * as pathTemplates from './compositePathTemplates'
+
+const {
+  buildCompositeOutputPathParts,
+  sanitizePathSegment,
+  withCollisionSuffix,
+} = pathTemplates
 
 describe('composite path templates', () => {
   it('replaces output variables and sanitizes path segments', () => {
@@ -73,5 +79,31 @@ describe('composite path templates', () => {
 
   it('appends collision suffix before extension', () => {
     expect(withCollisionSuffix('image.jpg', 2)).toBe('image-2.jpg')
+  })
+
+  it('resolves root variables without changing absolute path syntax or unknown variables', () => {
+    const resolveCompositeTemplate = (
+      pathTemplates as typeof pathTemplates & {
+        resolveCompositeTemplate: (
+          template: string,
+          values: Record<string, unknown>,
+        ) => string
+      }
+    ).resolveCompositeTemplate
+
+    expect(resolveCompositeTemplate(
+      'D:\\Exports\\{date}\\{project}\\{unknown}',
+      {
+        date: '20260702',
+        channel: '快手',
+        size: '1280x720',
+        preset: '横版',
+        index: 1,
+        source: 'image',
+        sourceDir: 'source',
+        custom: '自定义',
+        customVariables: { project: '项目A' },
+      },
+    )).toBe('D:\\Exports\\20260702\\项目A\\{unknown}')
   })
 })

@@ -54,4 +54,30 @@ describe('local image saving', () => {
     expect(savedPath).toBe('D:\\Exports\\20260620\\插画\\插画-1.png')
     expect(savedImages[0].filePath).toBe('D:\\Exports\\20260620\\插画\\插画-1.png')
   })
+
+  it('reserves distinct sequential names when images are saved concurrently', async () => {
+    const existingFiles = new Set(['images-1.png', 'images-2.png'])
+    const api = globalThis.window.electronAPI!
+    vi.mocked(api.checkExists).mockImplementation(async (filePath: string) => {
+      const name = filePath.split('\\').pop()!
+      return existingFiles.has(name)
+    })
+    api.readDir = vi.fn(async () => [...existingFiles])
+    vi.mocked(api.saveImage).mockImplementation(async (filePath: string, dataUrl: string) => {
+      savedImages.push({ filePath, dataUrl })
+      existingFiles.add(filePath.split('\\').pop()!)
+      return true
+    })
+
+    const savedPaths = await Promise.all([
+      saveImageToLocal('task-a', 0, 'data:image/png;base64,a'),
+      saveImageToLocal('task-a', 1, 'data:image/png;base64,b'),
+    ])
+
+    expect(new Set(savedPaths).size).toBe(2)
+    expect(savedPaths).toEqual(expect.arrayContaining([
+      'D:\\LocalSaves\\images\\images-3.png',
+      'D:\\LocalSaves\\images\\images-4.png',
+    ]))
+  })
 })

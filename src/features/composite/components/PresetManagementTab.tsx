@@ -17,6 +17,11 @@ import { PresetNamingFields } from './PresetNamingFields'
 
 const GROUP_DRAG_TYPE = 'application/x-doupao-preset-group'
 const LIBRARY_PRESET_DRAG_TYPE = 'application/x-doupao-library-preset'
+const PRESET_BASE_SIZES = [
+  { value: '1280x720', label: '1280×720', width: 1280, height: 720 },
+  { value: '1080x1920', label: '1080×1920', width: 1080, height: 1920 },
+  { value: '800x800', label: '800×800', width: 800, height: 800 },
+] as const
 
 function formatNamingDate(date = new Date()) {
   return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`
@@ -515,31 +520,29 @@ export function PresetManagementTab() {
             <div className="divide-y divide-gray-200 dark:divide-white/[0.08]">
               {/* 基本设置 */}
               <div className="space-y-4 pb-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="text-[11px] font-medium text-gray-500">基准宽
-                    <input type="number" min={1} value={activePreset.baseCanvas.width} onChange={(event) => store.updatePreset(activePreset.id, { baseCanvas: { ...activePreset.baseCanvas, width: Math.max(1, Number(event.target.value)) } })} className="mt-1 w-full cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" />
-                  </label>
-                  <label className="text-[11px] font-medium text-gray-500">基准高
-                    <input type="number" min={1} value={activePreset.baseCanvas.height} onChange={(event) => store.updatePreset(activePreset.id, { baseCanvas: { ...activePreset.baseCanvas, height: Math.max(1, Number(event.target.value)) } })} className="mt-1 w-full cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" />
-                  </label>
-                </div>
+                <label className="block text-[11px] font-medium text-gray-500">基准尺寸
+                  <select
+                    aria-label="基准尺寸"
+                    value={`${activePreset.baseCanvas.width}x${activePreset.baseCanvas.height}`}
+                    onChange={(event) => {
+                      const selected = PRESET_BASE_SIZES.find((size) => size.value === event.target.value)
+                      if (selected) {
+                        store.updatePreset(activePreset.id, {
+                          baseCanvas: { width: selected.width, height: selected.height },
+                        })
+                      }
+                    }}
+                    className="mt-1 w-full cursor-pointer rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900"
+                  >
+                    {PRESET_BASE_SIZES.map((size) => (
+                      <option key={size.value} value={size.value}>{size.label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
 
               {/* 输出与分配设置 */}
               <div className="space-y-4 py-4">
-                <label className="block text-[11px] font-medium text-gray-500">输出根目录
-                  <div className="mt-1 flex gap-2">
-                    <input value={activePreset.outputRootPath} onChange={(event) => store.updatePreset(activePreset.id, { outputRootPath: event.target.value })} className="min-w-0 flex-1 cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" />
-                    <button type="button" onClick={async () => { const path = await window.electronAPI?.selectDirectory?.(); if (path) store.updatePreset(activePreset.id, { outputRootPath: path }) }} className="cursor-pointer rounded-md border border-gray-200 bg-white px-3 text-xs font-medium hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:hover:bg-gray-800">选择</button>
-                  </div>
-                </label>
-
-                <div>
-                  <label className="block text-[11px] font-medium text-gray-500">全局分配地址
-                    <input value={activePreset.distributionPath} onChange={(event) => store.updatePreset(activePreset.id, { distributionPath: event.target.value })} placeholder="目标根目录" className="mt-1 w-full cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" />
-                  </label>
-                </div>
-
                 <div className="rounded-md border border-gray-200 bg-white/50 p-3 dark:border-white/[0.08] dark:bg-gray-950/50">
                   <PresetNamingFields
                     preset={activePreset}
@@ -549,6 +552,10 @@ export function PresetManagementTab() {
                     onAddCustomVariable={(name, value) => store.addCustomVariable(name, value, activePreset.id)}
                     onUpdateCustomVariableValue={(name, value) => store.setPresetCustomVariableValue(activePreset.id, name, value)}
                     onRemoveCustomVariable={store.removeCustomVariable}
+                    onSelectOutputDirectory={async () => {
+                      const path = await window.electronAPI?.selectDirectory?.()
+                      if (path) store.updatePreset(activePreset.id, { outputRootPath: path })
+                    }}
                   />
                 </div>
               </div>

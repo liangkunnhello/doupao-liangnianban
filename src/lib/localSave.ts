@@ -221,6 +221,26 @@ function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+const imageSaveQueues = new Map<string, Promise<void>>()
+
+async function saveImageExclusively<T>(directory: string, operation: () => Promise<T>): Promise<T> {
+  const previous = imageSaveQueues.get(directory) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => current)
+  imageSaveQueues.set(directory, tail)
+
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (imageSaveQueues.get(directory) === tail) imageSaveQueues.delete(directory)
+  }
+}
+
 export async function saveImageToLocal(
   taskId: string,
   imageIndex: number,
@@ -236,42 +256,44 @@ export async function saveImageToLocal(
     ? await getExplicitImageSaveDirectory(outputDirectory)
     : await getLocalImageSaveDirectory(subFolder)
   if (!imagesDir) return null
-  const fileExt = EXT_MAP[ext] || 'png'
-  const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
-  let fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
-  let filePath = await api.pathJoin(imagesDir, fileName)
 
-  // 避免覆盖：如果文件已存在，则自动查找当前目录下的最大序号并递增
-  if (await api.checkExists(filePath)) {
-    let maxIndex = 0
-    try {
-      const files = await api.readDir(imagesDir)
-      const regex = new RegExp(`^${escapeRegExp(fileBaseName)}-(\\d+)\\.`)
-      for (const file of files) {
-        const match = file.match(regex)
-        if (match) {
-          const idx = parseInt(match[1], 10)
-          if (idx > maxIndex) maxIndex = idx
+  return saveImageExclusively(imagesDir, async () => {
+    const fileExt = EXT_MAP[ext] || 'png'
+    const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
+    let fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
+    let filePath = await api.pathJoin(imagesDir, fileName)
+
+    // 避免覆盖：如果文件已存在，则自动查找当前目录下的最大序号并递增
+    if (await api.checkExists(filePath)) {
+      let maxIndex = 0
+      try {
+        const files = await api.readDir(imagesDir)
+        const regex = new RegExp(`^${escapeRegExp(fileBaseName)}-(\\d+)\\.`)
+        for (const file of files) {
+          const match = file.match(regex)
+          if (match) {
+            const idx = parseInt(match[1], 10)
+            if (idx > maxIndex) maxIndex = idx
+          }
         }
+      } catch (err) {
+        console.error('Failed to read directory for sequential naming', err)
       }
-    } catch (err) {
-      console.error('Failed to read directory for sequential naming', err)
-    }
-    
-    let nextIndex = Math.max(maxIndex + 1, imageIndex + 1)
-    fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
-    filePath = await api.pathJoin(imagesDir, fileName)
-    
-    // 终极防冲突（应对并发写入）
-    while (await api.checkExists(filePath)) {
-      nextIndex++
+
+      let nextIndex = Math.max(maxIndex + 1, imageIndex + 1)
       fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
       filePath = await api.pathJoin(imagesDir, fileName)
-    }
-  }
 
-  const success = await api.saveImage(filePath, dataUrl)
-  return success ? filePath : null
+      while (await api.checkExists(filePath)) {
+        nextIndex++
+        fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
+        filePath = await api.pathJoin(imagesDir, fileName)
+      }
+    }
+
+    const success = await api.saveImage(filePath, dataUrl)
+    return success ? filePath : null
+  })
 }
 
 export async function saveTaskMetaToLocal(

@@ -3,7 +3,11 @@ import {
   type CompositeV2ExportItem,
   type CompositeV2ExportSnapshot,
 } from './compositeExportPlan'
-import { buildCompositeOutputPathParts, withCollisionSuffix } from './compositePathTemplates'
+import {
+  buildCompositeOutputPathParts,
+  resolveCompositeTemplate,
+  withCollisionSuffix,
+} from './compositePathTemplates'
 import { renderCompositeV2ToJpegDataUrl } from './compositeRendererV2'
 import type { CompositeV2FailureItem, CompositeV2SuccessItem } from './compositeV2Types'
 
@@ -76,6 +80,15 @@ export function buildPresetOutputPathParts(
   snapshot: Pick<CompositeV2ExportSnapshot, 'preserveSourceDir'>,
 ) {
   return buildCompositeOutputPathParts({
+    ...buildPresetTemplateVariables(item),
+    namingTemplate: item.preset.subfolderTemplate,
+    filenameTemplate: item.preset.filenameTemplate,
+    preserveSourceDir: snapshot.preserveSourceDir,
+  })
+}
+
+function buildPresetTemplateVariables(item: CompositeV2ExportItem) {
+  return {
     date: item.date,
     channel: item.outputRule.channelName,
     size: item.outputRule.name,
@@ -85,10 +98,14 @@ export function buildPresetOutputPathParts(
     sourceDir: item.background.relativeDir,
     custom: item.custom,
     customVariables: item.preset.customVariableValues,
-    namingTemplate: item.preset.subfolderTemplate,
-    filenameTemplate: item.preset.filenameTemplate,
-    preserveSourceDir: snapshot.preserveSourceDir,
-  })
+  }
+}
+
+export function buildPresetOutputRootPath(item: CompositeV2ExportItem) {
+  return resolveCompositeTemplate(
+    item.preset.outputRootPath,
+    buildPresetTemplateVariables(item),
+  )
 }
 
 export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, callbacks: CompositeV2ExportRuntimeCallbacks) {
@@ -114,7 +131,7 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         shouldCancel: callbacks.shouldCancel,
       })
       const pathParts = buildPresetOutputPathParts(item, snapshot)
-      const directoryParts = [item.preset.outputRootPath, ...pathParts.subfolders]
+      const directoryParts = [buildPresetOutputRootPath(item), ...pathParts.subfolders]
       const outputPath = await resolveCollision(api, directoryParts, pathParts.filename)
       const saved = await api.saveCompositeImage(outputPath, rendered.dataUrl)
       if (!saved) throw new Error('图片写入失败')

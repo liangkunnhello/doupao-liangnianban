@@ -9,6 +9,7 @@ type Props = {
   onAddCustomVariable: (name: string, value: string) => void
   onUpdateCustomVariableValue: (name: string, value: string) => void
   onRemoveCustomVariable: (name: string) => void
+  onSelectOutputDirectory?: () => void | Promise<void>
 }
 
 const BUILT_IN_VARIABLES = [
@@ -86,7 +87,7 @@ export function resolveNamingTemplate(template: string, values: Record<string, s
   return template.replace(/\{([^{}]+)\}/g, (token, name: string) => values[name] ?? token)
 }
 
-type TemplateField = 'subfolderTemplate' | 'filenameTemplate'
+type TemplateField = 'outputRootPath' | 'subfolderTemplate' | 'filenameTemplate'
 
 export function PresetNamingFields({
   preset,
@@ -96,16 +97,19 @@ export function PresetNamingFields({
   onAddCustomVariable,
   onUpdateCustomVariableValue,
   onRemoveCustomVariable,
+  onSelectOutputDirectory,
 }: Props) {
   const [customName, setCustomName] = useState('')
   const [customValue, setCustomValue] = useState('')
   const [customNameError, setCustomNameError] = useState('')
   const [activeField, setActiveField] = useState<TemplateField>('subfolderTemplate')
   const selectionRef = useRef<Record<TemplateField, NamingTemplateSelection | null>>({
+    outputRootPath: null,
     subfolderTemplate: null,
     filenameTemplate: null,
   })
   const pendingCaretRef = useRef<{ field: TemplateField; caret: number } | null>(null)
+  const outputRootRef = useRef<HTMLInputElement>(null)
   const subfolderRef = useRef<HTMLTextAreaElement>(null)
   const filenameRef = useRef<HTMLTextAreaElement>(null)
   const customNameErrorId = `preset-custom-variable-name-error-${preset.id}`
@@ -122,7 +126,7 @@ export function PresetNamingFields({
     setCustomValue('')
     setCustomNameError('')
     setActiveField('subfolderTemplate')
-    selectionRef.current = { subfolderTemplate: null, filenameTemplate: null }
+    selectionRef.current = { outputRootPath: null, subfolderTemplate: null, filenameTemplate: null }
     pendingCaretRef.current = null
   }, [preset.id])
 
@@ -130,16 +134,21 @@ export function PresetNamingFields({
     const pending = pendingCaretRef.current
     if (!pending) return
     pendingCaretRef.current = null
-    const input = pending.field === 'subfolderTemplate' ? subfolderRef.current : filenameRef.current
+    const input = pending.field === 'outputRootPath'
+      ? outputRootRef.current
+      : pending.field === 'subfolderTemplate'
+        ? subfolderRef.current
+        : filenameRef.current
     input?.focus()
     input?.setSelectionRange(pending.caret, pending.caret)
-  }, [preset.subfolderTemplate, preset.filenameTemplate])
+  }, [preset.outputRootPath, preset.subfolderTemplate, preset.filenameTemplate])
 
-  function rememberSelection(field: TemplateField, input: HTMLTextAreaElement) {
+  function rememberSelection(field: TemplateField, input: HTMLInputElement | HTMLTextAreaElement) {
     setActiveField(field)
+    const fallbackCaret = preset[field].length
     selectionRef.current[field] = {
-      start: input.selectionStart,
-      end: input.selectionEnd,
+      start: input.selectionStart ?? fallbackCaret,
+      end: input.selectionEnd ?? fallbackCaret,
     }
   }
 
@@ -166,6 +175,37 @@ export function PresetNamingFields({
 
   return (
     <div data-layout="preset-naming-fields" className="space-y-3 border-t border-gray-200 pt-3 dark:border-white/[0.08]">
+      <label className="block text-[11px] text-gray-500">
+        输出根目录
+        <div className="mt-1 flex gap-2">
+          <input
+            ref={outputRootRef}
+            aria-label="输出根目录"
+            value={preset.outputRootPath}
+            onChange={(event) => onUpdatePreset({ outputRootPath: event.target.value })}
+            onFocus={(event) => rememberSelection('outputRootPath', event.currentTarget)}
+            onSelect={(event) => rememberSelection('outputRootPath', event.currentTarget)}
+            className="min-w-0 flex-1 cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900"
+          />
+          <button
+            type="button"
+            onClick={() => void onSelectOutputDirectory?.()}
+            className="cursor-pointer rounded-md border border-gray-200 bg-white px-3 text-xs font-medium hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-950 dark:hover:bg-gray-800"
+          >
+            选择
+          </button>
+        </div>
+      </label>
+      <label className="block text-[11px] text-gray-500">
+        全局分配地址
+        <input
+          aria-label="全局分配地址"
+          value={preset.distributionPath}
+          onChange={(event) => onUpdatePreset({ distributionPath: event.target.value })}
+          placeholder="目标根目录"
+          className="mt-1 w-full cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900"
+        />
+      </label>
       <label className="block text-[11px] text-gray-500">
         目录模板
         <textarea

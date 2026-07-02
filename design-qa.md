@@ -40,6 +40,43 @@ final result: passed
 
 ---
 
+# Preset Size and Output Root Template Design QA
+
+- Source visual truth: `C:/Users/tt/AppData/Local/Temp/codex-clipboard-bb85caa2-1fed-46cd-bbca-1f8bafe8431c.png`
+- Implementation screenshot: `D:/AAA/GPT-IMAGE-20260629/design-qa-preset-size-root-implementation.png`
+- Combined comparison: `D:/AAA/GPT-IMAGE-20260629/design-qa-preset-size-root-comparison.png`
+- Viewport: 1270 × 712 desktop capture
+- State: Postprocess > Preset Management, default preset selected, `1080×1920`, output root focused after inserting `{date}`
+
+**Full-View Comparison**
+
+The existing preset-management workspace remains unchanged outside the preset details column. The base dimensions are now one compact selector, while the output root keeps its path field and adjacent directory-picker action.
+
+**Focused Region Comparison**
+
+- Fonts and typography: existing compact system UI type, weights, labels, and control hierarchy are preserved.
+- Spacing and layout rhythm: the selector occupies the former two-field width; output root remains above the global distribution path and retains the same horizontal input/button composition.
+- Colors and visual tokens: neutral borders and surfaces continue to use existing application tokens; the amber focus ring is the existing focused-input state.
+- Image quality and asset fidelity: this region contains no image assets or custom icons.
+- Copy and content: `基准尺寸`, `输出根目录`, `全局分配地址`, and `选择` remain clear and consistent with the surrounding Chinese UI.
+
+**Findings**
+
+No actionable P0, P1, or P2 differences remain. The two separate dimension inputs intentionally become one selector, and the focused output root visibly contains the inserted `{date}` token as required.
+
+**Patches Made**
+
+- Restored output root above global distribution after the first comparison exposed an unintended order change.
+- Added an accessible label to the global distribution input and locked the field order with a component regression test.
+
+**Follow-up Polish**
+
+- None required for this scoped change.
+
+final result: passed
+
+---
+
 # Layer Properties A2 Design QA
 
 - Source visual truth: `C:/Users/tt/AppData/Local/Temp/codex-clipboard-ce0faf8f-396b-470f-b1fa-6a2d021c0784.png`

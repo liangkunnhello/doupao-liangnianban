@@ -328,6 +328,58 @@ describe('PresetManagementTab', () => {
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {project}' })).toHaveLength(1)
   })
 
+  it('selects the preset base canvas from the three supported sizes', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+    const group = { ...createDefaultCompositeV2PresetGroup(1), presetIds: [preset.id] }
+    useCompositeV2Store.setState({
+      presets: [preset],
+      presetGroups: [group],
+      selectedPresetGroupId: group.id,
+      selectedPreviewPresetId: preset.id,
+    })
+
+    let renderer: ReturnType<typeof create>
+    act(() => {
+      renderer = create(<PresetManagementTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const sizeSelect = renderer!.root.findByProps({ 'aria-label': '基准尺寸' })
+    expect(sizeSelect.findAllByType('option').map((option) => ({
+      value: option.props.value,
+      label: getNodeText(option),
+    }))).toEqual([
+      { value: '1280x720', label: '1280×720' },
+      { value: '1080x1920', label: '1080×1920' },
+      { value: '800x800', label: '800×800' },
+    ])
+
+    act(() => {
+      sizeSelect.props.onChange({ target: { value: '1080x1920' } })
+    })
+
+    expect(useCompositeV2Store.getState().presets[0]!.baseCanvas).toEqual({
+      width: 1080,
+      height: 1920,
+    })
+  })
+
+  it('keeps the output root above the global distribution path', () => {
+    let renderer: ReturnType<typeof create>
+    act(() => {
+      renderer = create(<PresetManagementTab />)
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findAll(
+      (node) => node.props['aria-label'] === '输出根目录'
+        || node.props['aria-label'] === '全局分配地址',
+    ).map((node) => node.props['aria-label'])).toEqual([
+      '输出根目录',
+      '全局分配地址',
+    ])
+  })
+
   it('auto-selects the newly created layer after adding text', () => {
     const preset = createDefaultCompositeV2Preset(1)
     const group = { ...createDefaultCompositeV2PresetGroup(1), presetIds: [preset.id] }
