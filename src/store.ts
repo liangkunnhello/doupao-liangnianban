@@ -77,6 +77,7 @@ import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import { isElectron as isElectronEnv, getLocalSavePath, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath } from './lib/localSave'
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
+import { ByteLruCache } from './lib/byteLruCache'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -85,14 +86,12 @@ export const DEFAULT_FAVORITE_COLLECTION_NAME = '默认'
 // ===== Image cache =====
 // 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
 
-const imageCache = new Map<string, string>()
-const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()
+const imageCache = new ByteLruCache<string, string>(128 * 1024 * 1024)
+const thumbnailCache = new ByteLruCache<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>(64 * 1024 * 1024)
 const thumbnailBackfillIds = new Map<string, 'visible' | 'background'>()
 const thumbnailBackfillRunningIds = new Set<string>()
 const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
 let thumbnailBackfillScheduled = false
-const MAX_IMAGE_CACHE_ENTRIES = 8
-const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 export const MAX_RETAINED_STREAM_PARTIAL_IMAGES = 3
 const FAL_RECOVERY_POLL_MS = 10_000
@@ -168,22 +167,11 @@ function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStrea
 }
 
 export function getCachedImage(id: string): string | undefined {
-  const dataUrl = imageCache.get(id)
-  if (dataUrl) {
-    imageCache.delete(id)
-    imageCache.set(id, dataUrl)
-  }
-  return dataUrl
+  return imageCache.get(id)
 }
 
 export function cacheImage(id: string, dataUrl: string) {
-  imageCache.delete(id)
-  imageCache.set(id, dataUrl)
-  while (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
-    const oldestKey = imageCache.keys().next().value
-    if (oldestKey == null) break
-    imageCache.delete(oldestKey)
-  }
+  imageCache.set(id, dataUrl, dataUrl.length * 2)
 }
 
 async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], imageIndexOffset: number = 0) {
@@ -283,8 +271,6 @@ async function saveAgentConversationToLocalFS(conversationId: string) {
 function getCachedThumbnail(id: string) {
   const thumbnail = thumbnailCache.get(id)
   if (thumbnail?.thumbnailVersion === CURRENT_THUMBNAIL_VERSION) {
-    thumbnailCache.delete(id)
-    thumbnailCache.set(id, thumbnail)
     return thumbnail
   }
   if (thumbnail) {
@@ -295,13 +281,7 @@ function getCachedThumbnail(id: string) {
 
 function cacheThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }) {
   if (thumbnail.thumbnailVersion !== CURRENT_THUMBNAIL_VERSION) return
-  thumbnailCache.delete(id)
-  thumbnailCache.set(id, thumbnail)
-  while (thumbnailCache.size > MAX_THUMBNAIL_CACHE_ENTRIES) {
-    const oldestKey = thumbnailCache.keys().next().value
-    if (oldestKey == null) break
-    thumbnailCache.delete(oldestKey)
-  }
+  thumbnailCache.set(id, thumbnail, thumbnail.dataUrl.length * 2)
 }
 
 export async function ensureImageCached(id: string): Promise<string | undefined> {
@@ -3431,7 +3411,7 @@ export function ensureImageStorageMigrated(): Promise<number> {
 }
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
-export async function initStore() {
+export async function initStore(options: { safeMode?: boolean } = {}) {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   // 确保所有任务都具有合法的 params 对象，以兼容旧版无参数记录的数据
@@ -3654,16 +3634,12 @@ export async function initStore() {
   // 只枚举 key 清理孤立图片，避免启动时把所有 4K 原图读进内存。
   const imageIds = await getAllImageIds()
   const orphanIds: string[] = []
-  const referencedImageIds: string[] = []
   for (const imgId of imageIds) {
-    if (referencedIds.has(imgId)) {
-      referencedImageIds.push(imgId)
-    } else {
+    if (!referencedIds.has(imgId)) {
       orphanIds.push(imgId)
     }
   }
   if (orphanIds.length > 0) await batchDeleteImages(orphanIds)
-  scheduleThumbnailBackfill(referencedImageIds)
 
   const idsToFetch = new Set<string>()
   for (const img of persistedInputImages) {
@@ -3785,7 +3761,7 @@ export async function initStore() {
         : {}),
     })
   }
-  void ensureImageStorageMigrated().catch((error) => {
+  if (!options.safeMode) void ensureImageStorageMigrated().catch((error) => {
     console.error('图片存储迁移失败:', error)
   })
 }

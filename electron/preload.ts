@@ -45,5 +45,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  getStartupMode: () => ipcRenderer.invoke('app:get-startup-mode'),
   isElectron: true,
 })

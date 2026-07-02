@@ -45,6 +45,7 @@ type ElectronAPI = {
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>
   installUpdate: () => Promise<{ success: boolean }>
   getAppVersion: () => Promise<string>
+  getStartupMode?: () => Promise<{ safeMode: boolean }>
   isElectron: boolean
 }
 

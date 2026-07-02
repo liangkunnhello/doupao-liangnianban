@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { initStore, exportDataToPath } from './store'
 import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
@@ -43,6 +43,7 @@ export default function App() {
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const themeMode = useStore((s) => s.settings.themeMode)
   const themeAppliedRef = useRef(false)
+  const [startupSafeMode, setStartupSafeMode] = useState(false)
   useGlobalClickSuppression()
 
   useEffect(() => {
@@ -81,7 +82,11 @@ export default function App() {
     // Guard against double invocation in StrictMode or hot reload
     if (!(window as unknown as Record<string, unknown>).__storeInitialized) {
       (window as unknown as Record<string, unknown>).__storeInitialized = true
-      initStore().catch((error) => {
+      const startupModePromise = window.electronAPI?.getStartupMode?.() ?? Promise.resolve({ safeMode: false })
+      startupModePromise.then(({ safeMode }) => {
+        setStartupSafeMode(safeMode)
+        return initStore({ safeMode })
+      }).catch((error) => {
         console.error('Store initialization failed:', error)
         useStore.getState().showToast(`启动数据加载失败：${error instanceof Error ? error.message : String(error)}`, 'error')
       })
@@ -195,6 +200,13 @@ export default function App() {
       <WorkspaceTabBar />
       <div className={appMode === 'postprocess' ? '' : 'app-shell-with-docked-panels'}>
         <Header />
+        {startupSafeMode && (
+          <div className="safe-area-x mx-auto max-w-7xl px-4 pt-3">
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+              已进入安全模式：后台图片迁移和历史缩略图回填已暂停。请先备份或清理数据后重新启动。
+            </div>
+          </div>
+        )}
         {appMode === 'agent' ? (
           <React.Suspense fallback={null}><AgentWorkspace /></React.Suspense>
         ) : appMode === 'postprocess' ? (

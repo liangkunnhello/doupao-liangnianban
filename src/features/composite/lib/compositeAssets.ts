@@ -5,6 +5,7 @@ import {
   putCompositeAssets,
 } from '../../../lib/db'
 import type { CompositeV2Preset, CompositeV2ProjectLogo } from './compositeV2Types'
+import { ByteLruCache } from '../../../lib/byteLruCache'
 
 type AssetState = {
   projectLogos: CompositeV2ProjectLogo[]
@@ -16,7 +17,10 @@ type StoreCompositeBlobDeps = {
   now: () => number
 }
 
-const objectUrlCache = new Map<string, string>()
+const objectUrlCache = new ByteLruCache<string, string>(
+  64 * 1024 * 1024,
+  (url) => URL.revokeObjectURL(url),
+)
 
 export async function hashCompositeBlob(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -66,14 +70,13 @@ export async function getCompositeAssetObjectUrl(assetId: string): Promise<strin
   const asset = await getCompositeAsset(assetId)
   if (!asset) return null
   const url = URL.createObjectURL(asset.blob)
-  objectUrlCache.set(assetId, url)
+  objectUrlCache.set(assetId, url, asset.blob.size)
   return url
 }
 
 export function revokeCompositeAssetObjectUrl(assetId: string): void {
   const url = objectUrlCache.get(assetId)
   if (!url) return
-  URL.revokeObjectURL(url)
   objectUrlCache.delete(assetId)
 }
 

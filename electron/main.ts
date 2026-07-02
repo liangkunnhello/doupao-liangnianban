@@ -1,15 +1,18 @@
 import { app, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { existsSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { registerIpcHandlers, initLocalSavePath } from './ipc-handlers'
+import { decideRendererRecovery } from './renderer-crash-recovery'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
 let pendingReleaseNotes: unknown
+let rendererSafeMode = false
+let rendererCrashTimestamps: number[] = []
 
 const iconPath = path.join(__dirname, '../public/app-icon.png')
 const appIcon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined
@@ -30,6 +33,21 @@ autoUpdater.setFeedURL({
 function sendToWindow(channel: string, ...args: unknown[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args)
+  }
+}
+
+function recordRendererCrash(details: { reason: string; exitCode: number }, safeMode: boolean) {
+  try {
+    const diagnosticsDir = path.join(app.getPath('userData'), 'diagnostics')
+    mkdirSync(diagnosticsDir, { recursive: true })
+    appendFileSync(path.join(diagnosticsDir, 'renderer-crashes.jsonl'), `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      reason: details.reason,
+      exitCode: details.exitCode,
+      safeMode,
+    })}\n`, 'utf-8')
+  } catch (error) {
+    console.error('[renderer-crash-log-failed]', error)
   }
 }
 
@@ -147,7 +165,12 @@ function createWindow() {
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[renderer-crash]', details.reason, details.exitCode)
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    const now = Date.now()
+    rendererCrashTimestamps = [...rendererCrashTimestamps.filter((timestamp) => now - timestamp <= 60_000), now]
+    const decision = decideRendererRecovery(rendererCrashTimestamps, now)
+    rendererSafeMode = decision.safeMode
+    recordRendererCrash(details, rendererSafeMode)
+    if (decision.reload && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.reload()
     }
   })
@@ -172,6 +195,7 @@ process.on('unhandledRejection', (reason) => {
 app.whenReady().then(() => {
   initLocalSavePath()
   registerIpcHandlers()
+  ipcMain.handle('app:get-startup-mode', () => ({ safeMode: rendererSafeMode }))
 
   ipcMain.handle('update:check', async () => {
     try {

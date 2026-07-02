@@ -353,6 +353,18 @@ describe('workspace tab defaults', () => {
     })
   })
 
+  it('does not enqueue thumbnail work for the full history during startup', async () => {
+    const requestIdleCallback = vi.fn()
+    vi.stubGlobal('requestIdleCallback', requestIdleCallback)
+    await putImage({ id: 'history-image', dataUrl: 'data:image/png;base64,a' })
+    await putDbTask(task({ id: 'history-task', outputImages: ['history-image'] }))
+
+    await initStore()
+
+    expect(requestIdleCallback).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
   it('keeps existing gallery tasks in the default tab when no tabs were persisted', async () => {
     const existingTask = task({ id: 'orphan-gallery-task' })
     await putDbTask(existingTask)

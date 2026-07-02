@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask } from '../store'
-import { getNextTaskGridVisibleCount, getTaskGridRenderSlice, INITIAL_TASK_GRID_RENDER_COUNT, TASK_GRID_RENDER_BATCH_SIZE } from '../lib/taskGridWindow'
+import { getTaskGridColumnCount, getTaskGridVirtualWindow } from '../lib/taskGridVirtualWindow'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -25,8 +25,11 @@ export default function TaskGrid() {
   const clearSelection = useStore((s) => s.clearSelection)
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
-  const loadMoreRef = useRef<HTMLDivElement>(null)
-  const [visibleCount, setVisibleCount] = useState(INITIAL_TASK_GRID_RENDER_COUNT)
+  const [viewport, setViewport] = useState(() => ({
+    scrollY: typeof window === 'undefined' ? 0 : window.scrollY,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight,
+    width: typeof window === 'undefined' ? 1_024 : window.innerWidth,
+  }))
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
@@ -70,39 +73,42 @@ export default function TaskGrid() {
       return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q) || batchErrorStr.includes(q)
     })
   }, [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
-  const visibleTasks = useMemo(
-    () => getTaskGridRenderSlice(filteredTasks, visibleCount),
-    [filteredTasks, visibleCount],
-  )
-
   useEffect(() => {
-    setVisibleCount(INITIAL_TASK_GRID_RENDER_COUNT)
-  }, [activeTabId, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
-
-  useEffect(() => {
-    if (visibleCount >= filteredTasks.length) return
-    const target = loadMoreRef.current
-    if (!target || typeof IntersectionObserver === 'undefined') return
-
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return
-      setVisibleCount((count) => getNextTaskGridVisibleCount(count, filteredTasks.length, TASK_GRID_RENDER_BATCH_SIZE))
-    }, { rootMargin: '600px 0px' })
-    observer.observe(target)
-    return () => observer.disconnect()
-  }, [filteredTasks.length, visibleCount])
-
-  useEffect(() => {
-    if (visibleCount >= filteredTasks.length || typeof IntersectionObserver !== 'undefined') return
-    const handleScroll = () => {
-      const remaining = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight)
-      if (remaining > 800) return
-      setVisibleCount((count) => getNextTaskGridVisibleCount(count, filteredTasks.length, TASK_GRID_RENDER_BATCH_SIZE))
+    let frame = 0
+    const updateViewport = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        setViewport({
+          scrollY: window.scrollY,
+          height: window.innerHeight,
+          width: window.innerWidth,
+        })
+      })
     }
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    handleScroll()
-    return () => window.removeEventListener('scroll', handleScroll)
-  }, [filteredTasks.length, visibleCount])
+    window.addEventListener('scroll', updateViewport, { passive: true })
+    window.addEventListener('resize', updateViewport)
+    updateViewport()
+    return () => {
+      window.removeEventListener('scroll', updateViewport)
+      window.removeEventListener('resize', updateViewport)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
+  }, [])
+
+  const columns = getTaskGridColumnCount(viewport.width)
+  const gridPageTop = rootRef.current
+    ? rootRef.current.getBoundingClientRect().top + viewport.scrollY
+    : viewport.scrollY
+  const virtualWindow = getTaskGridVirtualWindow({
+    itemCount: filteredTasks.length,
+    columns,
+    rowHeight: 176,
+    scrollTop: Math.max(0, viewport.scrollY - gridPageTop),
+    viewportHeight: viewport.height,
+    overscanRows: 3,
+  })
+  const visibleTasks = filteredTasks.slice(virtualWindow.start, virtualWindow.end)
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -346,36 +352,39 @@ export default function TaskGrid() {
       data-task-grid-root
       className="relative min-h-[50vh]"
     >
-      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {visibleTasks.map((task) => (
-          <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
-            <TaskCard
-              task={task}
-              onClick={(e) => {
-                if (Date.now() < suppressClickUntil.current) {
-                  e.preventDefault()
-                  return
-                }
-                suppressClickUntil.current = 0
-                const isCtrl = isMac ? e.metaKey : e.ctrlKey
-                if (isCtrl) {
-                  useStore.getState().toggleTaskSelection(task.id)
-                  return
-                }
+      <div style={{ height: virtualWindow.totalHeight + 40 }}>
+        <div
+          ref={gridRef}
+          className="absolute left-0 right-0 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          style={{ top: virtualWindow.offsetTop }}
+        >
+          {visibleTasks.map((task) => (
+            <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
+              <TaskCard
+                task={task}
+                onClick={(e) => {
+                  if (Date.now() < suppressClickUntil.current) {
+                    e.preventDefault()
+                    return
+                  }
+                  suppressClickUntil.current = 0
+                  const isCtrl = isMac ? e.metaKey : e.ctrlKey
+                  if (isCtrl) {
+                    useStore.getState().toggleTaskSelection(task.id)
+                    return
+                  }
 
-                setDetailTaskId(task.id)
-              }}
-              onReuse={() => reuseConfig(task)}
-              onEditOutputs={() => editOutputs(task)}
-              onDelete={() => handleDelete(task)}
-              isSelected={selectedTaskIdSet.has(task.id)}
-            />
-          </div>
-        ))}
+                  setDetailTaskId(task.id)
+                }}
+                onReuse={() => reuseConfig(task)}
+                onEditOutputs={() => editOutputs(task)}
+                onDelete={() => handleDelete(task)}
+                isSelected={selectedTaskIdSet.has(task.id)}
+              />
+            </div>
+          ))}
+        </div>
       </div>
-      {visibleCount < filteredTasks.length && (
-        <div ref={loadMoreRef} className="h-10" aria-hidden="true" />
-      )}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"

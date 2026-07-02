@@ -5,7 +5,35 @@ import {
   getCompositeAsset,
   getLegacyImageBatch,
   putCompositeAssets,
+  putImage,
 } from './db'
+
+describe('database transaction completion', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('rejects when a write request succeeds but its transaction aborts', async () => {
+    const putRequest: any = {}
+    const tx: any = {
+      error: null,
+      objectStore: () => ({ put: () => putRequest }),
+      oncomplete: null,
+      onerror: null,
+      onabort: null,
+    }
+    vi.stubGlobal('indexedDB', {
+      open: () => requestWithResult({ transaction: () => tx }),
+    })
+
+    const write = putImage({ id: 'image-a', dataUrl: 'data:image/png;base64,a' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    putRequest.result = 'image-a'
+    putRequest.onsuccess?.()
+    tx.error = new Error('quota exceeded')
+    tx.onabort?.()
+
+    await expect(write).rejects.toThrow('quota exceeded')
+  })
+})
 
 describe('batchGetImages', () => {
   afterEach(() => {
