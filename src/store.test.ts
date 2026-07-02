@@ -116,7 +116,9 @@ vi.mock('./lib/db', () => {
       images: StoredImage[]
       thumbnails: StoredImageThumbnail[]
       tasks: TaskRecord[]
+      replaceTasks?: boolean
     }) => {
+      if (records.replaceTasks) tasks.clear()
       for (const image of records.images) images.set(image.id, image)
       for (const thumbnail of records.thumbnails) thumbnails.set(thumbnail.id, thumbnail)
       for (const task of records.tasks) tasks.set(task.id, task)
@@ -1435,6 +1437,216 @@ describe('data import', () => {
     ])
     expect(storedAsset?.createdAt).toBe(123)
     expect(new Uint8Array(await storedAsset!.blob.arrayBuffer())).toEqual(assetBytes)
+  })
+
+  it('fully replaces tasks and restores their exact workspace tabs from v5 backups', async () => {
+    await clearTasks()
+    const localTask = task({ id: 'local-only-task' })
+    const importedTaskA = task({ id: 'task-a' })
+    const importedTaskB = task({ id: 'task-b' })
+    const importedConversation = agentConversation({
+      id: 'imported-conversation',
+      title: '备份对话',
+      activeRoundId: 'round-a',
+      rounds: [{
+        id: 'round-a',
+        index: 1,
+        parentRoundId: null,
+        userMessageId: 'message-a',
+        prompt: '备份内容',
+        inputImageIds: [],
+        outputTaskIds: [],
+        status: 'done',
+        error: null,
+        createdAt: 1,
+        finishedAt: 2,
+      }],
+      messages: [{ id: 'message-a', role: 'user', content: '备份内容', roundId: 'round-a', createdAt: 1 }],
+    })
+    const localConversation = agentConversation({
+      id: 'local-conversation',
+      title: '本地对话',
+    })
+    const group = {
+      id: 'group-a',
+      name: '分组 A',
+      order: 0,
+      collapsed: false,
+    }
+    await putDbTask(localTask)
+    useStore.setState({
+      tasks: [localTask],
+      agentConversations: [localConversation],
+      activeAgentConversationId: localConversation.id,
+      workspaceTabs: [workspaceTab({ id: 'local-tab', tasks: [localTask] })],
+      workspaceTabGroups: [],
+      activeWorkspaceTabId: 'local-tab',
+      selectedWorkspaceTabIds: ['local-tab'],
+    })
+
+    const imported = await importData(importFile({
+      version: 5,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [importedTaskA, importedTaskB],
+      agentConversations: [importedConversation],
+      favoriteCollections: [],
+      wordLibraryGroups: [],
+      wordLibraryEntries: [],
+      imageFiles: {},
+      workspaceState: {
+        groups: [group],
+        activeTabId: 'tab-b',
+        tabs: [
+          {
+            id: 'tab-a',
+            name: '标签 A',
+            groupId: group.id,
+            prompt: 'A',
+            inputImageIds: [],
+            inputImageFolder: null,
+            params: { ...DEFAULT_PARAMS },
+            maskDraft: null,
+            maskEditorImageId: null,
+            customOutputPath: '',
+            taskIds: [importedTaskA.id],
+            createdAt: 1,
+            updatedAt: 1,
+            order: 0,
+          },
+          {
+            id: 'tab-b',
+            name: '标签 B',
+            groupId: null,
+            prompt: 'B',
+            inputImageIds: [],
+            inputImageFolder: null,
+            params: { ...DEFAULT_PARAMS },
+            maskDraft: null,
+            maskEditorImageId: null,
+            customOutputPath: '',
+            taskIds: [importedTaskB.id],
+            createdAt: 2,
+            updatedAt: 2,
+            order: 1,
+          },
+          {
+            id: 'tab-empty',
+            name: '空标签',
+            groupId: null,
+            prompt: '',
+            inputImageIds: [],
+            inputImageFolder: null,
+            params: { ...DEFAULT_PARAMS },
+            maskDraft: null,
+            maskEditorImageId: null,
+            customOutputPath: '',
+            taskIds: [],
+            createdAt: 3,
+            updatedAt: 3,
+            order: 2,
+          },
+        ],
+      },
+    }), { importConfig: true, importTasks: true, importImages: true })
+
+    const state = useStore.getState()
+    expect(imported).toBe(true)
+    expect((await getAllTasks()).map((item) => item.id)).toEqual(['task-a', 'task-b'])
+    expect(state.workspaceTabs.map((tab) => ({
+      id: tab.id,
+      taskIds: tab.tasks.map((item) => item.id),
+    }))).toEqual([
+      { id: 'tab-a', taskIds: ['task-a'] },
+      { id: 'tab-b', taskIds: ['task-b'] },
+      { id: 'tab-empty', taskIds: [] },
+    ])
+    expect(state.workspaceTabGroups).toEqual([group])
+    expect(state.activeWorkspaceTabId).toBe('tab-b')
+    expect(state.selectedWorkspaceTabIds).toEqual([])
+    expect(state.agentConversations.map((conversation) => conversation.id)).toEqual(['imported-conversation'])
+  })
+
+  it('rejects invalid v5 workspace references before replacing local state', async () => {
+    await clearTasks()
+    const localTask = task({ id: 'local-task' })
+    const localTab = workspaceTab({ id: 'local-tab', tasks: [localTask] })
+    await putDbTask(localTask)
+    useStore.setState({
+      tasks: [localTask],
+      workspaceTabs: [localTab],
+      activeWorkspaceTabId: localTab.id,
+    })
+
+    const imported = await importData(importFile({
+      version: 5,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [],
+      imageFiles: {},
+      workspaceState: {
+        groups: [],
+        activeTabId: 'tab-a',
+        tabs: [{
+          id: 'tab-a',
+          name: '标签 A',
+          groupId: null,
+          prompt: '',
+          inputImageIds: [],
+          inputImageFolder: null,
+          params: { ...DEFAULT_PARAMS },
+          maskDraft: null,
+          maskEditorImageId: null,
+          customOutputPath: '',
+          taskIds: ['missing-task'],
+          createdAt: 1,
+          updatedAt: 1,
+          order: 0,
+        }],
+      },
+    }), { importConfig: true, importTasks: true, importImages: true })
+
+    expect(imported).toBe(false)
+    expect((await getAllTasks()).map((item) => item.id)).toEqual([localTask.id])
+    expect(useStore.getState().workspaceTabs).toEqual([localTab])
+  })
+
+  it('keeps merge semantics for task-only v5 imports and full v4 imports', async () => {
+    await clearTasks()
+    const localTask = task({ id: 'local-task' })
+    const localTab = workspaceTab({ id: 'local-tab', tasks: [localTask] })
+    await putDbTask(localTask)
+    useStore.setState({
+      tasks: [localTask],
+      workspaceTabs: [localTab],
+      activeWorkspaceTabId: localTab.id,
+    })
+
+    const taskOnly = await importData(importFile({
+      version: 5,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [task({ id: 'task-only-import' })],
+      imageFiles: {},
+      workspaceState: {
+        groups: [],
+        activeTabId: null,
+        tabs: [],
+      },
+    }), { importConfig: false, importTasks: true, importImages: false })
+
+    const legacy = await importData(importFile({
+      version: 4,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [task({ id: 'legacy-import' })],
+      imageFiles: {},
+    }), { importConfig: true, importTasks: true, importImages: false })
+
+    expect(taskOnly).toBe(true)
+    expect(legacy).toBe(true)
+    expect((await getAllTasks()).map((item) => item.id)).toEqual([
+      'local-task',
+      'task-only-import',
+      'legacy-import',
+    ])
+    expect(useStore.getState().workspaceTabs).toEqual([localTab])
   })
 
   it('restores favorite collections and default collection when importing task data', async () => {

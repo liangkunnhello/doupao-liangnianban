@@ -68,6 +68,43 @@ describe('database transaction completion', () => {
       tasks: ['task-a'],
     })
   })
+
+  it('clears existing tasks before committing a replacement import', async () => {
+    const events: string[] = []
+    let complete: (() => void) | null = null
+    const tx = {
+      objectStore: (name: string) => ({
+        clear: () => events.push(`clear:${name}`),
+        put: (value: { id: string }) => events.push(`put:${name}:${value.id}`),
+      }),
+      set oncomplete(handler: (() => void) | null) {
+        complete = handler
+        queueMicrotask(() => complete?.())
+      },
+      onerror: null,
+      onabort: null,
+    }
+    vi.stubGlobal('indexedDB', {
+      open: () => requestWithResult({ transaction: () => tx }),
+    })
+
+    await (commitImportedRecords as unknown as (records: {
+      images: []
+      thumbnails: []
+      tasks: Array<{ id: string }>
+      replaceTasks: boolean
+    }) => Promise<void>)({
+      images: [],
+      thumbnails: [],
+      tasks: [{ id: 'task-from-backup' }],
+      replaceTasks: true,
+    })
+
+    expect(events).toEqual([
+      'clear:tasks',
+      'put:tasks:task-from-backup',
+    ])
+  })
 })
 
 describe('batchGetImages', () => {

@@ -1,4 +1,5 @@
 import type { ExportData } from '../types'
+import { restoreWorkspaceBackupState } from './workspaceBackup'
 
 export type BackupImportSelection = {
   importConfig?: boolean
@@ -49,5 +50,18 @@ export function validateBackupArchive(
   }
   if (selection.importConfig) {
     assertFilesExist(Object.values(data.compositeAssetFiles ?? {}), files)
+  }
+
+  if (
+    data.version >= 5 &&
+    data.workspaceState &&
+    selection.importConfig &&
+    selection.importTasks
+  ) {
+    restoreWorkspaceBackupState(
+      data.workspaceState,
+      data.tasks ?? [],
+      new Set(Object.keys(data.imageFiles ?? {})),
+    )
   }
 }

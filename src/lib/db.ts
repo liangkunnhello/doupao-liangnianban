@@ -560,12 +560,14 @@ export function commitImportedRecords(records: {
   images: StoredImage[]
   thumbnails: StoredImageThumbnail[]
   tasks: TaskRecord[]
+  replaceTasks?: boolean
 }): Promise<void> {
   return openDB().then((db) => new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS, STORE_TASKS], 'readwrite')
     const imageStore = tx.objectStore(STORE_IMAGES)
     const thumbnailStore = tx.objectStore(STORE_THUMBNAILS)
     const taskStore = tx.objectStore(STORE_TASKS)
+    if (records.replaceTasks) taskStore.clear()
     for (const image of records.images) imageStore.put(image)
     for (const thumbnail of records.thumbnails) thumbnailStore.put(thumbnail)
     for (const task of records.tasks) taskStore.put(task)

@@ -88,7 +88,7 @@ import { sanitizeSettingsForBackup } from './lib/backupManifest'
 import { validateBackupArchive } from './lib/backupImport'
 import { runMigration } from './lib/migrations/registry'
 import { shouldDeleteOrphanImage } from './lib/storageCleanup'
-import { createWorkspaceBackupState } from './lib/workspaceBackup'
+import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/workspaceBackup'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -7526,6 +7526,11 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
     const data: ExportData = JSON.parse(strFromU8(manifestBytes))
     validateBackupArchive(data, unzipped, options)
+    const replaceWorkspace =
+      data.version >= 5 &&
+      Boolean(data.workspaceState) &&
+      options.importConfig === true &&
+      options.importTasks === true
 
     const importedImageIds: string[] = []
     const importedImages: StoredImage[] = []
@@ -7595,6 +7600,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
         images: importedImages,
         thumbnails: importedThumbnails,
         tasks: importedTasks,
+        replaceTasks: replaceWorkspace,
       })
 
       const tasks = await getAllTasks()
@@ -7603,10 +7609,14 @@ export async function importData(file: File, options: ImportOptions = { importCo
       const importedAgentConversations = normalizeAgentConversations(data.agentConversations ?? [])
         .filter((conversation) => !isEmptyAgentConversation(conversation))
       useStore.setState((state) => {
-        const agentConversations = mergeImportedAgentConversations(state.agentConversations, importedAgentConversations)
-        const activeAgentConversationId = state.activeAgentConversationId && agentConversations.some((conversation) => conversation.id === state.activeAgentConversationId)
-          ? state.activeAgentConversationId
-          : importedAgentConversations[0]?.id ?? agentConversations[0]?.id ?? null
+        const agentConversations = replaceWorkspace
+          ? importedAgentConversations
+          : mergeImportedAgentConversations(state.agentConversations, importedAgentConversations)
+        const activeAgentConversationId = replaceWorkspace
+          ? agentConversations[0]?.id ?? null
+          : state.activeAgentConversationId && agentConversations.some((conversation) => conversation.id === state.activeAgentConversationId)
+            ? state.activeAgentConversationId
+            : importedAgentConversations[0]?.id ?? agentConversations[0]?.id ?? null
         return {
           agentConversations,
           activeAgentConversationId,
@@ -7638,10 +7648,23 @@ export async function importData(file: File, options: ImportOptions = { importCo
         : state.defaultFavoriteCollectionId
       const tasks = await getAllTasks()
       const normalizedFavorites = normalizeLoadedFavoriteState(tasks, favoriteCollections, defaultFavoriteCollectionId)
+      const restoredWorkspace = replaceWorkspace
+        ? restoreWorkspaceBackupState(
+            data.workspaceState!,
+            normalizedFavorites.tasks,
+            new Set(Object.keys(data.imageFiles ?? {})),
+          )
+        : null
       useStore.setState({
         tasks: normalizedFavorites.tasks,
         favoriteCollections: normalizedFavorites.collections,
         defaultFavoriteCollectionId: normalizedFavorites.defaultFavoriteCollectionId,
+        ...(restoredWorkspace ? {
+          workspaceTabs: restoredWorkspace.tabs,
+          workspaceTabGroups: restoredWorkspace.groups,
+          activeWorkspaceTabId: restoredWorkspace.activeTabId,
+          selectedWorkspaceTabIds: [],
+        } : {}),
       })
       if (normalizedFavorites.changed) await Promise.all(normalizedFavorites.tasks.map((task) => putTask(task)))
 
