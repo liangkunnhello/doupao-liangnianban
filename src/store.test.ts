@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { strToU8, zipSync } from 'fflate'
+import { strToU8, unzipSync, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultScheduleRows } from './lib/schedule'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
@@ -133,10 +133,10 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -207,6 +207,63 @@ function importFile(data: ExportData, files: Record<string, Uint8Array> = {}): F
   const buffer = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength)
   return { arrayBuffer: async () => buffer } as File
 }
+
+describe('data export', () => {
+  it('includes composite metadata and assets in Web backups', async () => {
+    const localStorage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
+    let exportedBlob: Blob | undefined
+    const NativeURL = URL
+    vi.stubGlobal('localStorage', localStorage)
+    vi.stubGlobal('window', { localStorage })
+    vi.stubGlobal('document', {
+      createElement: () => ({ href: '', download: '', click: vi.fn() }),
+      body: { appendChild: vi.fn(), removeChild: vi.fn() },
+    })
+    vi.stubGlobal('URL', class extends NativeURL {
+      static createObjectURL(blob: Blob) {
+        exportedBlob = blob
+        return 'blob:backup'
+      }
+      static revokeObjectURL() {}
+    })
+
+    try {
+      const { useCompositeV2Store } = await import('./features/composite/storeV2')
+      const assetId = 'exported-composite-asset'
+      useCompositeV2Store.setState({
+        projectLogos: [{ id: 'logo-a', name: 'Logo A', assetId }],
+      })
+      await putCompositeAssets([{
+        id: assetId,
+        blob: new Blob([new Uint8Array([7, 8, 9])], { type: 'image/png' }),
+        createdAt: 1_760_000_000_000,
+      }])
+      const showToast = vi.fn()
+      useStore.setState({ showToast })
+      await exportData({
+        exportConfig: true,
+        exportTasks: false,
+        exportImages: false,
+      })
+      expect(exportedBlob, JSON.stringify(showToast.mock.calls)).toBeDefined()
+      const archive = unzipSync(new Uint8Array(await exportedBlob!.arrayBuffer()))
+      const manifest = JSON.parse(new TextDecoder().decode(archive['manifest.json'])) as ExportData
+      expect(manifest.compositeState?.projectLogos).toContainEqual({
+        id: 'logo-a',
+        name: 'Logo A',
+        assetId,
+      })
+      expect(manifest.compositeAssetFiles?.[assetId]?.path).toBe(`composite-assets/${assetId}.png`)
+      expect([...archive[`composite-assets/${assetId}.png`]]).toEqual([7, 8, 9])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
 
 describe('favorite collection deletion', () => {
   const collectionA = { id: 'collection-a', name: '收藏夹 A', createdAt: 1, updatedAt: 1 }

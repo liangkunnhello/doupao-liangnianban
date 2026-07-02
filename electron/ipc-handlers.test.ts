@@ -230,6 +230,31 @@ describe('ipc composite background filesystem helpers', () => {
     expect(handleDeleteCompositeFilesPayload!(null)).toEqual({ deleted: [], failed: [] })
   })
 
+  it('requires exactly one source for each streaming ZIP entry', async () => {
+    const { parseStreamingZipRequest } = await import('./ipc-handlers')
+    const base = {
+      destinationPath: path.join(allowedRoot, 'backup.zip'),
+      manifestJson: '{}',
+    }
+
+    expect(parseStreamingZipRequest({
+      ...base,
+      entries: [{ archivePath: 'composite-assets/a.png', data: new Uint8Array([1]) }],
+    })).not.toBeNull()
+    expect(parseStreamingZipRequest({
+      ...base,
+      entries: [{ archivePath: 'composite-assets/a.png' }],
+    })).toBeNull()
+    expect(parseStreamingZipRequest({
+      ...base,
+      entries: [{
+        archivePath: 'composite-assets/a.png',
+        sourcePath: path.join(allowedRoot, 'a.png'),
+        data: new Uint8Array([1]),
+      }],
+    })).toBeNull()
+  })
+
   it('deletes cache images only inside the configured cache directory', async () => {
     writeFileSync(path.join(allowedRoot, 'local-settings.json'), JSON.stringify({
       localSavePath: path.join(allowedRoot, 'local-saves'),

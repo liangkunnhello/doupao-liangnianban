@@ -144,7 +144,7 @@ export function reconcileCacheImageFiles(referencedFileNames: string[]): { delet
   )
 }
 
-function parseStreamingZipRequest(payload: unknown): StreamingZipRequest | null {
+export function parseStreamingZipRequest(payload: unknown): StreamingZipRequest | null {
   if (!payload || typeof payload !== 'object') return null
   const value = payload as StreamingZipRequest
   if (typeof value.destinationPath !== 'string' || typeof value.manifestJson !== 'string' || !Array.isArray(value.entries)) return null
