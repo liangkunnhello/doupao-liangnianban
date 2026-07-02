@@ -287,7 +287,7 @@ export function migrateCompositeV2PersistedState(
   }
 
   const legacyState = persistedState as LegacyCompositeV2PersistedState
-  const presets = legacyState.presets ?? []
+  const presets = (legacyState.presets ?? []) as LegacyCompositeV2Preset[]
   const customVariables = legacyState.customVariables?.length
     ? legacyState.customVariables
     : collectLegacyCustomVariables(presets as Array<CompositeV2State['presets'][number] & {

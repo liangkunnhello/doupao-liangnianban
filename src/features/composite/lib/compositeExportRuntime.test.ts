@@ -36,10 +36,13 @@ describe('composite export runtime helpers', () => {
         name: '1280x720',
         channelId: 'baidu',
         channelName: '百度',
+        enabled: true,
         width: 1280,
         height: 720,
         maxSizeKb: 399,
         format: 'jpg',
+        subfolderTemplate: '',
+        filenameTemplate: '',
       },
       background: {
         path: 'D:/source.png',
