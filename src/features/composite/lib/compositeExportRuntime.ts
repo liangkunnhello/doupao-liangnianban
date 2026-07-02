@@ -1,4 +1,8 @@
-import { expandCompositeExportItems, type CompositeV2ExportSnapshot } from './compositeExportPlan'
+import {
+  expandCompositeExportItems,
+  type CompositeV2ExportItem,
+  type CompositeV2ExportSnapshot,
+} from './compositeExportPlan'
 import { buildCompositeOutputPathParts, withCollisionSuffix } from './compositePathTemplates'
 import { renderCompositeV2ToJpegDataUrl } from './compositeRendererV2'
 import type { CompositeV2FailureItem, CompositeV2SuccessItem } from './compositeV2Types'
@@ -67,6 +71,26 @@ async function resolveCollision(api: NonNullable<Window['electronAPI']>, directo
   return candidate
 }
 
+export function buildPresetOutputPathParts(
+  item: CompositeV2ExportItem,
+  snapshot: Pick<CompositeV2ExportSnapshot, 'preserveSourceDir'>,
+) {
+  return buildCompositeOutputPathParts({
+    date: item.date,
+    channel: item.outputRule.channelName,
+    size: item.outputRule.name,
+    preset: item.preset.name,
+    index: item.index,
+    source: item.background.name.replace(/\.[^.]+$/, ''),
+    sourceDir: item.background.relativeDir,
+    custom: item.custom,
+    customVariables: item.preset.customVariableValues,
+    namingTemplate: item.preset.subfolderTemplate,
+    filenameTemplate: item.preset.filenameTemplate,
+    preserveSourceDir: snapshot.preserveSourceDir,
+  })
+}
+
 export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, callbacks: CompositeV2ExportRuntimeCallbacks) {
   const api = window.electronAPI
   if (!api) throw new Error('当前环境不支持本地导出')
@@ -89,20 +113,7 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         shouldPause: callbacks.shouldPause,
         shouldCancel: callbacks.shouldCancel,
       })
-      const pathParts = buildCompositeOutputPathParts({
-        date: item.date,
-        channel: item.outputRule.channelName,
-        size: item.outputRule.name,
-        preset: item.preset.name,
-        index: item.index,
-        source: item.background.name.replace(/\.[^.]+$/, ''),
-        sourceDir: item.background.relativeDir,
-        custom: item.custom,
-        customVariables: Object.fromEntries((snapshot.customVariables ?? []).map((variable) => [variable.name, variable.value])),
-        namingTemplate: item.preset.namingTemplate || item.preset.subfolderTemplate || '{date}-{preset}-{size}-{channel}',
-        filenameTemplate: item.preset.filenameTemplate || item.preset.namingTemplate || item.preset.subfolderTemplate || '{preset}-{source}-{index}',
-        preserveSourceDir: snapshot.preserveSourceDir,
-      })
+      const pathParts = buildPresetOutputPathParts(item, snapshot)
       const directoryParts = [item.preset.outputRootPath, ...pathParts.subfolders]
       const outputPath = await resolveCollision(api, directoryParts, pathParts.filename)
       const saved = await api.saveCompositeImage(outputPath, rendered.dataUrl)
