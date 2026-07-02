@@ -417,6 +417,12 @@ export interface StoredImageThumbnail {
   thumbnailVersion?: number
 }
 
+export interface StoredCompositeAsset {
+  id: string
+  blob: Blob
+  createdAt: number
+}
+
 // ===== API 请求体 =====
 
 export interface ImageGenerationRequest {

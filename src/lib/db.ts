@@ -1,13 +1,14 @@
-import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
+import type { AgentConversation, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
 import { deleteRawCacheImages, isElectron, saveRawCacheImageToLocal } from './localSave'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 4
+const DB_VERSION = 5
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
 const STORE_WORD_LIBRARY = 'wordLibrary'
+const STORE_COMPOSITE_ASSETS = 'compositeAssets'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
@@ -33,6 +34,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_WORD_LIBRARY)) {
         db.createObjectStore(STORE_WORD_LIBRARY, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_COMPOSITE_ASSETS)) {
+        db.createObjectStore(STORE_COMPOSITE_ASSETS, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -127,6 +131,50 @@ export function putWordLibraryState(state: Omit<StoredWordLibraryState, 'id' | '
     groups: state.groups,
     entries: state.entries,
     updatedAt: Date.now(),
+  }))
+}
+
+// ===== Composite assets =====
+
+export function getCompositeAsset(id: string): Promise<StoredCompositeAsset | undefined> {
+  return dbTransaction(STORE_COMPOSITE_ASSETS, 'readonly', (s) => s.get(id))
+}
+
+export function putCompositeAsset(asset: StoredCompositeAsset): Promise<IDBValidKey> {
+  return dbTransaction(STORE_COMPOSITE_ASSETS, 'readwrite', (s) => s.put(asset))
+}
+
+export function deleteCompositeAsset(id: string): Promise<undefined> {
+  return dbTransaction(STORE_COMPOSITE_ASSETS, 'readwrite', (s) => s.delete(id))
+}
+
+export function batchGetCompositeAssets(ids: string[]): Promise<Map<string, StoredCompositeAsset>> {
+  if (ids.length === 0) return Promise.resolve(new Map())
+  const uniqueIds = Array.from(new Set(ids))
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const store = db.transaction(STORE_COMPOSITE_ASSETS, 'readonly').objectStore(STORE_COMPOSITE_ASSETS)
+    const result = new Map<string, StoredCompositeAsset>()
+    let pending = uniqueIds.length
+    for (const id of uniqueIds) {
+      const req = store.get(id)
+      req.onsuccess = () => {
+        if (req.result) result.set(id, req.result as StoredCompositeAsset)
+        if (--pending === 0) resolve(result)
+      }
+      req.onerror = () => reject(req.error)
+    }
+  }))
+}
+
+export function putCompositeAssets(assets: StoredCompositeAsset[]): Promise<void> {
+  if (assets.length === 0) return Promise.resolve()
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_COMPOSITE_ASSETS, 'readwrite')
+    const store = tx.objectStore(STORE_COMPOSITE_ASSETS)
+    for (const asset of assets) store.put(asset)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
   }))
 }
 
