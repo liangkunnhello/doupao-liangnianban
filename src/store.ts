@@ -88,6 +88,7 @@ import { sanitizeSettingsForBackup } from './lib/backupManifest'
 import { validateBackupArchive } from './lib/backupImport'
 import { runMigration } from './lib/migrations/registry'
 import { shouldDeleteOrphanImage } from './lib/storageCleanup'
+import { createWorkspaceBackupState } from './lib/workspaceBackup'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -7113,7 +7114,8 @@ function formatExportFileTime(date: Date): string {
 async function generateExportZipBuffer(options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<Uint8Array> {
   const tasks = options.exportTasks ? await getAllTasks() : []
   const images = options.exportTasks ? await getAllImages() : []
-  const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
+  const state = useStore.getState()
+  const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = state
   const exportedAt = Date.now()
   const imageCreatedAtFallback = new Map<string, number>()
 
@@ -7172,7 +7174,7 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
   }
 
   const manifest: ExportData = {
-    version: 4,
+    version: 5,
     exportedAt: new Date(exportedAt).toISOString(),
     includesSecrets: options.includeSecrets === true,
   }
@@ -7184,6 +7186,12 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
       manifest.wordLibraryGroups = wordLibraryGroups
       manifest.wordLibraryEntries = wordLibraryEntries
       manifest.postprocessState = await getPostprocessBackupState()
+      manifest.workspaceState = createWorkspaceBackupState(
+        state.workspaceTabs,
+        state.workspaceTabGroups,
+        state.activeWorkspaceTabId,
+        options.exportTasks === true,
+      )
     }
   if (options.exportTasks) {
     manifest.tasks = tasks
@@ -7295,7 +7303,8 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks || options.exportImages ? await getAllImages() : []
-    const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = useStore.getState()
+    const state = useStore.getState()
+    const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries } = state
     const exportedAt = Date.now()
     const imageCreatedAtFallback = new Map<string, number>()
 
@@ -7374,7 +7383,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
 
     const manifest: ExportData = {
-      version: 4,
+      version: 5,
       exportedAt: new Date(exportedAt).toISOString(),
       includesSecrets: options.includeSecrets === true,
     }
@@ -7388,6 +7397,12 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       manifest.postprocessState = await getPostprocessBackupState()
       manifest.compositeState = compositeBackup!.compositeState
       manifest.compositeAssetFiles = compositeBackup!.compositeAssetFiles
+      manifest.workspaceState = createWorkspaceBackupState(
+        state.workspaceTabs,
+        state.workspaceTabGroups,
+        state.activeWorkspaceTabId,
+        options.exportTasks === true,
+      )
     }
     if (options.exportTasks) {
       manifest.tasks = tasks
@@ -7444,7 +7459,7 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
       }
     }
     const manifest: ExportData = {
-      version: 4,
+      version: 5,
       exportedAt: new Date(exportedAt).toISOString(),
       includesSecrets: options.includeSecrets === true,
       ...(options.exportConfig ? {
@@ -7456,6 +7471,12 @@ export async function exportDataToPath(filePath: string, options: ExportOptions 
         postprocessState: await getPostprocessBackupState(),
         compositeState: compositeBackup!.compositeState,
         compositeAssetFiles: compositeBackup!.compositeAssetFiles,
+        workspaceState: createWorkspaceBackupState(
+          state.workspaceTabs,
+          state.workspaceTabGroups,
+          state.activeWorkspaceTabId,
+          options.exportTasks === true,
+        ),
       } : {}),
       ...(options.exportTasks ? {
         tasks: allTasks,

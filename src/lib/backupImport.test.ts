@@ -12,11 +12,19 @@ function manifest(patch: Partial<ExportData> = {}): ExportData {
 
 describe('validateBackupArchive', () => {
   it('rejects unsupported future versions', () => {
-    expect(() => validateBackupArchive(manifest({ version: 5 }), {}, {
+    expect(() => validateBackupArchive(manifest({ version: 6 }), {}, {
       importImages: true,
       importTasks: true,
       importConfig: true,
-    })).toThrow('备份版本 5')
+    })).toThrow('备份版本 6 高于当前支持的版本 5')
+  })
+
+  it('accepts version 5 backups', () => {
+    expect(() => validateBackupArchive(manifest({ version: 5 }), {}, {
+      importImages: false,
+      importTasks: false,
+      importConfig: false,
+    })).not.toThrow()
   })
 
   it('rejects missing files before import starts', () => {

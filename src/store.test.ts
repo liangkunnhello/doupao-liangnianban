@@ -250,8 +250,17 @@ describe('data export', () => {
     })
 
     try {
+      await clearTasks()
       const { useCompositeV2Store } = await import('./features/composite/storeV2')
       const assetId = 'exported-composite-asset'
+      const exportedTaskA = task({ id: 'task-a' })
+      const exportedTaskB = task({ id: 'task-b' })
+      const exportedGroup = {
+        id: 'group-a',
+        name: '分组 A',
+        order: 0,
+        collapsed: false,
+      }
       useCompositeV2Store.setState({
         projectLogos: [{ id: 'logo-a', name: 'Logo A', assetId }],
       })
@@ -261,7 +270,15 @@ describe('data export', () => {
         createdAt: 1_760_000_000_000,
       }])
       const showToast = vi.fn()
-      useStore.setState({ showToast })
+      useStore.setState({
+        showToast,
+        workspaceTabs: [
+          workspaceTab({ id: 'tab-a', groupId: exportedGroup.id, tasks: [exportedTaskA] }),
+          workspaceTab({ id: 'tab-b', order: 1, tasks: [exportedTaskB] }),
+        ],
+        workspaceTabGroups: [exportedGroup],
+        activeWorkspaceTabId: 'tab-b',
+      })
       await exportData({
         exportConfig: true,
         exportTasks: false,
@@ -277,6 +294,26 @@ describe('data export', () => {
       })
       expect(manifest.compositeAssetFiles?.[assetId]?.path).toBe(`composite-assets/${assetId}.png`)
       expect([...archive[`composite-assets/${assetId}.png`]]).toEqual([7, 8, 9])
+      expect(manifest.workspaceState?.tabs.map((tab) => tab.taskIds)).toEqual([[], []])
+
+      await putDbTask(exportedTaskA)
+      await putDbTask(exportedTaskB)
+      await exportData({
+        exportConfig: true,
+        exportTasks: true,
+        exportImages: false,
+      })
+      const fullArchive = unzipSync(new Uint8Array(await exportedBlob!.arrayBuffer()))
+      const fullManifest = JSON.parse(new TextDecoder().decode(fullArchive['manifest.json'])) as ExportData
+      expect(fullManifest.version).toBe(5)
+      expect(fullManifest.workspaceState).toMatchObject({
+        activeTabId: 'tab-b',
+        groups: [exportedGroup],
+        tabs: [
+          { id: 'tab-a', taskIds: ['task-a'] },
+          { id: 'tab-b', taskIds: ['task-b'] },
+        ],
+      })
     } finally {
       vi.unstubAllGlobals()
     }

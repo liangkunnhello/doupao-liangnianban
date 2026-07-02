@@ -6,7 +6,7 @@ export type BackupImportSelection = {
   importImages?: boolean
 }
 
-const CURRENT_BACKUP_VERSION = 4
+const CURRENT_BACKUP_VERSION = 5
 
 function assertArchivePath(path: string): void {
   const normalized = path.replace(/\\/g, '/')
