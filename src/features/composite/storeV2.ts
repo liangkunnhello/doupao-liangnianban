@@ -82,6 +82,9 @@ type CompositeV2StoreActions = {
   removeProjectLogo: (id: string) => void
   renameProjectLogo: (id: string, name: string) => void
   setCustomVariables: (variables: CompositeV2State['customVariables']) => void
+  addCustomVariable: (name: string, value: string, presetId: string) => void
+  setPresetCustomVariableValue: (presetId: string, name: string, value: string) => void
+  removeCustomVariable: (name: string) => void
   setBackgroundFolders: (paths: string[]) => void
   setRecursiveBackgrounds: (recursive: boolean) => void
   setBackgrounds: (backgrounds: CompositeV2BackgroundImage[]) => void
@@ -417,6 +420,35 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
       removeProjectLogo: (id) => setWithHistory((state) => ({ projectLogos: (state.projectLogos ?? []).filter(l => l.id !== id) }), 'logos:assets'),
       renameProjectLogo: (id, name) => setWithHistory((state) => ({ projectLogos: (state.projectLogos ?? []).map(l => l.id === id ? { ...l, name } : l) }), 'logos:assets'),
       setCustomVariables: (customVariables) => setWithHistory(() => ({ customVariables }), 'naming:custom-variables'),
+      addCustomVariable: (name, value, presetId) => setWithHistory((state) => {
+        if (state.customVariables.some((variable) => variable.name === name)) return {}
+        return {
+          customVariables: [
+            ...state.customVariables,
+            { id: uniqueId('custom'), name, value },
+          ],
+          presets: updatePresets(state.presets, presetId, (preset, now) => ({
+            ...preset,
+            customVariableValues: { ...preset.customVariableValues, [name]: value },
+            updatedAt: now,
+          })),
+        }
+      }, 'naming:custom-variables'),
+      setPresetCustomVariableValue: (presetId, name, value) => setWithHistory((state) => ({
+        presets: updatePresets(state.presets, presetId, (preset, now) => ({
+          ...preset,
+          customVariableValues: { ...preset.customVariableValues, [name]: value },
+          updatedAt: now,
+        })),
+      }), `preset:${presetId}:naming-values`),
+      removeCustomVariable: (name) => setWithHistory((state) => ({
+        customVariables: state.customVariables.filter((variable) => variable.name !== name),
+        presets: state.presets.map((preset) => {
+          const customVariableValues = { ...preset.customVariableValues }
+          delete customVariableValues[name]
+          return { ...preset, customVariableValues }
+        }),
+      }), 'naming:custom-variables'),
       setBackgroundFolders: (backgroundFolders) => setWithHistory(() => ({ backgroundFolders }), 'backgrounds:source'),
       setRecursiveBackgrounds: (recursiveBackgrounds) => setWithHistory(() => ({ recursiveBackgrounds }), 'backgrounds:source'),
       setBackgrounds: (backgrounds) => setWithHistory(() => ({

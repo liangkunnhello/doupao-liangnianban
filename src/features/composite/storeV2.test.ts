@@ -280,6 +280,48 @@ describe('composite v2 store state factory', () => {
     expect(store.getState().presets.every((preset) => !('customVariables' in preset))).toBe(true)
   })
 
+  it('updates a custom variable value for only one preset', () => {
+    const store = createCompositeV2Store()
+    const first = store.getState().presets[0]!
+    store.getState().createPreset('第二预设')
+    const second = store.getState().presets[1]!
+
+    store.getState().setPresetCustomVariableValue(first.id, 'project', '项目A')
+    store.getState().setPresetCustomVariableValue(second.id, 'project', '项目B')
+
+    expect(store.getState().presets[0]!.customVariableValues.project).toBe('项目A')
+    expect(store.getState().presets[1]!.customVariableValues.project).toBe('项目B')
+  })
+
+  it('adds a variable definition and initializes only the selected preset value', () => {
+    const store = createCompositeV2Store()
+    const first = store.getState().presets[0]!
+    store.getState().createPreset('第二预设')
+
+    store.getState().addCustomVariable('project', '项目A', first.id)
+
+    expect(store.getState().customVariables).toEqual([
+      expect.objectContaining({ name: 'project', value: '项目A' }),
+    ])
+    expect(store.getState().presets[0]!.customVariableValues).toEqual({ project: '项目A' })
+    expect(store.getState().presets[1]!.customVariableValues).toEqual({})
+  })
+
+  it('removes deleted variable values from every preset', () => {
+    const store = createCompositeV2Store()
+    const first = store.getState().presets[0]!
+    store.getState().createPreset('第二预设')
+    const second = store.getState().presets[1]!
+    store.getState().setCustomVariables([{ id: 'project', name: 'project', value: '默认项目' }])
+    store.getState().setPresetCustomVariableValue(first.id, 'project', '项目A')
+    store.getState().setPresetCustomVariableValue(second.id, 'project', '项目B')
+
+    store.getState().removeCustomVariable('project')
+
+    expect(store.getState().customVariables).toEqual([])
+    expect(store.getState().presets.every((preset) => !('project' in preset.customVariableValues))).toBe(true)
+  })
+
   it('collects export results and retains history', () => {
     const store = createCompositeV2Store()
     store.getState().resetExportResults()
