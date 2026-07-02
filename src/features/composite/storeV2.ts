@@ -136,6 +136,20 @@ export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2UndoState
 
 export type CompositeV2PersistedState = CompositeV2PersistedSnapshot
 
+type LegacyCompositeV2Preset = Partial<CompositeV2State['presets'][number]> & {
+  id: string
+  name: string
+  namingTemplate?: string
+  customVariables?: CompositeV2State['customVariables']
+}
+
+type LegacyCompositeV2PersistedState = Partial<CompositeV2PersistedState> & {
+  presets?: LegacyCompositeV2Preset[]
+}
+
+const DEFAULT_PRESET_SUBFOLDER_TEMPLATE = '{date}-{preset}-{size}-{channel}'
+const DEFAULT_PRESET_FILENAME_TEMPLATE = '{preset}-{source}-{index}'
+
 export type CreateCompositeV2StoreOptions = {
   pickRandomIndex?: (length: number) => number
 }
@@ -259,6 +273,46 @@ export function mergeCompositeV2PersistedState(
     selectedPreviewPresetId,
     enabledPresetIdsForRun: validEnabledPresetIds.length > 0 ? validEnabledPresetIds : groupPresetIds,
   }
+}
+
+export function migrateCompositeV2PersistedState(
+  persistedState: unknown,
+  _version: number,
+): CompositeV2PersistedState {
+  if (!persistedState || typeof persistedState !== 'object') {
+    return getCompositeV2PersistedState(createCompositeV2StoreState() as CompositeV2StoreState)
+  }
+
+  const legacyState = persistedState as LegacyCompositeV2PersistedState
+  const presets = legacyState.presets ?? []
+  const customVariables = legacyState.customVariables?.length
+    ? legacyState.customVariables
+    : collectLegacyCustomVariables(presets as Array<CompositeV2State['presets'][number] & {
+      customVariables?: CompositeV2State['customVariables']
+    }>)
+  const globalValues = Object.fromEntries(customVariables.map((variable) => [variable.name, variable.value]))
+
+  return {
+    ...legacyState,
+    customVariables,
+    presets: presets.map((preset) => {
+      const {
+        customVariables: presetCustomVariables,
+        ...rest
+      } = preset
+      const customVariableValues = preset.customVariableValues
+        ?? Object.fromEntries(
+          (presetCustomVariables?.length ? presetCustomVariables : customVariables)
+            .map((variable) => [variable.name, variable.value]),
+        )
+      return {
+        ...rest,
+        subfolderTemplate: preset.subfolderTemplate || preset.namingTemplate || DEFAULT_PRESET_SUBFOLDER_TEMPLATE,
+        filenameTemplate: preset.filenameTemplate || preset.namingTemplate || DEFAULT_PRESET_FILENAME_TEMPLATE,
+        customVariableValues: { ...globalValues, ...customVariableValues },
+      } as CompositeV2State['presets'][number]
+    }),
+  } as CompositeV2PersistedState
 }
 
 export function replaceCompositeV2PersistedState(snapshot: CompositeV2PersistedState): void {
@@ -478,7 +532,9 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
           name: name.trim() || '新预设',
           outputRootPath: '',
           distributionPath: '',
-          namingTemplate: '{date}-{channel}-{size}-{preset}-{index}',
+          subfolderTemplate: '{date}-{channel}-{size}-{preset}-{index}',
+          filenameTemplate: '{preset}-{source}-{index}',
+          customVariableValues: {},
           baseCanvas: { width: 1080, height: 1920 },
           sampleBackgroundPath: '',
           layers: [],
@@ -641,31 +697,10 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
     },
     {
       name: STORAGE_NAME,
-      version: 2,
+      version: 3,
       partialize: getCompositeV2PersistedState,
       merge: mergeCompositeV2PersistedState,
-      migrate: (persistedState, version) => {
-        if (!persistedState || typeof persistedState !== 'object' || version >= 2) {
-          return persistedState as CompositeV2PersistedState
-        }
-        const legacyState = persistedState as CompositeV2PersistedState & {
-          presets?: Array<CompositeV2State['presets'][number] & { customVariables?: CompositeV2State['customVariables'] }>
-          customVariables?: CompositeV2State['customVariables']
-        }
-        const mergedCustomVariables = legacyState.customVariables?.length
-          ? legacyState.customVariables
-          : collectLegacyCustomVariables(legacyState.presets ?? [])
-        return {
-          ...legacyState,
-          customVariables: mergedCustomVariables,
-          presets: (legacyState.presets ?? []).map((preset) => {
-            const { customVariables: _customVariables, ...nextPreset } = preset as typeof preset & {
-              customVariables?: CompositeV2State['customVariables']
-            }
-            return nextPreset
-          }),
-        } as CompositeV2PersistedState
-      },
+      migrate: migrateCompositeV2PersistedState,
     },
   )
 }

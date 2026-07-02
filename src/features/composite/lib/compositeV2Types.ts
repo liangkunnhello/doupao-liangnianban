@@ -126,9 +126,10 @@ export type CompositeV2Preset = {
   name: string
   outputRootPath: string
   distributionPath: string
-  namingTemplate: string
-  subfolderTemplate?: string
-  filenameTemplate?: string
+  subfolderTemplate: string
+  filenameTemplate: string
+  customVariableValues: Record<string, string>
+  namingTemplate?: string
   baseCanvas: { width: number; height: number }
   sampleBackgroundPath: string
   layers: CompositeV2Layer[]

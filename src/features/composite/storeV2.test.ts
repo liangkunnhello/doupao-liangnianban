@@ -3,6 +3,7 @@ import {
   createCompositeV2Store,
   createCompositeV2StoreState,
   getCompositeV2PersistedState,
+  migrateCompositeV2PersistedState,
   mergeCompositeV2PersistedState,
 } from './storeV2'
 import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from './lib/compositeV2Defaults'
@@ -13,6 +14,61 @@ afterEach(() => {
 })
 
 describe('composite v2 store state factory', () => {
+  it('creates presets with explicit naming fields', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+
+    expect(preset).toMatchObject({
+      subfolderTemplate: '{date}-{preset}-{size}-{channel}',
+      filenameTemplate: '{preset}-{source}-{index}',
+      customVariableValues: {},
+    })
+  })
+
+  it('migrates legacy per-preset variables without merging their values', () => {
+    const presetA = createDefaultCompositeV2Preset(1)
+    const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }
+    const migrated = migrateCompositeV2PersistedState({
+      presets: [
+        {
+          ...presetA,
+          namingTemplate: '{project}',
+          subfolderTemplate: undefined,
+          filenameTemplate: undefined,
+          customVariableValues: undefined,
+          customVariables: [{ id: 'project-a', name: 'project', value: '项目A' }],
+        },
+        {
+          ...presetB,
+          namingTemplate: '{project}',
+          subfolderTemplate: undefined,
+          filenameTemplate: undefined,
+          customVariableValues: undefined,
+          customVariables: [{ id: 'project-b', name: 'project', value: '项目B' }],
+        },
+      ],
+      customVariables: [],
+    }, 1)
+
+    expect(migrated.presets.map((preset) => preset.customVariableValues)).toEqual([
+      { project: '项目A' },
+      { project: '项目B' },
+    ])
+    expect(migrated.presets[0]).toMatchObject({
+      subfolderTemplate: '{project}',
+      filenameTemplate: '{project}',
+    })
+  })
+
+  it('copies v2 global variable values into presets without explicit values', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+    const migrated = migrateCompositeV2PersistedState({
+      presets: [{ ...preset, customVariableValues: undefined }],
+      customVariables: [{ id: 'project', name: 'project', value: '全局项目' }],
+    }, 2)
+
+    expect(migrated.presets[0]?.customVariableValues).toEqual({ project: '全局项目' })
+  })
+
   it('creates batch state separate from persisted preset state', () => {
     const state = createCompositeV2StoreState()
 
