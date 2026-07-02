@@ -546,7 +546,9 @@ export function PresetManagementTab() {
                     customVariables={store.customVariables}
                     previewValues={namingPreviewValues}
                     onUpdatePreset={(patch) => store.updatePreset(activePreset.id, patch)}
-                    onUpdateCustomVariables={(variables) => store.setCustomVariables(variables)}
+                    onAddCustomVariable={(name, value) => store.addCustomVariable(name, value, activePreset.id)}
+                    onUpdateCustomVariableValue={(name, value) => store.setPresetCustomVariableValue(activePreset.id, name, value)}
+                    onRemoveCustomVariable={store.removeCustomVariable}
                   />
                 </div>
               </div>

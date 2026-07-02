@@ -47,7 +47,7 @@ describe('PresetNamingFields helpers', () => {
     expect(readNamingTemplate(host)).toBe('项目-{size}文案')
   })
 
-  it('uses a taller and smaller-font editor for naming templates', () => {
+  it('uses readable raw template editors', () => {
     const preset = createDefaultCompositeV2Preset(1)
     let renderer: ReturnType<typeof create>
 
@@ -58,15 +58,17 @@ describe('PresetNamingFields helpers', () => {
           customVariables: [],
           previewValues: { date: '20260630', preset: preset.name, size: '1080x1920', channel: '渠道', index: '1' },
           onUpdatePreset: () => {},
-          onUpdateCustomVariables: () => {},
+          onAddCustomVariable: () => {},
+          onUpdateCustomVariableValue: () => {},
+          onRemoveCustomVariable: () => {},
         }),
       )
     })
 
-    const editor = renderer!.root.findByProps({ 'aria-label': `预设命名模板 ${preset.name}` })
-    expect(editor.props.className).toContain('min-h-32')
+    const editor = renderer!.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` })
+    expect(editor.props.className).toContain('min-h-20')
     expect(editor.props.className).toContain('text-xs')
-    expect(editor.props.dangerouslySetInnerHTML.__html).toContain('font-size:11px')
+    expect(editor.props.value).toBe(preset.subfolderTemplate)
   })
 })
 
@@ -98,7 +100,9 @@ describe('PresetNamingFields interactions', () => {
     preset = createDefaultCompositeV2Preset(1),
     customVariables = [] as Array<{ id: string; name: string; value: string }>,
     onUpdate = vi.fn(),
-    onUpdateCustomVariables = vi.fn(),
+    onAddCustomVariable = vi.fn(),
+    onUpdateCustomVariableValue = vi.fn(),
+    onRemoveCustomVariable = vi.fn(),
   ) {
     let renderer: ReturnType<typeof create>
     act(() => {
@@ -113,11 +117,80 @@ describe('PresetNamingFields interactions', () => {
           index: '1',
         },
         onUpdatePreset: onUpdate,
-        onUpdateCustomVariables,
+        onAddCustomVariable,
+        onUpdateCustomVariableValue,
+        onRemoveCustomVariable,
       }))
     })
-    return { renderer: renderer!, onUpdate, onUpdateCustomVariables }
+    return {
+      renderer: renderer!,
+      onUpdate,
+      onAddCustomVariable,
+      onUpdateCustomVariableValue,
+      onRemoveCustomVariable,
+    }
   }
+
+  it('shows raw directory and filename templates with a separate preview', () => {
+    const preset = {
+      ...createDefaultCompositeV2Preset(1),
+      subfolderTemplate: '{project}/{size}',
+      filenameTemplate: '{preset}-{index}',
+      customVariableValues: { project: '项目A' },
+    }
+    const customVariables = [{ id: 'project', name: 'project', value: '默认项目' }]
+    const { renderer } = renderFields(preset, customVariables)
+
+    expect(renderer.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` }).props.value)
+      .toBe('{project}/{size}')
+    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` }).props.value)
+      .toBe('{preset}-{index}')
+    expect(renderer.root.findByProps({ 'data-testid': 'preset-subfolder-preview' }).children.join(''))
+      .toBe('项目A/1280x720')
+  })
+
+  it('switches controlled naming fields without updating either preset', () => {
+    const presetA = {
+      ...createDefaultCompositeV2Preset(1),
+      subfolderTemplate: 'A/{project}',
+      filenameTemplate: 'A-{index}',
+      customVariableValues: { project: '项目A' },
+    }
+    const presetB = {
+      ...createDefaultCompositeV2Preset(2),
+      id: 'preset-b',
+      name: 'Preset B',
+      subfolderTemplate: 'B/{project}',
+      filenameTemplate: 'B-{index}',
+      customVariableValues: { project: '项目B' },
+    }
+    const onUpdate = vi.fn()
+    const { renderer } = renderFields(presetA, [], onUpdate)
+
+    act(() => {
+      renderer.update(createElement(PresetNamingFields, {
+        preset: presetB,
+        customVariables: [],
+        previewValues: {
+          date: '20260701',
+          channel: '渠道',
+          size: '1280x720',
+          preset: presetB.name,
+          index: '1',
+        },
+        onUpdatePreset: onUpdate,
+        onAddCustomVariable: vi.fn(),
+        onUpdateCustomVariableValue: vi.fn(),
+        onRemoveCustomVariable: vi.fn(),
+      }))
+    })
+
+    expect(renderer.root.findByProps({ 'aria-label': `预设目录模板 ${presetB.name}` }).props.value)
+      .toBe('B/{project}')
+    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${presetB.name}` }).props.value)
+      .toBe('B-{index}')
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
 
   it('keeps the editor selection when a variable button is pressed', () => {
     const preset = createDefaultCompositeV2Preset(1)
@@ -135,7 +208,9 @@ describe('PresetNamingFields interactions', () => {
           index: '1',
         },
         onUpdatePreset: () => {},
-        onUpdateCustomVariables: () => {},
+        onAddCustomVariable: () => {},
+        onUpdateCustomVariableValue: () => {},
+        onRemoveCustomVariable: () => {},
       }))
     })
 
@@ -146,39 +221,32 @@ describe('PresetNamingFields interactions', () => {
     expect(preventDefault).toHaveBeenCalledOnce()
   })
 
-  it('appends after the editor loses focus', () => {
+  it('inserts into the active template field', () => {
     const preset = createDefaultCompositeV2Preset(1)
     const { renderer, onUpdate } = renderFields(preset)
-    const host = document.createElement('div')
-    host.textContent = 'template'
-    document.body.appendChild(host)
-    const text = host.firstChild!
-    const range = document.createRange()
-    range.setStart(text, 0)
-    range.collapse(true)
-    window.getSelection()?.removeAllRanges()
-    window.getSelection()?.addRange(range)
-
-    const editor = renderer.root.findByProps({ 'aria-label': `预设命名模板 ${preset.name}` })
-    act(() => editor.props.onMouseUp({ currentTarget: host }))
-    act(() => editor.props.onBlur({ currentTarget: host }))
+    const editor = renderer.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` })
+    act(() => editor.props.onFocus({
+      currentTarget: {
+        selectionStart: preset.subfolderTemplate.length,
+        selectionEnd: preset.subfolderTemplate.length,
+      },
+    }))
     act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {index}' }).props.onClick())
 
     expect(onUpdate).toHaveBeenLastCalledWith({
-      namingTemplate: `${preset.namingTemplate}{index}`,
+      subfolderTemplate: `${preset.subfolderTemplate}{index}`,
     })
-    host.remove()
   })
 
   it('rejects a custom variable that uses a built-in name', () => {
-    const { renderer, onUpdate, onUpdateCustomVariables } = renderFields()
+    const { renderer, onUpdate, onAddCustomVariable } = renderFields()
     const nameInput = renderer.root.findByProps({ 'aria-label': '自定义变量名' })
 
     act(() => nameInput.props.onChange({ target: { value: 'date' } }))
     act(() => renderer.root.findByProps({ 'aria-label': '添加自定义变量' }).props.onClick())
 
     expect(onUpdate).not.toHaveBeenCalled()
-    expect(onUpdateCustomVariables).not.toHaveBeenCalled()
+    expect(onAddCustomVariable).not.toHaveBeenCalled()
     expect(renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props.value).toBe('date')
     expect(renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props['aria-invalid']).toBe(true)
     expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toBe('变量名已被使用')
@@ -187,7 +255,7 @@ describe('PresetNamingFields interactions', () => {
   it('rejects an existing custom variable name instead of updating it', () => {
     const preset = createDefaultCompositeV2Preset(1)
     const customVariables = [{ id: 'custom-project', name: 'project', value: '项目A' }]
-    const { renderer, onUpdate, onUpdateCustomVariables } = renderFields(preset, customVariables)
+    const { renderer, onUpdate, onAddCustomVariable } = renderFields(preset, customVariables)
 
     act(() => renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props.onChange({
       target: { value: 'project' },
@@ -195,7 +263,7 @@ describe('PresetNamingFields interactions', () => {
     act(() => renderer.root.findByProps({ 'aria-label': '添加自定义变量' }).props.onClick())
 
     expect(onUpdate).not.toHaveBeenCalled()
-    expect(onUpdateCustomVariables).not.toHaveBeenCalled()
+    expect(onAddCustomVariable).not.toHaveBeenCalled()
     expect(customVariables).toEqual([
       { id: 'custom-project', name: 'project', value: '项目A' },
     ])
@@ -204,7 +272,7 @@ describe('PresetNamingFields interactions', () => {
   it('clears unsubmitted custom-variable state when the preset changes', () => {
     const presetA = createDefaultCompositeV2Preset(1)
     const presetB = { ...createDefaultCompositeV2Preset(2), id: 'preset-b', name: 'Preset B' }
-    const { renderer, onUpdate, onUpdateCustomVariables } = renderFields(presetA)
+    const { renderer, onUpdate, onAddCustomVariable, onUpdateCustomVariableValue, onRemoveCustomVariable } = renderFields(presetA)
 
     act(() => renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props.onChange({
       target: { value: 'draftName' },
@@ -225,13 +293,15 @@ describe('PresetNamingFields interactions', () => {
           index: '1',
         },
         onUpdatePreset: onUpdate,
-        onUpdateCustomVariables,
+        onAddCustomVariable,
+        onUpdateCustomVariableValue,
+        onRemoveCustomVariable,
       }))
     })
 
     expect(renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props.value).toBe('')
     expect(renderer.root.findByProps({ 'aria-label': '自定义变量值' }).props.value).toBe('')
     expect(renderer.root.findByProps({ 'aria-label': '自定义变量名' }).props['aria-invalid']).toBeUndefined()
-    expect(onUpdateCustomVariables).not.toHaveBeenCalled()
+    expect(onAddCustomVariable).not.toHaveBeenCalled()
   })
 })

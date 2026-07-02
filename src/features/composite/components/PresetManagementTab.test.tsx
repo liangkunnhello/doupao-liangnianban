@@ -289,31 +289,25 @@ describe('PresetManagementTab', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const namingEditor = renderer!.root.find(
-      (node) => node.props['aria-label'] === `预设命名模板 ${preset.name}`,
+    const subfolderEditor = renderer!.root.find(
+      (node) => node.props['aria-label'] === `预设目录模板 ${preset.name}`,
     )
-    expect(namingEditor.props.contentEditable).toBe(true)
-    expect(namingEditor.props.dangerouslySetInnerHTML.__html).toContain('mention-tag')
-    expect(renderer!.root.findAll(
-      (node) => node.props['aria-label'] === `预设子文件夹模板 ${preset.name}`,
-    )).toHaveLength(0)
-    expect(renderer!.root.findAll(
+    const filenameEditor = renderer!.root.find(
       (node) => node.props['aria-label'] === `预设文件名模板 ${preset.name}`,
-    )).toHaveLength(0)
+    )
+    expect(subfolderEditor.props.value).toBe(preset.subfolderTemplate)
+    expect(filenameEditor.props.value).toBe(preset.filenameTemplate)
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {date}' })).toHaveLength(1)
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {channel}' })).toHaveLength(1)
 
     act(() => {
-      namingEditor.props.onInput({
-        currentTarget: {
-          childNodes: [
-            { nodeType: 3, textContent: '项目-' },
-            { nodeType: 1, textContent: '1080x1920', getAttribute: (name: string) => name === 'data-variable-name' ? 'size' : null },
-          ],
-        },
-      })
+      subfolderEditor.props.onChange({ target: { value: '项目/{size}' } })
+      filenameEditor.props.onChange({ target: { value: '{preset}-{index}' } })
     })
-    expect(useCompositeV2Store.getState().presets[0]!.namingTemplate).toBe('项目-{size}')
+    expect(useCompositeV2Store.getState().presets[0]).toMatchObject({
+      subfolderTemplate: '项目/{size}',
+      filenameTemplate: '{preset}-{index}',
+    })
 
     act(() => {
       findInputByAriaLabel(renderer!.root, '自定义变量名')?.props.onChange({ target: { value: 'project' } })
@@ -328,6 +322,9 @@ describe('PresetManagementTab', () => {
     expect(useCompositeV2Store.getState().customVariables).toEqual([
       expect.objectContaining({ name: 'project', value: '快手极速版' }),
     ])
+    expect(useCompositeV2Store.getState().presets[0]!.customVariableValues).toEqual({
+      project: '快手极速版',
+    })
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {project}' })).toHaveLength(1)
   })
 
