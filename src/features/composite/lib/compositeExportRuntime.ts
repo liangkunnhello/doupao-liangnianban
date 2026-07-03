@@ -108,10 +108,22 @@ export function buildPresetOutputRootPath(item: CompositeV2ExportItem) {
   )
 }
 
+export async function authorizeCompositeOutputRoot(
+  api: NonNullable<Window['electronAPI']>,
+  outputRoot: string,
+  authorizedRoots: Set<string>,
+) {
+  if (authorizedRoots.has(outputRoot)) return
+  const authorized = await api.authorizeCompositeOutputDirectory?.(outputRoot)
+  if (!authorized) throw new Error('输出目录必须是绝对路径')
+  authorizedRoots.add(outputRoot)
+}
+
 export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, callbacks: CompositeV2ExportRuntimeCallbacks) {
   const api = window.electronAPI
   if (!api) throw new Error('当前环境不支持本地导出')
   const items = expandCompositeExportItems(snapshot)
+  const authorizedRoots = new Set<string>()
   callbacks.onProgress(0, items.length)
   let completed = 0
 
@@ -131,7 +143,9 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         shouldCancel: callbacks.shouldCancel,
       })
       const pathParts = buildPresetOutputPathParts(item, snapshot)
-      const directoryParts = [buildPresetOutputRootPath(item), ...pathParts.subfolders]
+      const outputRoot = buildPresetOutputRootPath(item)
+      await authorizeCompositeOutputRoot(api, outputRoot, authorizedRoots)
+      const directoryParts = [outputRoot, ...pathParts.subfolders]
       const outputPath = await resolveCollision(api, directoryParts, pathParts.filename)
       const saved = await api.saveCompositeImage(outputPath, rendered.dataUrl)
       if (!saved) throw new Error('图片写入失败')

@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createDefaultCompositeV2Preset } from './compositeV2Defaults'
 import * as exportRuntime from './compositeExportRuntime'
 import type { CompositeV2ExportItem } from './compositeExportPlan'
 
 const {
+  authorizeCompositeOutputRoot,
   buildPresetOutputPathParts,
   dataUrlSizeKb,
   waitWhilePaused,
@@ -112,5 +113,28 @@ describe('composite export runtime helpers', () => {
     ).buildPresetOutputRootPath
 
     expect(buildPresetOutputRootPath(item)).toBe('D:\\Exports\\20260702\\项目A')
+  })
+
+  it('authorizes each composite output root once per export run', async () => {
+    const authorize = vi.fn(async () => true)
+    const api = {
+      authorizeCompositeOutputDirectory: authorize,
+    } as unknown as NonNullable<Window['electronAPI']>
+    const authorizedRoots = new Set<string>()
+
+    await authorizeCompositeOutputRoot(api, 'D:\\Exports\\A', authorizedRoots)
+    await authorizeCompositeOutputRoot(api, 'D:\\Exports\\A', authorizedRoots)
+    await authorizeCompositeOutputRoot(api, 'E:\\Exports\\B', authorizedRoots)
+
+    expect(authorize).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects roots that cannot be authorized', async () => {
+    const api = {
+      authorizeCompositeOutputDirectory: vi.fn(async () => false),
+    } as unknown as NonNullable<Window['electronAPI']>
+
+    await expect(authorizeCompositeOutputRoot(api, 'relative/output', new Set()))
+      .rejects.toThrow('输出目录必须是绝对路径')
   })
 })
