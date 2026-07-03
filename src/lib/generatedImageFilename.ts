@@ -7,6 +7,7 @@ export interface GeneratedImageFilenameContext {
   createdAt: number
   label: string
   prompt: string
+  batch: number
 }
 
 export function sanitizeGeneratedImageFilenamePart(value: string, maxLength?: number): string {
@@ -35,6 +36,7 @@ export function buildGeneratedImageFileNamePrefix(
     parts.push(formatGeneratedImageDate(context.createdAt))
   }
   parts.push(sanitizeGeneratedImageFilenamePart(context.label, 100) || 'image')
+  parts.push(String(Math.max(1, Math.trunc(context.batch))))
   if (settings.imageFilenameUsePrompt) {
     const prompt = sanitizeGeneratedImageFilenamePart(context.prompt, 100)
     if (prompt) parts.push(prompt)
