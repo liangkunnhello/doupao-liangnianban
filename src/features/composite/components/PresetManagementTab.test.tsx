@@ -273,7 +273,7 @@ describe('PresetManagementTab', () => {
     expect(useCompositeV2Store.getState().presets[0]!.outputRuleGroupsOverride[1]!.rules.every((rule) => rule.enabled)).toBe(true)
   })
 
-  it('edits per-preset naming templates and custom variables outside channel overrides', () => {
+  it('edits per-preset output root, filename template, and custom variables outside channel overrides', () => {
     const preset = createDefaultCompositeV2Preset(1)
     const group = { ...createDefaultCompositeV2PresetGroup(1), presetIds: [preset.id] }
     useCompositeV2Store.setState({
@@ -289,23 +289,29 @@ describe('PresetManagementTab', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const subfolderEditor = renderer!.root.find(
-      (node) => node.props['aria-label'] === `预设目录模板 ${preset.name}`,
+    const outputRootEditor = renderer!.root.find(
+      (node) => node.props['aria-label'] === '输出根目录',
     )
     const filenameEditor = renderer!.root.find(
       (node) => node.props['aria-label'] === `预设文件名模板 ${preset.name}`,
     )
-    expect(subfolderEditor.props.value).toBe(preset.subfolderTemplate)
-    expect(filenameEditor.props.value).toBe(preset.filenameTemplate)
+    expect(outputRootEditor.props.contentEditable).toBe(true)
+    expect(filenameEditor.props.contentEditable).toBe(true)
+    expect(renderer!.root.findAll((node) => node.props['aria-label'] === `预设目录模板 ${preset.name}`)).toHaveLength(0)
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {date}' })).toHaveLength(1)
     expect(renderer!.root.findAllByProps({ 'aria-label': '插入变量 {channel}' })).toHaveLength(1)
 
+    const outputRootHost = document.createElement('div')
+    outputRootHost.textContent = 'D:\\Exports'
+    const filenameHost = document.createElement('div')
+    filenameHost.innerHTML = '<span data-variable-name="preset">默认产品预设</span>-<span data-variable-name="index">1</span>'
     act(() => {
-      subfolderEditor.props.onChange({ target: { value: '项目/{size}' } })
-      filenameEditor.props.onChange({ target: { value: '{preset}-{index}' } })
+      outputRootEditor.props.onInput({ currentTarget: outputRootHost })
+      filenameEditor.props.onInput({ currentTarget: filenameHost })
     })
     expect(useCompositeV2Store.getState().presets[0]).toMatchObject({
-      subfolderTemplate: '项目/{size}',
+      outputRootPath: 'D:\\Exports',
+      subfolderTemplate: preset.subfolderTemplate,
       filenameTemplate: '{preset}-{index}',
     })
 
