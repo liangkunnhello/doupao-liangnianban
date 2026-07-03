@@ -18,6 +18,7 @@ import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, FolderOpenIcon, 
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import PromptVariableEditor from './PromptVariableEditor'
+import HoverImagePreview from './HoverImagePreview'
 import { type TaskParams, DEFAULT_PARAMS } from '../types'
 import { updateTaskInStore } from '../store'
 
@@ -1157,22 +1158,10 @@ export default function DetailModal() {
       )}
 
       {hoverPreview && (
-        <div
-          className="pointer-events-none fixed z-[70] hidden overflow-hidden rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md md:block"
-          style={{
-            left: hoverPreview.left,
-            top: hoverPreview.top,
-            width: hoverPreview.width,
-            height: hoverPreview.height,
-          }}
-        >
-          <img
-            src={hoverPreview.src}
-            data-image-id={hoverPreview.imageId}
-            className="h-full w-full object-contain"
-            alt=""
-          />
-        </div>
+        <HoverImagePreview
+          preview={hoverPreview}
+          sizeText={imageSizes[hoverPreview.imageId] || ''}
+        />
       )}
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
