@@ -136,6 +136,7 @@ export function getGeneratedImageDownloadEntries(
         createdAt: task.createdAt,
         label,
         prompt: task.prompt,
+        batch: task.filenameBatch ?? 1,
       }, settings, index + 1),
     }
   }

@@ -45,12 +45,14 @@ describe('generated image download entries', () => {
       id: 'a',
       prompt: 'A prompt',
       createdAt: new Date(2026, 6, 3, 8).getTime(),
+      filenameBatch: 2,
       outputImages: ['a-1', 'a-2'],
     })
     const taskB = task({
       id: 'b',
       prompt: 'B prompt',
       createdAt: new Date(2026, 6, 2, 8).getTime(),
+      filenameBatch: 1,
       outputImages: ['b-1'],
     })
 
@@ -61,9 +63,9 @@ describe('generated image download entries', () => {
     )
 
     expect(entries).toEqual([
-      { imageId: 'a-1', fileNameBase: '20260703-快手-A prompt-1' },
-      { imageId: 'a-2', fileNameBase: '20260703-快手-A prompt-2' },
-      { imageId: 'b-1', fileNameBase: '20260702-小红书-B prompt-1' },
+      { imageId: 'a-1', fileNameBase: '20260703-快手-2-A prompt-1' },
+      { imageId: 'a-2', fileNameBase: '20260703-快手-2-A prompt-2' },
+      { imageId: 'b-1', fileNameBase: '20260702-小红书-1-B prompt-1' },
     ])
   })
 
@@ -72,6 +74,7 @@ describe('generated image download entries', () => {
       id: 'a',
       prompt: 'prompt',
       createdAt: new Date(2026, 6, 3, 8).getTime(),
+      filenameBatch: 3,
       outputImages: ['a-1', 'a-2', 'a-3'],
     })
 
@@ -81,7 +84,7 @@ describe('generated image download entries', () => {
       settings,
       ['a-3'],
     )).toEqual([
-      { imageId: 'a-3', fileNameBase: '20260703-快手-prompt-3' },
+      { imageId: 'a-3', fileNameBase: '20260703-快手-3-prompt-3' },
     ])
   })
 
@@ -98,7 +101,7 @@ describe('generated image download entries', () => {
       imageFilenameDatePrefix: true,
       imageFilenameUsePrompt: false,
     })).toEqual([
-      { imageId: 'a-1', fileNameBase: '20260703-定时任务-1' },
+      { imageId: 'a-1', fileNameBase: '20260703-定时任务-1-1' },
     ])
   })
 })

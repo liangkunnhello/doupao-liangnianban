@@ -5199,6 +5199,7 @@ async function executeAgentRound(
         return existingTask.id
       }
 
+      const createdAt = options.createdAt ?? Date.now()
       const task: TaskRecord = {
         id: genId(),
         prompt: taskPrompt,
@@ -5212,9 +5213,10 @@ async function executeAgentRound(
         maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : round.maskTargetImageId ?? null,
         maskImageId: options.maskImageId !== undefined ? options.maskImageId : round.maskImageId ?? null,
         outputImages: [],
+        filenameBatch: getNextTaskFilenameBatch(createdAt, null, 'image'),
         status: 'running',
         error: null,
-        createdAt: options.createdAt ?? Date.now(),
+        createdAt,
         finishedAt: null,
         elapsed: null,
         sourceMode: 'agent',
@@ -5596,6 +5598,7 @@ async function executeAgentRound(
           maskTargetImageId: round?.maskTargetImageId ?? null,
           maskImageId: round?.maskImageId ?? null,
           outputImages: [imgId],
+          filenameBatch: getNextTaskFilenameBatch(startedAt, null, 'image'),
           actualParams,
           actualParamsByImage: { [imgId]: actualParams },
           revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,

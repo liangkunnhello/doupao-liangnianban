@@ -461,7 +461,7 @@ describe('workspace tab defaults', () => {
     expect((await getAllTasks()).map((item) => item.filenameBatch).sort())
       .toEqual([1, 2])
 
-    await removeTask(older.id)
+    await removeTask(older)
 
     expect(useStore.getState().tasks.find((item) => item.id === newer.id)?.filenameBatch).toBe(2)
   })
@@ -2616,6 +2616,8 @@ describe('agent batch reference resolution', () => {
       maskDraft: null,
       params: { ...DEFAULT_PARAMS },
       appMode: 'agent',
+      workspaceTabs: [],
+      activeWorkspaceTabId: null,
       tasks: [
         task({ id: 'task-branch-a', outputImages: [imageA.id], sourceMode: 'agent', agentRoundId: 'round-2-a' }),
         task({ id: 'task-branch-b', outputImages: [imageB.id], sourceMode: 'agent', agentRoundId: 'round-2-b' }),
@@ -2717,6 +2719,43 @@ describe('agent batch reference resolution', () => {
     expect(batchArgs.referenceImageDataUrls).toEqual([imageB.dataUrl])
     expect(batchArgs.referenceImageDataUrls).not.toContain(imageA.dataUrl)
     expect(batchArgs.referenceIds).toEqual(['round-2-image-1'])
+  })
+
+  it('assigns generated image batches to agent task cards', async () => {
+    vi.mocked(callAgentResponsesApi)
+      .mockResolvedValueOnce({
+        text: '',
+        images: [],
+        outputItems: [{
+          type: 'function_call',
+          name: 'generate_image_batch',
+          call_id: 'batch-call',
+          arguments: JSON.stringify({
+            images: [
+              { id: 'image-a', prompt: '第一张' },
+              { id: 'image-b', prompt: '第二张' },
+            ],
+          }),
+        }],
+        responseId: 'response-1',
+      })
+      .mockResolvedValueOnce({
+        text: '完成',
+        images: [],
+        outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '完成' }] }],
+        responseId: 'response-2',
+      })
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks.filter((item) => item.agentBatchCallId === 'batch-call')).toHaveLength(2)
+    })
+    const batches = useStore.getState().tasks
+      .filter((item) => item.agentBatchCallId === 'batch-call')
+      .map((item) => item.filenameBatch)
+      .sort()
+    expect(batches).toEqual([1, 2])
   })
 
   it('resolves batch references to current round input images', async () => {
