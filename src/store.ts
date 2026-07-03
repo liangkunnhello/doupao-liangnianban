@@ -90,6 +90,7 @@ import { runMigration } from './lib/migrations/registry'
 import { shouldDeleteOrphanImage } from './lib/storageCleanup'
 import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/workspaceBackup'
 import { buildGeneratedImageFileNameBase, findNextGeneratedImageSequence } from './lib/generatedImageFilename'
+import { getNextGeneratedImageBatch } from './lib/generatedImageBatch'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -193,6 +194,23 @@ function enqueueLocalImageSave(operation: () => Promise<void>): Promise<void> {
   return queued
 }
 
+function getTaskFilenameFallbackLabel(task: TaskRecord): string {
+  return task.scheduledOutputSubFolder
+    ?? (task.scheduledOutputPath ? getDirectoryBaseName(task.scheduledOutputPath) : 'image')
+}
+
+function getNextTaskFilenameBatch(createdAt: number, targetTabId: string | null, fallbackLabel = 'image') {
+  const state = useStore.getState()
+  const tab = targetTabId ? state.workspaceTabs.find((item) => item.id === targetTabId) : null
+  if (tab) return getNextGeneratedImageBatch(tab.tasks, createdAt)
+
+  const unownedTasks = state.tasks.filter((task) =>
+    !state.workspaceTabs.some((item) => item.tasks.some((candidate) => candidate.id === task.id)) &&
+    getTaskFilenameFallbackLabel(task) === fallbackLabel,
+  )
+  return getNextGeneratedImageBatch(unownedTasks, createdAt)
+}
+
 async function getTaskLocalFilenameState(taskId: string) {
   const state = useStore.getState()
   const task = state.tasks.find((item) => item.id === taskId)
@@ -209,6 +227,7 @@ async function getTaskLocalFilenameState(taskId: string) {
     createdAt: task.createdAt,
     label: containingTab?.name ?? task.scheduledOutputSubFolder ?? getDirectoryBaseName(imagesDir),
     prompt: task.prompt,
+    batch: task.filenameBatch ?? 1,
   }
   const settings = normalizeSettings(state.settings)
   let fileNames: string[] = []
@@ -3970,6 +3989,9 @@ export async function submitTaskWithData(
   const hasInputImages = orderedInputImages.length > 0 || (inputImageFolder ? inputImageFolder.imageIds.length > 0 : false)
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages })
 
+  const taskState = useStore.getState()
+  const tabIdToUpdate = targetTabId ?? taskState.activeWorkspaceTabId ?? taskState.workspaceTabs[0]?.id ?? null
+  const createdAt = Date.now()
   const taskId = genId()
   const task: TaskRecord = {
     id: taskId,
@@ -3985,11 +4007,12 @@ export async function submitTaskWithData(
     maskTargetImageId,
     maskImageId,
     outputImages: [],
+    filenameBatch: getNextTaskFilenameBatch(createdAt, tabIdToUpdate),
     status: 'running',
     error: null,
     progressStage: 'queued',
     progressUpdatedAt: Date.now(),
-    createdAt: Date.now(),
+    createdAt,
     finishedAt: null,
     elapsed: null,
     scheduledOutputPath,
@@ -4000,7 +4023,6 @@ export async function submitTaskWithData(
   const newTasks = [task, ...latestTasks]
   useStore.getState().setTasks(newTasks)
   // Also add to target workspace tab (or active tab if not specified)
-  const tabIdToUpdate = targetTabId ?? useStore.getState().activeWorkspaceTabId
   if (tabIdToUpdate) {
     useStore.setState((state) => ({
       workspaceTabs: state.workspaceTabs.map((t) =>
@@ -6733,9 +6755,12 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
 
 /** 重试失败的任务：创建新任务并执行 */
 export async function retryTask(task: TaskRecord) {
-  const { settings } = useStore.getState()
+  const { settings, workspaceTabs, activeWorkspaceTabId } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
   const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const sourceTabId = workspaceTabs.find((t) => t.tasks.some((rt) => rt.id === task.id))?.id
+  const tabIdToUpdate = sourceTabId ?? activeWorkspaceTabId ?? workspaceTabs[0]?.id ?? null
+  const createdAt = Date.now()
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,
@@ -6751,9 +6776,10 @@ export async function retryTask(task: TaskRecord) {
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
     outputImages: [],
+    filenameBatch: getNextTaskFilenameBatch(createdAt, tabIdToUpdate),
     status: 'running',
     error: null,
-    createdAt: Date.now(),
+    createdAt,
     finishedAt: null,
     elapsed: null,
   }
@@ -6762,9 +6788,6 @@ export async function retryTask(task: TaskRecord) {
   useStore.getState().setTasks([newTask, ...latestTasks])
   
   // 查找原任务所在的标签页，或者使用当前激活的标签页
-  const { workspaceTabs, activeWorkspaceTabId } = useStore.getState()
-  const sourceTabId = workspaceTabs.find((t) => t.tasks.some((rt) => rt.id === task.id))?.id
-  const tabIdToUpdate = sourceTabId ?? activeWorkspaceTabId
   if (tabIdToUpdate) {
     useStore.setState((state) => ({
       workspaceTabs: state.workspaceTabs.map((t) =>

@@ -157,7 +157,7 @@ vi.mock('./lib/agentApi', () => ({
 import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -824,6 +824,40 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
   })
 
+  it('assigns generated image batches per workspace tab', async () => {
+    const kuaishou = workspaceTab({ id: 'tab-kuaishou', name: '快手' })
+    const xiaohongshu = workspaceTab({ id: 'tab-xiaohongshu', name: '小红书', order: 1 })
+    useStore.setState({
+      workspaceTabs: [kuaishou, xiaohongshu],
+      activeWorkspaceTabId: kuaishou.id,
+    })
+
+    await submitTask()
+    await submitTask()
+    useStore.setState({ activeWorkspaceTabId: xiaohongshu.id })
+    await submitTask()
+
+    const [updatedKuaishou, updatedXiaohongshu] = useStore.getState().workspaceTabs
+    expect(updatedKuaishou.tasks.map((item) => item.filenameBatch)).toEqual([2, 1])
+    expect(updatedXiaohongshu.tasks.map((item) => item.filenameBatch)).toEqual([1])
+  })
+
+  it('assigns a retry card the next generated image batch', async () => {
+    const source = task({ createdAt: Date.now(), filenameBatch: 1 })
+    const kuaishou = workspaceTab({ id: 'tab-kuaishou', name: '快手', tasks: [source] })
+    useStore.setState({
+      tasks: [source],
+      workspaceTabs: [kuaishou],
+      activeWorkspaceTabId: kuaishou.id,
+    })
+
+    await retryTask(source)
+
+    expect(useStore.getState().workspaceTabs[0].tasks[0]).toMatchObject({
+      filenameBatch: 2,
+    })
+  })
+
   it('updates task progress when submitting a gallery task', async () => {
     vi.mocked(callImageApi).mockImplementationOnce(() => new Promise(() => {}))
 
@@ -927,7 +961,7 @@ describe('mask draft lifecycle in store actions', () => {
   it('continues generated image names from the largest matching directory sequence', async () => {
     const savedPaths: string[] = []
     const datePrefix = formatGeneratedImageDate(Date.now())
-    const existingFiles = new Set([`${datePrefix}-快手-1.png`, `${datePrefix}-快手-3.png`])
+    const existingFiles = new Set([`${datePrefix}-快手-1-1.png`, `${datePrefix}-快手-1-3.png`])
     const electronAPI = {
       isElectron: true,
       getLocalSavePath: vi.fn(async () => 'D:\\LocalSaves'),
@@ -975,8 +1009,8 @@ describe('mask draft lifecycle in store actions', () => {
       expect(electronAPI.saveJson).toHaveBeenCalled()
     })
     expect(savedPaths).toEqual([
-      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-4.png`,
-      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-5.png`,
+      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-1-4.png`,
+      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-1-5.png`,
     ])
   })
 
