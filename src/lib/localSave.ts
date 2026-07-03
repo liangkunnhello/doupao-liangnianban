@@ -8,6 +8,7 @@ type ElectronAPI = {
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<string[] | null>
   saveImage: (filePath: string, dataUrl: string) => Promise<boolean>
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => Promise<boolean>
+  authorizeCompositeOutputDirectory?: (dirPath: string) => Promise<boolean>
   saveJson: (filePath: string, data: unknown) => Promise<boolean>
   saveText: (filePath: string, content: string) => Promise<boolean>
   ensureDir: (dirPath: string) => Promise<boolean>

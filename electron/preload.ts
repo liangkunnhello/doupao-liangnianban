@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-files', { filters }),
   saveImage: (filePath: string, dataUrl: string) => ipcRenderer.invoke('fs:save-image', { filePath, dataUrl }),
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => ipcRenderer.invoke('composite:save-image', { filePath, dataUrl, maxSizeKb }),
+  authorizeCompositeOutputDirectory: (dirPath: string) => ipcRenderer.invoke('composite:authorize-output-directory', { dirPath }),
   saveJson: (filePath: string, data: unknown) => ipcRenderer.invoke('fs:save-json', { filePath, data }),
   saveText: (filePath: string, content: string) => ipcRenderer.invoke('fs:save-text', { filePath, content }),
   ensureDir: (dirPath: string) => ipcRenderer.invoke('fs:ensure-dir', { dirPath }),
