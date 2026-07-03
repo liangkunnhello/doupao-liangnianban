@@ -434,6 +434,37 @@ describe('workspace tab defaults', () => {
     expect(state.workspaceTabs).toHaveLength(1)
     expect(state.workspaceTabs[0].tasks.map((item) => item.id)).toEqual(['orphan-gallery-task'])
   })
+
+  it('backfills generated image batches and persists them during initialization', async () => {
+    const older = task({
+      id: 'batch-older',
+      createdAt: new Date(2026, 6, 3, 8).getTime(),
+    })
+    const newer = task({
+      id: 'batch-newer',
+      createdAt: new Date(2026, 6, 3, 9).getTime(),
+    })
+    await putDbTask(older)
+    await putDbTask(newer)
+    useStore.setState({
+      workspaceTabs: [{
+        ...workspaceTab({ id: 'tab-kuaishou', name: '快手', tasks: [] }),
+        _taskIds: [newer.id, older.id],
+      } as WorkspaceTab],
+      activeWorkspaceTabId: 'tab-kuaishou',
+    })
+
+    await initStore()
+
+    expect(useStore.getState().workspaceTabs[0].tasks.map((item) => item.filenameBatch))
+      .toEqual([2, 1])
+    expect((await getAllTasks()).map((item) => item.filenameBatch).sort())
+      .toEqual([1, 2])
+
+    await removeTask(older.id)
+
+    expect(useStore.getState().tasks.find((item) => item.id === newer.id)?.filenameBatch).toBe(2)
+  })
 })
 
 describe('schedule state', () => {

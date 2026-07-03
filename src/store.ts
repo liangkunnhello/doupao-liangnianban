@@ -90,7 +90,7 @@ import { runMigration } from './lib/migrations/registry'
 import { shouldDeleteOrphanImage } from './lib/storageCleanup'
 import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/workspaceBackup'
 import { buildGeneratedImageFileNameBase, findNextGeneratedImageSequence } from './lib/generatedImageFilename'
-import { getNextGeneratedImageBatch } from './lib/generatedImageBatch'
+import { assignMissingGeneratedImageBatches, getNextGeneratedImageBatch } from './lib/generatedImageBatch'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -3574,7 +3574,7 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const favoriteState = useStore.getState()
   const normalizedFavorites = normalizeLoadedFavoriteState(markedTasks.map(getPersistableTask), favoriteState.favoriteCollections, favoriteState.defaultFavoriteCollectionId)
-  const tasks = normalizedFavorites.tasks
+  let tasks = normalizedFavorites.tasks
   if (normalizedFavorites.collections !== favoriteState.favoriteCollections) {
     favoriteState.setFavoriteCollections(normalizedFavorites.collections)
   }
@@ -3674,7 +3674,22 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
     }
     
     useStore.setState({ workspaceTabs: updatedTabs })
+    currentTabs = updatedTabs
   }
+
+  const batchBackfill = assignMissingGeneratedImageBatches(tasks, currentTabs)
+  if (batchBackfill.changedTaskIds.length > 0) {
+    const changedTaskIds = new Set(batchBackfill.changedTaskIds)
+    await batchPutTasks(batchBackfill.tasks.filter((task) => changedTaskIds.has(task.id)))
+  }
+  tasks = batchBackfill.tasks
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
+  currentTabs = currentTabs.map((tab) => ({
+    ...tab,
+    tasks: tab.tasks.map((task) => taskById.get(task.id) ?? task),
+  }))
+  useStore.setState({ tasks, workspaceTabs: currentTabs })
+
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
