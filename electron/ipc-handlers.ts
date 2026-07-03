@@ -74,6 +74,12 @@ function addAllowedRoot(value: string | null | undefined): void {
   sessionAllowedRoots.add(normalizeFsPath(value))
 }
 
+export function authorizeCompositeOutputDirectory(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value)) return false
+  addAllowedRoot(value)
+  return true
+}
+
 function getAllowedRoots(): string[] {
   const roots = [
     app.getPath('userData'),
@@ -690,6 +696,11 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('composite:distribute-file', async (_event, payload) => distributeCompositeFile(payload))
+
+  ipcMain.handle('composite:authorize-output-directory', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return false
+    return authorizeCompositeOutputDirectory((payload as { dirPath?: unknown }).dirPath)
+  })
 
   ipcMain.handle('fs:read-file-buffer', async (_event, { filePath }: { filePath: string }) => {
     try {

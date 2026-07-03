@@ -282,6 +282,19 @@ describe('ipc composite background filesystem helpers', () => {
     expect(handleDeleteCompositeFilesPayload!(null)).toEqual({ deleted: [], failed: [] })
   })
 
+  it('authorizes arbitrary absolute composite output directories', async () => {
+    const mod = await import('./ipc-handlers')
+    const authorize = (mod as {
+      authorizeCompositeOutputDirectory?: (value: unknown) => boolean
+    }).authorizeCompositeOutputDirectory
+
+    expect(authorize).toBeTypeOf('function')
+    expect(authorize!(path.join(os.tmpdir(), 'manual-composite-output'))).toBe(true)
+    expect(authorize!('relative/output')).toBe(false)
+    expect(authorize!('')).toBe(false)
+    expect(authorize!(null)).toBe(false)
+  })
+
   it('requires exactly one source for each streaming ZIP entry', async () => {
     const { parseStreamingZipRequest } = await import('./ipc-handlers')
     const base = {
