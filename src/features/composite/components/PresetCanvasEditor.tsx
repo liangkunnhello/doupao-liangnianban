@@ -95,7 +95,7 @@ export function PresetCanvasEditor(props: Props) {
   const [editingScale, setEditingScale] = useState(1)
   const [scale, setScale] = useState<number | 'fit'>('fit')
   const [fitScale, setFitScale] = useState(1)
-  const [previewBackdropMode, setPreviewBackdropMode] = useState<PreviewBackdropMode>('white')
+  const [previewBackdropMode, setPreviewBackdropMode] = useState<PreviewBackdropMode>('transparent')
   const selectedLayerId = props.selectedLayerId ?? internalSelectedLayerId
   const stageRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)

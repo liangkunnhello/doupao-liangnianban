@@ -90,8 +90,8 @@ describe('PresetCanvasEditor', () => {
     expect(html).toContain('aria-label="添加文字图层"')
     expect(html).toContain('<canvas')
     expect(html).toContain('data-layout="preset-canvas-stage"')
-    expect(html).toContain('data-preview-backdrop="white"')
-    expect(html).toContain('切换预览背景，当前为白色背景')
+    expect(html).toContain('data-preview-backdrop="transparent"')
+    expect(html).toContain('切换预览背景，当前为透明背景')
     expect(html).not.toContain('data-layout="logo-sidebar"')
     expect(html).not.toContain('data-layout="docked-layer-panel"')
     expect(html).not.toContain('data-layout="floating-layer-panel"')
@@ -135,11 +135,6 @@ describe('PresetCanvasEditor', () => {
       typeof node.props['aria-label'] === 'string' && node.props['aria-label'].includes('切换预览背景')
     ))
 
-    expect(getCanvasHost().props['data-preview-backdrop']).toBe('white')
-
-    act(() => {
-      getBackdropButton()?.props.onClick()
-    })
     expect(getCanvasHost().props['data-preview-backdrop']).toBe('transparent')
 
     act(() => {
@@ -151,6 +146,11 @@ describe('PresetCanvasEditor', () => {
       getBackdropButton()?.props.onClick()
     })
     expect(getCanvasHost().props['data-preview-backdrop']).toBe('white')
+
+    act(() => {
+      getBackdropButton()?.props.onClick()
+    })
+    expect(getCanvasHost().props['data-preview-backdrop']).toBe('transparent')
 
     act(() => renderer!.unmount())
   })
