@@ -15,10 +15,10 @@ const context = {
 
 describe('generated image filenames', () => {
   it('uses the task generation date and omits the prompt by default', () => {
-    expect(buildGeneratedImageFileNameBase(context, {
+    expect(buildGeneratedImageFileNameBase({ ...context, batch: 1 }, {
       imageFilenameDatePrefix: true,
       imageFilenameUsePrompt: false,
-    }, 1)).toBe('20260703-快手-2-1')
+    }, 1)).toBe('20260703-快手-1-1')
   })
 
   it('includes a sanitized prompt when enabled', () => {
