@@ -12,7 +12,7 @@ import { getSafeBoundingClientRect } from '../lib/domRect'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { useTooltip } from '../hooks/useTooltip'
-import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntries, downloadImageEntriesAsZip, formatExportFileTime, getGeneratedImageDownloadEntries } from '../lib/downloadImages'
 import { selectLocalSaveDirectory, readDirectory, readFileBuffer, joinPath, checkPathExists } from '../lib/localSave'
 import { storeImage, hashDataUrl } from '../lib/db'
 import Select from './Select'
@@ -482,6 +482,7 @@ export default function InputBar() {
   const setSelectedFavoriteCollectionIds = useStore((s) => s.setSelectedFavoriteCollectionIds)
   const clearFavoriteCollectionSelection = useStore((s) => s.clearFavoriteCollectionSelection)
   const tasks = useStore((s) => s.tasks)
+  const workspaceTabs = useStore((s) => s.workspaceTabs)
   const favoriteCollections = useStore((s) => s.favoriteCollections)
   const agentConversations = useStore((s) => s.agentConversations)
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
@@ -604,9 +605,10 @@ export default function InputBar() {
     try {
       const timeStr = formatExportFileTime(new Date())
       const fileNameBase = `batch-${timeStr}`
+      const entries = getGeneratedImageDownloadEntries(selectedTasks, workspaceTabs, settings)
       const { successCount, failCount } = settings.zipDownloadRoutes.includes('task-selection')
-        ? await downloadImageEntriesAsZip(getTaskOutputImageZipEntries(selectedTasks), fileNameBase)
-        : await downloadImageIds(imageIds, fileNameBase)
+        ? await downloadImageEntriesAsZip(entries, fileNameBase)
+        : await downloadImageEntries(entries)
 
       if (successCount === 0) {
         showToast('下载失败', 'error')
@@ -620,7 +622,7 @@ export default function InputBar() {
       showToast('下载失败', 'error')
     }
     clearSelection()
-  }, [tasks, selectedTaskIds, settings.zipDownloadRoutes, showToast, clearSelection])
+  }, [tasks, selectedTaskIds, workspaceTabs, settings, showToast, clearSelection])
 
   const handleDownloadSelectedFavoriteCollections = useCallback(async () => {
     const selectedIdSet = new Set(selectedFavoriteCollectionIds)
@@ -635,14 +637,14 @@ export default function InputBar() {
 
     try {
       for (const collection of selectedCollections) {
-        const entries = getTaskOutputImageZipEntries(collection.tasks)
+        const entries = getGeneratedImageDownloadEntries(collection.tasks, workspaceTabs, settings)
         if (entries.length === 0) continue
         const zipName = collection.id === ALL_FAVORITES_COLLECTION_ID
           ? `favorites-all-${timeStr}`
           : `favorites-${collection.name}-${timeStr}`
         const result = useZipDownload
           ? await downloadImageEntriesAsZip(entries, zipName)
-          : await downloadImageIds(entries.map((entry) => entry.imageId), zipName)
+          : await downloadImageEntries(entries)
         successCount += result.successCount
         failCount += result.failCount
         if (result.successCount > 0) downloadedCollectionCount++
@@ -661,7 +663,7 @@ export default function InputBar() {
       showToast('下载失败', 'error')
     }
     clearFavoriteCollectionSelection()
-  }, [clearFavoriteCollectionSelection, favoriteCollectionCards, selectedFavoriteCollectionIds, settings.zipDownloadRoutes, showToast])
+  }, [clearFavoriteCollectionSelection, favoriteCollectionCards, selectedFavoriteCollectionIds, settings, showToast, workspaceTabs])
 
   const handleDeleteSelectedFavoriteCollections = useCallback(() => {
     const selectedIdSet = new Set(selectedFavoriteCollectionIds)

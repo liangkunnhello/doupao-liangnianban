@@ -2364,6 +2364,30 @@ export default function SettingsModal() {
 
                 <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
+                    <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h10M4 18h7" />
+                    </svg>
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">图片文件名</h4>
+                  </div>
+                  <div className="flex flex-wrap gap-x-6 gap-y-3">
+                    <Checkbox
+                      checked={draft.imageFilenameDatePrefix}
+                      onChange={(checked) => commitSettings({ ...draft, imageFilenameDatePrefix: checked })}
+                      label="文件名添加生成日期"
+                    />
+                    <Checkbox
+                      checked={draft.imageFilenameUsePrompt}
+                      onChange={(checked) => commitSettings({ ...draft, imageFilenameUsePrompt: checked })}
+                      label="文件名使用生成提示词"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    例如：<code>20260703-快手-1.png</code>；使用提示词后为 <code>20260703-快手-提示词-1.png</code>
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
                     <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出数据</h4>
                   </div>

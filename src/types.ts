@@ -111,6 +111,8 @@ export interface AppSettings {
   enterSubmit: boolean
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
+  imageFilenameDatePrefix: boolean
+  imageFilenameUsePrompt: boolean
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean

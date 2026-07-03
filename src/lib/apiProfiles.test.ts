@@ -32,6 +32,25 @@ describe('backup settings', () => {
   })
 })
 
+describe('generated image filename settings', () => {
+  it('enables the generation date and disables the prompt by default', () => {
+    const settings = normalizeSettings({})
+
+    expect(settings.imageFilenameDatePrefix).toBe(true)
+    expect(settings.imageFilenameUsePrompt).toBe(false)
+  })
+
+  it('preserves explicit filename settings', () => {
+    const settings = normalizeSettings({
+      imageFilenameDatePrefix: false,
+      imageFilenameUsePrompt: true,
+    })
+
+    expect(settings.imageFilenameDatePrefix).toBe(false)
+    expect(settings.imageFilenameUsePrompt).toBe(true)
+  })
+})
+
 describe('word library derivative rule settings', () => {
   it('creates the built-in default rule as the enabled default', () => {
     const settings = normalizeSettings({})

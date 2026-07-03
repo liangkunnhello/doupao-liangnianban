@@ -55,6 +55,21 @@ describe('local image saving', () => {
     expect(savedImages[0].filePath).toBe('D:\\Exports\\20260620\\插画\\插画-1.png')
   })
 
+  it('uses an exact generated filename base when provided', async () => {
+    const savedPath = await saveImageToLocal(
+      'task-a',
+      0,
+      'data:image/png;base64,a',
+      'png',
+      '快手',
+      undefined,
+      '20260620-快手-4',
+    )
+
+    expect(savedPath).toBe('D:\\LocalSaves\\images\\快手\\20260620-快手-4.png')
+    expect(savedImages[0].filePath).toBe('D:\\LocalSaves\\images\\快手\\20260620-快手-4.png')
+  })
+
   it('reserves distinct sequential names when images are saved concurrently', async () => {
     const existingFiles = new Set(['images-1.png', 'images-2.png'])
     const api = globalThis.window.electronAPI!

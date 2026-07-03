@@ -80,7 +80,7 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, getDirectoryBaseName, readDirectory } from './lib/localSave'
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 import { ByteLruCache } from './lib/byteLruCache'
@@ -89,6 +89,7 @@ import { validateBackupArchive } from './lib/backupImport'
 import { runMigration } from './lib/migrations/registry'
 import { shouldDeleteOrphanImage } from './lib/storageCleanup'
 import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/workspaceBackup'
+import { buildGeneratedImageFileNameBase, findNextGeneratedImageSequence } from './lib/generatedImageFilename'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -114,6 +115,7 @@ const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const agentRoundControllers = new Map<string, AbortController>()
+let localImageSaveQueue = Promise.resolve()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 let wordLibraryPersistenceReady = false
@@ -185,23 +187,66 @@ export function cacheImage(id: string, dataUrl: string) {
   imageCache.set(id, dataUrl, dataUrl.length * 2)
 }
 
+function enqueueLocalImageSave(operation: () => Promise<void>): Promise<void> {
+  const queued = localImageSaveQueue.catch(() => {}).then(operation)
+  localImageSaveQueue = queued
+  return queued
+}
+
+async function getTaskLocalFilenameState(taskId: string) {
+  const state = useStore.getState()
+  const task = state.tasks.find((item) => item.id === taskId)
+  if (!task) return null
+
+  const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((item) => item.id === taskId))
+  const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
+  const imagesDir = task.scheduledOutputPath
+    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
+    : await getLocalImageSaveDirectory(subFolder)
+  if (!imagesDir) return null
+
+  const context = {
+    createdAt: task.createdAt,
+    label: containingTab?.name ?? task.scheduledOutputSubFolder ?? getDirectoryBaseName(imagesDir),
+    prompt: task.prompt,
+  }
+  const settings = normalizeSettings(state.settings)
+  let fileNames: string[] = []
+  try {
+    fileNames = await readDirectory(imagesDir)
+  } catch (err) {
+    console.error('Failed to read directory for generated image naming', err)
+  }
+  const startSequence = findNextGeneratedImageSequence(fileNames, context, settings)
+
+  return { task, subFolder, context, settings, startSequence }
+}
+
 async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], imageIndexOffset: number = 0) {
+  return enqueueLocalImageSave(async () => {
+    await saveTaskImagesToLocalFSNow(taskId, imageIds, imageIndexOffset)
+  })
+}
+
+async function saveTaskImagesToLocalFSNow(taskId: string, imageIds: string[], imageIndexOffset: number) {
   if (!isElectronEnv()) return
   const localSavePath = await getLocalSavePath()
   if (!localSavePath) return
 
-  const state = useStore.getState()
-  const task = state.tasks.find((t) => t.id === taskId)
-  if (!task) return
+  const filenameState = await getTaskLocalFilenameState(taskId)
+  if (!filenameState) return
+  const { task, subFolder, context, settings, startSequence } = filenameState
 
-  const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
-  const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
-
+  let sequenceOffset = 0
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
     const dataUrl = await ensureImageCached(imageId)
     if (dataUrl) {
-      await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
+      const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
+      const saved = await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, fileNameBase)
+      if (saved) {
+        sequenceOffset++
+      }
     }
   }
 }
@@ -224,25 +269,34 @@ async function saveTaskMetaToLocalFS(taskId: string) {
 }
 
 async function saveTaskToLocalFS(taskId: string) {
+  return enqueueLocalImageSave(async () => {
+    await saveTaskToLocalFSNow(taskId)
+  })
+}
+
+async function saveTaskToLocalFSNow(taskId: string) {
   if (!isElectronEnv()) return
   const localSavePath = await getLocalSavePath()
   if (!localSavePath) return
 
-  const state = useStore.getState()
-  const task = state.tasks.find((t) => t.id === taskId)
-  if (!task) return
-
-  const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((t) => t.id === taskId))
-  const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
+  const filenameState = await getTaskLocalFilenameState(taskId)
+  if (!filenameState) return
+  const { task, subFolder, context, settings, startSequence } = filenameState
 
   let imageFailCount = 0
+  let sequenceOffset = 0
   try {
     for (let i = 0; i < (task.outputImages?.length ?? 0); i++) {
       const imageId = task.outputImages[i]
       const dataUrl = await ensureImageCached(imageId)
       if (dataUrl) {
-        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath)
-        if (!saved) imageFailCount++
+        const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, fileNameBase)
+        if (saved) {
+          sequenceOffset++
+        } else {
+          imageFailCount++
+        }
       } else {
         imageFailCount++
       }

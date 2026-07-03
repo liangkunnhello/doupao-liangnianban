@@ -1,6 +1,7 @@
 import { ensureImageCached } from '../store'
 import { zipSync } from 'fflate'
-import type { TaskRecord } from '../types'
+import type { TaskRecord, WorkspaceTab } from '../types'
+import { buildGeneratedImageFileNameBase, type GeneratedImageFilenameSettings } from './generatedImageFilename'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -43,6 +44,26 @@ export async function downloadImageIds(imageIds: string[], fileNameBase = 'image
       triggerDownload(blob, fileName)
       successCount++
       if (multiple) await delay(100)
+    } catch (err) {
+      console.error(err)
+      failCount++
+    }
+  }
+
+  return { successCount, failCount }
+}
+
+export async function downloadImageEntries(entries: DownloadImageZipEntry[]): Promise<DownloadImagesResult> {
+  let successCount = 0
+  let failCount = 0
+
+  for (const entry of entries) {
+    try {
+      const blob = await getImageBlob(entry.imageId)
+      const fileNameBase = sanitizeFileNamePart(entry.fileNameBase || 'image') || 'image'
+      triggerDownload(blob, `${fileNameBase}.${getBlobExtension(blob)}`)
+      successCount++
+      if (entries.length > 1) await delay(100)
     } catch (err) {
       console.error(err)
       failCount++
@@ -97,12 +118,55 @@ export function getTaskOutputImageZipEntries(tasks: TaskOutputZipTask[]): Downlo
     .flatMap((task) => getImageZipEntries(task.outputImages || [], `task-${task.id}`))
 }
 
+export function getGeneratedImageDownloadEntries(
+  tasks: TaskRecord[],
+  workspaceTabs: WorkspaceTab[],
+  settings: GeneratedImageFilenameSettings,
+  imageIds?: string[],
+): DownloadImageZipEntry[] {
+  const buildEntry = (task: TaskRecord, imageId: string, index: number): DownloadImageZipEntry => {
+    const containingTab = workspaceTabs.find((tab) => tab.tasks.some((item) => item.id === task.id))
+    const label = containingTab?.name
+      ?? task.scheduledOutputSubFolder
+      ?? getPathBaseName(task.scheduledOutputPath)
+      ?? 'image'
+    return {
+      imageId,
+      fileNameBase: buildGeneratedImageFileNameBase({
+        createdAt: task.createdAt,
+        label,
+        prompt: task.prompt,
+      }, settings, index + 1),
+    }
+  }
+
+  if (!imageIds) {
+    return tasks.flatMap((task) => task.outputImages.map((imageId, index) => buildEntry(task, imageId, index)))
+  }
+
+  return imageIds.flatMap((imageId) => {
+    for (const task of tasks) {
+      const outputIndex = task.outputImages.indexOf(imageId)
+      if (outputIndex >= 0) return [buildEntry(task, imageId, outputIndex)]
+      const partialIndex = task.streamPartialImageIds?.indexOf(imageId) ?? -1
+      if (partialIndex >= 0) return [buildEntry(task, imageId, partialIndex)]
+    }
+    return []
+  })
+}
+
 export function getImageZipEntries(imageIds: string[], fileNameBase = 'image'): DownloadImageZipEntry[] {
   const multiple = imageIds.length > 1
   return imageIds.map((imageId, index) => ({
     imageId,
     fileNameBase: multiple ? `${fileNameBase}-${String(index + 1).padStart(2, '0')}` : fileNameBase,
   }))
+}
+
+function getPathBaseName(value?: string): string | null {
+  if (!value) return null
+  const parts = value.trim().replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean)
+  return parts[parts.length - 1] || null
 }
 
 async function getImageBlob(imageIdOrUrl: string): Promise<Blob> {
@@ -132,10 +196,9 @@ function getBlobExtension(blob: Blob): string {
 }
 
 function sanitizeFileNamePart(value: string): string {
-  return value.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').slice(0, 120)
+  return value.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').slice(0, 220)
 }
 
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
-

@@ -5,6 +5,7 @@ import { createDefaultScheduleRows } from './lib/schedule'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { AgentConversation, ExportData, StoredCompositeAsset, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
+import { formatGeneratedImageDate } from './lib/generatedImageFilename'
 vi.mock('./lib/db', () => {
   const tasks = new Map<string, TaskRecord>()
   const images = new Map<string, StoredImage>()
@@ -921,6 +922,62 @@ describe('mask draft lifecycle in store actions', () => {
       expect(electronAPI.saveJson).toHaveBeenCalled()
     })
     expect(electronAPI.saveImage).toHaveBeenCalledTimes(3)
+  })
+
+  it('continues generated image names from the largest matching directory sequence', async () => {
+    const savedPaths: string[] = []
+    const datePrefix = formatGeneratedImageDate(Date.now())
+    const existingFiles = new Set([`${datePrefix}-快手-1.png`, `${datePrefix}-快手-3.png`])
+    const electronAPI = {
+      isElectron: true,
+      getLocalSavePath: vi.fn(async () => 'D:\\LocalSaves'),
+      getDefaultPath: vi.fn(async () => 'D:\\LocalSaves'),
+      setLocalSavePath: vi.fn(async () => {}),
+      ensureDir: vi.fn(async () => true),
+      pathJoin: vi.fn(async (...parts: string[]) => parts.join('\\')),
+      saveImage: vi.fn(async (filePath: string) => {
+        savedPaths.push(filePath)
+        existingFiles.add(filePath.split('\\').pop()!)
+        return true
+      }),
+      saveJson: vi.fn(async () => true),
+      saveText: vi.fn(async () => true),
+      checkExists: vi.fn(async (filePath: string) => existingFiles.has(filePath.split('\\').pop()!)),
+      readDir: vi.fn(async () => [...existingFiles]),
+    }
+    Object.defineProperty(globalThis, 'window', {
+      value: { electronAPI },
+      configurable: true,
+    })
+    vi.mocked(callImageApi).mockImplementation(async (opts) => ({
+      images: [`data:image/png;base64,${opts.params.n}-${savedPaths.length}`],
+      actualParams: { n: opts.params.n },
+      actualParamsList: [{ n: opts.params.n }],
+      revisedPrompts: [],
+    }))
+    const activeTab = workspaceTab({ id: 'tab-fast', name: '快手' })
+    useStore.setState({
+      appMode: 'gallery',
+      params: { ...DEFAULT_PARAMS, n: 2 },
+      workspaceTabs: [activeTab],
+      activeWorkspaceTabId: activeTab.id,
+      settings: {
+        ...useStore.getState().settings,
+        imageFilenameDatePrefix: true,
+        imageFilenameUsePrompt: false,
+      },
+    })
+
+    await submitTask()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks[0].status).toBe('done')
+      expect(electronAPI.saveJson).toHaveBeenCalled()
+    })
+    expect(savedPaths).toEqual([
+      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-4.png`,
+      `D:\\LocalSaves\\images\\快手\\${datePrefix}-快手-5.png`,
+    ])
   })
 
   it('keeps only recent stream partial images when a task fails', async () => {

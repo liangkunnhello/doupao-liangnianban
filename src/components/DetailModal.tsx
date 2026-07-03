@@ -8,7 +8,7 @@ import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntries, downloadImageEntriesAsZip, getGeneratedImageDownloadEntries } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
 import { replaceImageMentionsForApi, getPromptMentionParts } from '../lib/promptImageMentions'
@@ -459,7 +459,8 @@ export default function DetailModal() {
     if (!currentOutputImageId || !task) return
 
     try {
-      const result = await downloadImageIds([currentOutputImageId], `task-${task.id}`)
+      const entries = getGeneratedImageDownloadEntries([task], workspaceTabs, settings, [currentOutputImageId])
+      const result = await downloadImageEntries(entries)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else {
@@ -476,7 +477,8 @@ export default function DetailModal() {
     if (!imageId || !task) return
 
     try {
-      const result = await downloadImageIds([imageId], `task-${task.id}`)
+      const entries = getGeneratedImageDownloadEntries([task], workspaceTabs, settings, [imageId])
+      const result = await downloadImageEntries(entries)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else {
@@ -514,9 +516,10 @@ export default function DetailModal() {
 
     try {
       const fileNameBase = `task-${task.id}`
+      const entries = getGeneratedImageDownloadEntries([task], workspaceTabs, settings)
       const result = settings.zipDownloadRoutes.includes('task-detail-all')
-        ? await downloadImageEntriesAsZip(getImageZipEntries(task.outputImages, fileNameBase), fileNameBase)
-        : await downloadImageIds(task.outputImages, fileNameBase)
+        ? await downloadImageEntriesAsZip(entries, fileNameBase)
+        : await downloadImageEntries(entries)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else if (result.failCount > 0) {
@@ -535,9 +538,10 @@ export default function DetailModal() {
 
     try {
       const fileNameBase = `task-${task.id}-partial`
+      const entries = getGeneratedImageDownloadEntries([task], workspaceTabs, settings, streamPartialImageIds)
       const result = settings.zipDownloadRoutes.includes('task-detail-partial')
-        ? await downloadImageEntriesAsZip(getImageZipEntries(streamPartialImageIds, fileNameBase), fileNameBase)
-        : await downloadImageIds(streamPartialImageIds, fileNameBase)
+        ? await downloadImageEntriesAsZip(entries, fileNameBase)
+        : await downloadImageEntries(entries)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else if (result.failCount > 0) {

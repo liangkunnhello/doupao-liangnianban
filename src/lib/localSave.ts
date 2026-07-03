@@ -1,5 +1,6 @@
 import type { AgentConversation, TaskRecord } from '../types'
 import type { UpdateStatus } from '../hooks/useAutoUpdate'
+import { sanitizeGeneratedImageFilenamePart } from './generatedImageFilename'
 
 type ElectronAPI = {
   selectDirectory: () => Promise<string | null>
@@ -177,7 +178,7 @@ function resolveOutputDirectoryVariables(path: string): string {
   return path.replace(/\{date\}/gi, formatDateVariable())
 }
 
-function getDirectoryBaseName(dirPath: string): string {
+export function getDirectoryBaseName(dirPath: string): string {
   const normalized = dirPath.trim().replace(/[\\/]+$/, '')
   const parts = normalized.split(/[\\/]+/).filter(Boolean)
   return sanitizeFolderName(parts[parts.length - 1] || 'images')
@@ -248,6 +249,7 @@ export async function saveImageToLocal(
   ext: string = 'png',
   subFolder?: string,
   outputDirectory?: string,
+  fileNameBase?: string,
 ): Promise<string | null> {
   const api = getAPI()
   if (!api) return null
@@ -259,8 +261,16 @@ export async function saveImageToLocal(
 
   return saveImageExclusively(imagesDir, async () => {
     const fileExt = EXT_MAP[ext] || 'png'
-    const fileBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
-    let fileName = `${fileBaseName}-${imageIndex + 1}.${fileExt}`
+    const directoryBaseName = getDirectoryBaseName(imagesDir) || sanitizeFolderName(taskId)
+    const exactBaseName = fileNameBase
+      ? sanitizeGeneratedImageFilenamePart(fileNameBase, 220) || directoryBaseName
+      : ''
+    const exactSequenceMatch = exactBaseName.match(/^(.*)-(\d+)$/)
+    const sequencePrefix = exactSequenceMatch?.[1] || directoryBaseName
+    const requestedSequence = exactSequenceMatch
+      ? Number.parseInt(exactSequenceMatch[2], 10)
+      : imageIndex + 1
+    let fileName = `${exactBaseName || `${directoryBaseName}-${imageIndex + 1}`}.${fileExt}`
     let filePath = await api.pathJoin(imagesDir, fileName)
 
     // 避免覆盖：如果文件已存在，则自动查找当前目录下的最大序号并递增
@@ -268,7 +278,7 @@ export async function saveImageToLocal(
       let maxIndex = 0
       try {
         const files = await api.readDir(imagesDir)
-        const regex = new RegExp(`^${escapeRegExp(fileBaseName)}-(\\d+)\\.`)
+        const regex = new RegExp(`^${escapeRegExp(sequencePrefix)}-(\\d+)\\.`)
         for (const file of files) {
           const match = file.match(regex)
           if (match) {
@@ -280,13 +290,13 @@ export async function saveImageToLocal(
         console.error('Failed to read directory for sequential naming', err)
       }
 
-      let nextIndex = Math.max(maxIndex + 1, imageIndex + 1)
-      fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
+      let nextIndex = Math.max(maxIndex + 1, requestedSequence + 1)
+      fileName = `${sequencePrefix}-${nextIndex}.${fileExt}`
       filePath = await api.pathJoin(imagesDir, fileName)
 
       while (await api.checkExists(filePath)) {
         nextIndex++
-        fileName = `${fileBaseName}-${nextIndex}.${fileExt}`
+        fileName = `${sequencePrefix}-${nextIndex}.${fileExt}`
         filePath = await api.pathJoin(imagesDir, fileName)
       }
     }

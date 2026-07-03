@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useStore, addImageFromUrl, ensureImageCached } from '../store'
 import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntries, downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getGeneratedImageDownloadEntries, getImageZipEntries } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
 
@@ -101,11 +101,12 @@ export default function ImageContextMenu() {
 
     try {
       let fileNameBase = ''
+      let generatedEntries: ReturnType<typeof getGeneratedImageDownloadEntries> = []
       if (imageId) {
-        const tasks = useStore.getState().tasks
+        const { tasks, workspaceTabs, settings } = useStore.getState()
         const matchedTask = tasks.find(t => t.outputImages?.includes(imageId))
         if (matchedTask) {
-          fileNameBase = `task-${matchedTask.id}`
+          generatedEntries = getGeneratedImageDownloadEntries([matchedTask], workspaceTabs, settings, [imageId])
         } else {
           fileNameBase = `image-${imageId}`
         }
@@ -114,7 +115,9 @@ export default function ImageContextMenu() {
         fileNameBase = `image-${timeStr}`
       }
 
-      const result = await downloadImageIds([imageId || src], fileNameBase)
+      const result = generatedEntries.length > 0
+        ? await downloadImageEntries(generatedEntries)
+        : await downloadImageIds([imageId || src], fileNameBase)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else {
@@ -134,11 +137,13 @@ export default function ImageContextMenu() {
 
     try {
       let fileNameBase = ''
+      let generatedEntries: ReturnType<typeof getGeneratedImageDownloadEntries> = []
       if (outputImageIds[0]) {
-        const tasks = useStore.getState().tasks
+        const { tasks, workspaceTabs, settings } = useStore.getState()
         const matchedTask = tasks.find(t => t.outputImages?.includes(outputImageIds[0]))
         if (matchedTask) {
           fileNameBase = `task-${matchedTask.id}`
+          generatedEntries = getGeneratedImageDownloadEntries(tasks, workspaceTabs, settings, outputImageIds)
         }
       }
       if (!fileNameBase) {
@@ -148,8 +153,13 @@ export default function ImageContextMenu() {
 
       const settings = useStore.getState().settings
       const result = settings.zipDownloadRoutes.includes('image-context-menu-all')
-        ? await downloadImageEntriesAsZip(getImageZipEntries(outputImageIds, fileNameBase), fileNameBase)
-        : await downloadImageIds(outputImageIds, fileNameBase)
+        ? await downloadImageEntriesAsZip(
+            generatedEntries.length > 0 ? generatedEntries : getImageZipEntries(outputImageIds, fileNameBase),
+            fileNameBase,
+          )
+        : generatedEntries.length > 0
+          ? await downloadImageEntries(generatedEntries)
+          : await downloadImageIds(outputImageIds, fileNameBase)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else if (result.failCount > 0) {
