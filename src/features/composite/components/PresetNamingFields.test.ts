@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createDefaultCompositeV2Preset } from '../lib/compositeV2Defaults'
 import {
+  convertNamingVariableToText,
   insertNamingVariable,
+  moveNamingVariable,
   PresetNamingFields,
   readNamingTemplate,
   renderNamingTemplateHtml,
@@ -47,7 +49,7 @@ describe('PresetNamingFields helpers', () => {
     expect(readNamingTemplate(host)).toBe('项目-{size}文案')
   })
 
-  it('uses readable raw template editors', () => {
+  it('renders only the output root and filename as rich template editors', () => {
     const preset = createDefaultCompositeV2Preset(1)
     let renderer: ReturnType<typeof create>
 
@@ -65,10 +67,13 @@ describe('PresetNamingFields helpers', () => {
       )
     })
 
-    const editor = renderer!.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` })
-    expect(editor.props.className).toContain('min-h-20')
-    expect(editor.props.className).toContain('text-xs')
-    expect(editor.props.value).toBe(preset.subfolderTemplate)
+    const editors = renderer!.root.findAll((node) => node.props.contentEditable === true)
+    expect(editors).toHaveLength(2)
+    expect(editors.map((editor) => editor.props['aria-label'])).toEqual([
+      '输出根目录',
+      `预设文件名模板 ${preset.name}`,
+    ])
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'preset-subfolder-preview' })).toHaveLength(0)
   })
 })
 
@@ -103,6 +108,20 @@ describe('insertNamingVariable', () => {
       template: '{date}{index}',
       caret: 13,
     })
+  })
+})
+
+describe('naming variable chip operations', () => {
+  it('moves a complete variable token to a new template offset', () => {
+    expect(moveNamingVariable('{date}-{size}', 0, 13)).toBe('-{size}{date}')
+  })
+
+  it('converts a variable token to its current resolved text', () => {
+    expect(convertNamingVariableToText(
+      '{date}-{size}',
+      0,
+      { date: '20260703' },
+    )).toBe('20260703-{size}')
   })
 })
 
@@ -142,9 +161,10 @@ describe('PresetNamingFields interactions', () => {
     }
   }
 
-  it('shows raw directory and filename templates with a separate preview', () => {
+  it('shows rich output-root and filename templates with only a file preview', () => {
     const preset = {
       ...createDefaultCompositeV2Preset(1),
+      outputRootPath: 'D:\\Exports\\{project}',
       subfolderTemplate: '{project}/{size}',
       filenameTemplate: '{preset}-{index}',
       customVariableValues: { project: '项目A' },
@@ -152,12 +172,13 @@ describe('PresetNamingFields interactions', () => {
     const customVariables = [{ id: 'project', name: 'project', value: '默认项目' }]
     const { renderer } = renderFields(preset, customVariables)
 
-    expect(renderer.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` }).props.value)
-      .toBe('{project}/{size}')
-    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` }).props.value)
-      .toBe('{preset}-{index}')
-    expect(renderer.root.findByProps({ 'data-testid': 'preset-subfolder-preview' }).children.join(''))
-      .toBe('项目A/1280x720')
+    expect(renderer.root.findByProps({ 'aria-label': '输出根目录' }).props.dangerouslySetInnerHTML.__html)
+      .toContain('data-variable-name="project"')
+    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` }).props.dangerouslySetInnerHTML.__html)
+      .toContain('data-variable-name="preset"')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'preset-subfolder-preview' })).toHaveLength(0)
+    expect(renderer.root.findByProps({ 'data-testid': 'preset-filename-preview' }).children.join(''))
+      .toBe(`${preset.name}-1.jpg`)
   })
 
   it('switches controlled naming fields without updating either preset', () => {
@@ -196,10 +217,8 @@ describe('PresetNamingFields interactions', () => {
       }))
     })
 
-    expect(renderer.root.findByProps({ 'aria-label': `预设目录模板 ${presetB.name}` }).props.value)
-      .toBe('B/{project}')
-    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${presetB.name}` }).props.value)
-      .toBe('B-{index}')
+    expect(renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${presetB.name}` }).props.dangerouslySetInnerHTML.__html)
+      .toContain('data-variable-name="index"')
     expect(onUpdate).not.toHaveBeenCalled()
   })
 
@@ -232,63 +251,116 @@ describe('PresetNamingFields interactions', () => {
     expect(preventDefault).toHaveBeenCalledOnce()
   })
 
-  it('inserts into the active template field', () => {
+  it('inserts into the active filename template field', () => {
     const preset = createDefaultCompositeV2Preset(1)
     const { renderer, onUpdate } = renderFields(preset)
-    const editor = renderer.root.findByProps({ 'aria-label': `预设目录模板 ${preset.name}` })
-    act(() => editor.props.onFocus({
-      currentTarget: {
-        selectionStart: preset.subfolderTemplate.length,
-        selectionEnd: preset.subfolderTemplate.length,
-      },
-    }))
     act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {index}' }).props.onClick())
 
     expect(onUpdate).toHaveBeenLastCalledWith({
-      subfolderTemplate: `${preset.subfolderTemplate}{index}`,
+      filenameTemplate: `${preset.filenameTemplate}{index}`,
     })
   })
 
-  it('inserts a variable at the output root caret', () => {
+  it('syncs edited rich content back to the output-root template', () => {
     const preset = {
       ...createDefaultCompositeV2Preset(1),
       outputRootPath: 'D:\\Exports\\',
     }
     const { renderer, onUpdate } = renderFields(preset)
     const outputRoot = renderer.root.findByProps({ 'aria-label': '输出根目录' })
-
-    act(() => outputRoot.props.onFocus({
-      currentTarget: {
-        selectionStart: preset.outputRootPath.length,
-        selectionEnd: preset.outputRootPath.length,
-      },
-    }))
-    act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {date}' }).props.onClick())
+    const host = document.createElement('div')
+    host.innerHTML = 'D:\\Exports\\<span data-variable-name="date">20260701</span>'
+    act(() => outputRoot.props.onInput({ currentTarget: host }))
 
     expect(onUpdate).toHaveBeenLastCalledWith({
       outputRootPath: 'D:\\Exports\\{date}',
     })
   })
 
-  it('appends to the output root when the browser does not expose a selection', () => {
-    const preset = {
-      ...createDefaultCompositeV2Preset(1),
-      outputRootPath: 'D:\\Exports',
-    }
+  it('converts a right-clicked filename variable chip to plain text', () => {
+    const preset = createDefaultCompositeV2Preset(1)
     const { renderer, onUpdate } = renderFields(preset)
-    const outputRoot = renderer.root.findByProps({ 'aria-label': '输出根目录' })
-
-    act(() => outputRoot.props.onFocus({
-      currentTarget: {
-        value: preset.outputRootPath,
-        selectionStart: null,
-        selectionEnd: null,
-      },
+    const editor = renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` })
+    const host = document.createElement('div')
+    host.innerHTML = '<span data-variable-name="preset">默认产品预设</span>-{source}-{index}'
+    const chip = host.querySelector('[data-variable-name="preset"]')
+    const preventDefault = vi.fn()
+    act(() => editor.props.onContextMenu({
+      currentTarget: host,
+      target: chip,
+      preventDefault,
     }))
-    act(() => renderer.root.findByProps({ 'aria-label': '插入变量 {date}' }).props.onClick())
 
+    expect(preventDefault).toHaveBeenCalledOnce()
     expect(onUpdate).toHaveBeenLastCalledWith({
-      outputRootPath: 'D:\\Exports{date}',
+      filenameTemplate: '默认产品预设-{source}-{index}',
+    })
+  })
+
+  it('deletes a selected variable chip as one atomic value', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+    const { renderer, onUpdate } = renderFields(preset)
+    const editor = renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` })
+    const host = document.createElement('div')
+    host.innerHTML = renderNamingTemplateHtml(preset.filenameTemplate, {
+      preset: preset.name,
+      source: 'source',
+      index: '1',
+    })
+    document.body.appendChild(host)
+    const chip = host.querySelector<HTMLElement>('[data-variable-name="source"]')!
+    const range = document.createRange()
+    range.selectNode(chip)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    const preventDefault = vi.fn()
+
+    act(() => editor.props.onKeyDown({
+      key: 'Delete',
+      currentTarget: host,
+      preventDefault,
+    }))
+
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      filenameTemplate: '{preset}--{index}',
+    })
+    host.remove()
+  })
+
+  it('moves a dragged variable chip to the drop position', () => {
+    const preset = createDefaultCompositeV2Preset(1)
+    const { renderer, onUpdate } = renderFields(preset)
+    const editor = renderer.root.findByProps({ 'aria-label': `预设文件名模板 ${preset.name}` })
+    const host = document.createElement('div')
+    host.innerHTML = renderNamingTemplateHtml(preset.filenameTemplate, {
+      preset: preset.name,
+      source: 'source',
+      index: '1',
+    })
+    const chip = host.querySelector<HTMLElement>('[data-variable-name="preset"]')!
+    const dataTransfer = {
+      effectAllowed: '',
+      setData: vi.fn(),
+    }
+    const preventDefault = vi.fn()
+
+    act(() => editor.props.onDragStart({
+      currentTarget: host,
+      target: chip,
+      dataTransfer,
+    }))
+    act(() => editor.props.onDrop({
+      currentTarget: host,
+      clientX: 0,
+      clientY: 0,
+      preventDefault,
+    }))
+
+    expect(dataTransfer.setData).toHaveBeenCalledWith('text/plain', 'preset')
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(onUpdate).toHaveBeenLastCalledWith({
+      filenameTemplate: '-{source}-{index}{preset}',
     })
   })
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { CompositeV2CustomVariable, CompositeV2Preset } from '../lib/compositeV2Types'
 
 type Props = {
@@ -87,7 +87,237 @@ export function resolveNamingTemplate(template: string, values: Record<string, s
   return template.replace(/\{([^{}]+)\}/g, (token, name: string) => values[name] ?? token)
 }
 
-type TemplateField = 'outputRootPath' | 'subfolderTemplate' | 'filenameTemplate'
+function namingTokenAt(template: string, tokenStart: number) {
+  return /^\{([^{}]+)\}/.exec(template.slice(tokenStart))
+}
+
+export function moveNamingVariable(template: string, tokenStart: number, dropOffset: number): string {
+  const token = namingTokenAt(template, tokenStart)
+  if (!token) return template
+  const withoutToken = `${template.slice(0, tokenStart)}${template.slice(tokenStart + token[0].length)}`
+  const adjustedOffset = Math.max(
+    0,
+    Math.min(withoutToken.length, dropOffset > tokenStart ? dropOffset - token[0].length : dropOffset),
+  )
+  return `${withoutToken.slice(0, adjustedOffset)}${token[0]}${withoutToken.slice(adjustedOffset)}`
+}
+
+export function convertNamingVariableToText(
+  template: string,
+  tokenStart: number,
+  values: Record<string, string>,
+): string {
+  const token = namingTokenAt(template, tokenStart)
+  if (!token) return template
+  const resolved = values[token[1] ?? ''] ?? token[0]
+  return `${template.slice(0, tokenStart)}${resolved}${template.slice(tokenStart + token[0].length)}`
+}
+
+function getNamingNodeLength(node: Node): number {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0
+  if (node.nodeType !== Node.ELEMENT_NODE) return 0
+  const element = node as Element
+  const name = element.getAttribute('data-variable-name')
+  if (name) return `{${name}}`.length
+  if (element.tagName === 'BR') return 0
+  return Array.from(element.childNodes).reduce((sum, child) => sum + getNamingNodeLength(child), 0)
+}
+
+function getNamingOffsetBeforeNode(host: HTMLElement, target: Node): number {
+  let offset = 0
+  let found = false
+  const walk = (node: Node) => {
+    if (found) return
+    if (node === target) {
+      found = true
+      return
+    }
+    const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : null
+    if (node.nodeType === Node.TEXT_NODE || element?.hasAttribute('data-variable-name')) {
+      offset += getNamingNodeLength(node)
+      return
+    }
+    node.childNodes.forEach(walk)
+  }
+  host.childNodes.forEach(walk)
+  return offset
+}
+
+function getNamingBoundaryOffset(host: HTMLElement, container: Node, offset: number): number {
+  if (container === host) {
+    return Array.from(host.childNodes)
+      .slice(0, offset)
+      .reduce((sum, child) => sum + getNamingNodeLength(child), 0)
+  }
+  const chip = (container.nodeType === Node.ELEMENT_NODE ? container as Element : container.parentElement)
+    ?.closest('[data-variable-name]')
+  if (chip && host.contains(chip)) {
+    const chipStart = getNamingOffsetBeforeNode(host, chip)
+    return chipStart + (offset > 0 ? getNamingNodeLength(chip) : 0)
+  }
+  return getNamingOffsetBeforeNode(host, container) + (
+    container.nodeType === Node.TEXT_NODE ? Math.min(offset, container.textContent?.length ?? 0) : 0
+  )
+}
+
+function getNamingSelection(host: HTMLElement): NamingTemplateSelection | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) return null
+  return {
+    start: getNamingBoundaryOffset(host, range.startContainer, range.startOffset),
+    end: getNamingBoundaryOffset(host, range.endContainer, range.endOffset),
+  }
+}
+
+function setNamingCaret(host: HTMLElement, offset: number) {
+  const selection = window.getSelection()
+  if (!selection) return
+  let remaining = offset
+  let boundary: { node: Node; offset: number } = { node: host, offset: host.childNodes.length }
+
+  for (const child of Array.from(host.childNodes)) {
+    const length = getNamingNodeLength(child)
+    if (remaining <= length) {
+      const element = child.nodeType === Node.ELEMENT_NODE ? child as Element : null
+      if (element?.hasAttribute('data-variable-name')) {
+        boundary = {
+          node: host,
+          offset: Array.from(host.childNodes).indexOf(child) + (remaining >= length ? 1 : 0),
+        }
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        boundary = { node: child, offset: Math.min(remaining, child.textContent?.length ?? 0) }
+      }
+      break
+    }
+    remaining -= length
+  }
+
+  const range = document.createRange()
+  range.setStart(boundary.node, boundary.offset)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+type TemplateField = 'outputRootPath' | 'filenameTemplate'
+
+type NamingTemplateEditorProps = {
+  ariaLabel: string
+  editorRef: RefObject<HTMLDivElement | null>
+  field: TemplateField
+  value: string
+  values: Record<string, string>
+  minHeightClass: string
+  onActivate: (field: TemplateField, selection: NamingTemplateSelection | null) => void
+  onChange: (value: string) => void
+}
+
+function NamingTemplateEditor({
+  ariaLabel,
+  editorRef,
+  field,
+  value,
+  values,
+  minHeightClass,
+  onActivate,
+  onChange,
+}: NamingTemplateEditorProps) {
+  const draggedTokenStartRef = useRef<number | null>(null)
+
+  function remember(host: HTMLDivElement) {
+    onActivate(field, getNamingSelection(host))
+  }
+
+  return (
+    <div
+      ref={editorRef}
+      contentEditable
+      suppressContentEditableWarning
+      aria-label={ariaLabel}
+      data-template-field={field}
+      dangerouslySetInnerHTML={{ __html: renderNamingTemplateHtml(value, values) }}
+      onInput={(event) => onChange(readNamingTemplate(event.currentTarget))}
+      onFocus={(event) => remember(event.currentTarget)}
+      onSelect={(event) => remember(event.currentTarget)}
+      onClick={(event) => {
+        const chip = (event.target as HTMLElement | null)?.closest('[data-variable-name]')
+        if (chip && event.currentTarget.contains(chip)) {
+          const selection = window.getSelection()
+          const range = document.createRange()
+          range.selectNode(chip)
+          selection?.removeAllRanges()
+          selection?.addRange(range)
+        }
+        remember(event.currentTarget)
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Delete' && event.key !== 'Backspace') return
+        const selection = window.getSelection()
+        if (!selection || selection.rangeCount === 0) return
+        const range = selection.getRangeAt(0)
+        const chip = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-variable-name]'))
+          .find((candidate) => {
+            try {
+              return !range.collapsed && range.intersectsNode(candidate)
+            } catch {
+              return false
+            }
+          })
+        if (!chip) return
+        event.preventDefault()
+        const template = readNamingTemplate(event.currentTarget)
+        const tokenStart = getNamingOffsetBeforeNode(event.currentTarget, chip)
+        const token = namingTokenAt(template, tokenStart)
+        if (token) {
+          onChange(`${template.slice(0, tokenStart)}${template.slice(tokenStart + token[0].length)}`)
+        }
+      }}
+      onContextMenu={(event) => {
+        const chip = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-variable-name]')
+        if (!chip || !event.currentTarget.contains(chip)) return
+        event.preventDefault()
+        const template = readNamingTemplate(event.currentTarget)
+        const tokenStart = getNamingOffsetBeforeNode(event.currentTarget, chip)
+        const name = chip.dataset.variableName ?? ''
+        onChange(convertNamingVariableToText(template, tokenStart, {
+          ...values,
+          [name]: chip.textContent ?? values[name] ?? '',
+        }))
+      }}
+      onDragStart={(event) => {
+        const chip = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-variable-name]')
+        if (!chip || !event.currentTarget.contains(chip)) return
+        draggedTokenStartRef.current = getNamingOffsetBeforeNode(event.currentTarget, chip)
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', chip.dataset.variableName ?? '')
+      }}
+      onDragOver={(event) => {
+        if (draggedTokenStartRef.current !== null) event.preventDefault()
+      }}
+      onDrop={(event) => {
+        const tokenStart = draggedTokenStartRef.current
+        draggedTokenStartRef.current = null
+        if (tokenStart === null) return
+        event.preventDefault()
+        const template = readNamingTemplate(event.currentTarget)
+        const ownerDocument = event.currentTarget.ownerDocument as Document & {
+          caretRangeFromPoint?: (x: number, y: number) => Range | null
+        }
+        const range = ownerDocument.caretRangeFromPoint?.(event.clientX, event.clientY)
+        const dropOffset = range && event.currentTarget.contains(range.startContainer)
+          ? getNamingBoundaryOffset(event.currentTarget, range.startContainer, range.startOffset)
+          : template.length
+        onChange(moveNamingVariable(template, tokenStart, dropOffset))
+      }}
+      onDragEnd={() => {
+        draggedTokenStartRef.current = null
+      }}
+      className={`${minHeightClass} w-full cursor-text whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-gray-900`}
+    />
+  )
+}
 
 export function PresetNamingFields({
   preset,
@@ -102,31 +332,28 @@ export function PresetNamingFields({
   const [customName, setCustomName] = useState('')
   const [customValue, setCustomValue] = useState('')
   const [customNameError, setCustomNameError] = useState('')
-  const [activeField, setActiveField] = useState<TemplateField>('subfolderTemplate')
+  const [activeField, setActiveField] = useState<TemplateField>('filenameTemplate')
   const selectionRef = useRef<Record<TemplateField, NamingTemplateSelection | null>>({
     outputRootPath: null,
-    subfolderTemplate: null,
     filenameTemplate: null,
   })
   const pendingCaretRef = useRef<{ field: TemplateField; caret: number } | null>(null)
-  const outputRootRef = useRef<HTMLInputElement>(null)
-  const subfolderRef = useRef<HTMLTextAreaElement>(null)
-  const filenameRef = useRef<HTMLTextAreaElement>(null)
+  const outputRootRef = useRef<HTMLDivElement>(null)
+  const filenameRef = useRef<HTMLDivElement>(null)
   const customNameErrorId = `preset-custom-variable-name-error-${preset.id}`
 
   const resolvedValues = useMemo(() => ({
     ...previewValues,
     ...preset.customVariableValues,
   }), [preset.customVariableValues, previewValues])
-  const subfolderPreview = resolveNamingTemplate(preset.subfolderTemplate, resolvedValues)
   const filenamePreview = resolveNamingTemplate(preset.filenameTemplate, resolvedValues)
 
   useEffect(() => {
     setCustomName('')
     setCustomValue('')
     setCustomNameError('')
-    setActiveField('subfolderTemplate')
-    selectionRef.current = { outputRootPath: null, subfolderTemplate: null, filenameTemplate: null }
+    setActiveField('filenameTemplate')
+    selectionRef.current = { outputRootPath: null, filenameTemplate: null }
     pendingCaretRef.current = null
   }, [preset.id])
 
@@ -134,22 +361,17 @@ export function PresetNamingFields({
     const pending = pendingCaretRef.current
     if (!pending) return
     pendingCaretRef.current = null
-    const input = pending.field === 'outputRootPath'
+    const editor = pending.field === 'outputRootPath'
       ? outputRootRef.current
-      : pending.field === 'subfolderTemplate'
-        ? subfolderRef.current
-        : filenameRef.current
-    input?.focus()
-    input?.setSelectionRange(pending.caret, pending.caret)
-  }, [preset.outputRootPath, preset.subfolderTemplate, preset.filenameTemplate])
+      : filenameRef.current
+    if (!editor) return
+    editor.focus()
+    setNamingCaret(editor, pending.caret)
+  }, [preset.outputRootPath, preset.filenameTemplate])
 
-  function rememberSelection(field: TemplateField, input: HTMLInputElement | HTMLTextAreaElement) {
+  function rememberSelection(field: TemplateField, selection: NamingTemplateSelection | null) {
     setActiveField(field)
-    const fallbackCaret = preset[field].length
-    selectionRef.current[field] = {
-      start: input.selectionStart ?? fallbackCaret,
-      end: input.selectionEnd ?? fallbackCaret,
-    }
+    selectionRef.current[field] = selection
   }
 
   function insertVariable(name: string) {
@@ -178,14 +400,15 @@ export function PresetNamingFields({
       <label className="block text-[11px] text-gray-500">
         输出根目录
         <div className="mt-1 flex gap-2">
-          <input
-            ref={outputRootRef}
-            aria-label="输出根目录"
+          <NamingTemplateEditor
+            editorRef={outputRootRef}
+            ariaLabel="输出根目录"
+            field="outputRootPath"
             value={preset.outputRootPath}
-            onChange={(event) => onUpdatePreset({ outputRootPath: event.target.value })}
-            onFocus={(event) => rememberSelection('outputRootPath', event.currentTarget)}
-            onSelect={(event) => rememberSelection('outputRootPath', event.currentTarget)}
-            className="min-w-0 flex-1 cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900"
+            values={resolvedValues}
+            minHeightClass="min-h-10 min-w-0 flex-1"
+            onActivate={rememberSelection}
+            onChange={(value) => onUpdatePreset({ outputRootPath: value })}
           />
           <button
             type="button"
@@ -207,33 +430,23 @@ export function PresetNamingFields({
         />
       </label>
       <label className="block text-[11px] text-gray-500">
-        目录模板
-        <textarea
-          ref={subfolderRef}
-          aria-label={`预设目录模板 ${preset.name}`}
-          value={preset.subfolderTemplate}
-          onChange={(event) => onUpdatePreset({ subfolderTemplate: event.target.value })}
-          onFocus={(event) => rememberSelection('subfolderTemplate', event.currentTarget)}
-          onSelect={(event) => rememberSelection('subfolderTemplate', event.currentTarget)}
-          className="mt-1 min-h-20 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-gray-900"
-        />
-      </label>
-      <label className="block text-[11px] text-gray-500">
         文件名模板
-        <textarea
-          ref={filenameRef}
-          aria-label={`预设文件名模板 ${preset.name}`}
+        <div className="mt-1">
+          <NamingTemplateEditor
+          editorRef={filenameRef}
+          ariaLabel={`预设文件名模板 ${preset.name}`}
+          field="filenameTemplate"
           value={preset.filenameTemplate}
-          onChange={(event) => onUpdatePreset({ filenameTemplate: event.target.value })}
-          onFocus={(event) => rememberSelection('filenameTemplate', event.currentTarget)}
-          onSelect={(event) => rememberSelection('filenameTemplate', event.currentTarget)}
-          className="mt-1 min-h-20 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-gray-900"
+          values={resolvedValues}
+          minHeightClass="min-h-20"
+          onActivate={rememberSelection}
+          onChange={(value) => onUpdatePreset({ filenameTemplate: value })}
         />
+        </div>
       </label>
 
       <div data-testid="preset-naming-preview" className="rounded-md border border-blue-100 bg-blue-50/50 p-2 text-[11px] text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
-        <div>目录预览：<span data-testid="preset-subfolder-preview">{subfolderPreview || '（输出根目录）'}</span></div>
-        <div className="mt-1">文件预览：<span data-testid="preset-filename-preview">{filenamePreview || '（空文件名）'}.jpg</span></div>
+        <div>文件预览：<span data-testid="preset-filename-preview">{filenamePreview || '（空文件名）'}.jpg</span></div>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
