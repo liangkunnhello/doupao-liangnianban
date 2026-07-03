@@ -223,6 +223,8 @@ export interface TaskRecord {
   id: string
   prompt: string
   params: TaskParams
+  /** Stable one-based batch within the task's local date and filename label scope. */
+  filenameBatch?: number
   /** 生成时使用的 Provider 类型 */
   apiProvider?: ApiProvider
   /** 生成时使用的 API 配置 ID */
