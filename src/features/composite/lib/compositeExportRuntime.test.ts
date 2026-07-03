@@ -26,7 +26,7 @@ describe('composite export runtime helpers', () => {
     expect(checks).toBe(2)
   })
 
-  it('builds paths from each preset explicit templates and values', () => {
+  it('uses each resolved filename as both the direct folder and file name', () => {
     const createItem = (id: string, project: string): CompositeV2ExportItem => ({
       snapshotId: 'snapshot',
       preset: {
@@ -34,8 +34,8 @@ describe('composite export runtime helpers', () => {
         id,
         name: `Preset ${id}`,
         namingTemplate: '{legacy}',
-        subfolderTemplate: '{project}/{size}',
-        filenameTemplate: '{preset}-{source}-{index}',
+        subfolderTemplate: 'legacy/{preset}/{sourceDir}',
+        filenameTemplate: '{channel}-{size}-{date}-{project}',
         customVariableValues: { project },
       },
       outputRule: {
@@ -58,18 +58,18 @@ describe('composite export runtime helpers', () => {
         width: 1280,
         height: 720,
       },
-      date: '20260702',
+      date: '20260703',
       index: 1,
       custom: '',
     })
 
     expect(buildPresetOutputPathParts(createItem('a', '项目A'), { preserveSourceDir: false })).toEqual({
-      subfolders: ['项目A', '1280x720'],
-      filename: 'Preset a-source-1.jpg',
+      subfolders: ['百度-1280x720-20260703-项目A'],
+      filename: '百度-1280x720-20260703-项目A.jpg',
     })
     expect(buildPresetOutputPathParts(createItem('b', '项目B'), { preserveSourceDir: false })).toEqual({
-      subfolders: ['项目B', '1280x720'],
-      filename: 'Preset b-source-1.jpg',
+      subfolders: ['百度-1280x720-20260703-项目B'],
+      filename: '百度-1280x720-20260703-项目B.jpg',
     })
   })
 

@@ -77,14 +77,18 @@ async function resolveCollision(api: NonNullable<Window['electronAPI']>, directo
 
 export function buildPresetOutputPathParts(
   item: CompositeV2ExportItem,
-  snapshot: Pick<CompositeV2ExportSnapshot, 'preserveSourceDir'>,
+  _snapshot: Pick<CompositeV2ExportSnapshot, 'preserveSourceDir'>,
 ) {
-  return buildCompositeOutputPathParts({
+  const output = buildCompositeOutputPathParts({
     ...buildPresetTemplateVariables(item),
-    namingTemplate: item.preset.subfolderTemplate,
+    namingTemplate: '',
     filenameTemplate: item.preset.filenameTemplate,
-    preserveSourceDir: snapshot.preserveSourceDir,
+    preserveSourceDir: false,
   })
+  return {
+    subfolders: [output.filename.replace(/\.jpg$/i, '')],
+    filename: output.filename,
+  }
 }
 
 function buildPresetTemplateVariables(item: CompositeV2ExportItem) {
