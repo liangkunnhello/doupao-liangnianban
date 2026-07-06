@@ -6,11 +6,18 @@ export type DistributionResult = {
   errors: string[]
 }
 
+export type DistributionOptions = {
+  onProgress?: (completed: number, total: number) => void
+  onSuccess?: (item: { originalPath: string; targetPath: string }) => void
+  onFailure?: (item: { originalPath: string; targetPath: string; error: string }) => void
+}
+
 export async function runDistribution(
   items: CompositeV2SuccessItem[],
   config: CompositeV2DistributionConfig,
   electronApi: any,
-  presets: any[]
+  presets: any[],
+  options?: DistributionOptions
 ): Promise<DistributionResult> {
   if (!config.enabled || items.length === 0 || config.days <= 0) {
     return { success: 0, failed: 0, errors: [] }
@@ -61,7 +68,7 @@ export async function runDistribution(
     const preset = presets.find((p) => p.id === item.presetId)
     
     let distPaths: string[] = []
-    const overrideGroup = preset?.outputRuleGroupsOverride?.find((g: any) => g.id === item.channel)
+    const overrideGroup = preset?.outputRuleGroupsOverride?.find((g: any) => g.name === item.channel)
     if (overrideGroup?.distributionPaths && overrideGroup.distributionPaths.length > 0) {
       const validPaths = overrideGroup.distributionPaths.filter((p: string) => p.trim() !== '')
       if (validPaths.length > 0) distPaths = validPaths
@@ -100,6 +107,12 @@ export async function runDistribution(
   }
 
   // 4. Distribute files for each group
+  let totalOperations = 0
+  for (const groupItems of groupedItems.values()) {
+    totalOperations += groupItems.length
+  }
+  let completedOperations = 0
+
   for (const [originalDir, groupItems] of groupedItems.entries()) {
     // Shuffle if needed
     let filesToDistribute = [...groupItems]
@@ -168,13 +181,20 @@ export async function runDistribution(
 
           if (opResult?.success) {
             result.success++
+            options?.onSuccess?.({ originalPath: item.path, targetPath })
           } else {
             result.failed++
-            result.errors.push(`操作失败: ${item.path} -> ${targetPath}`)
+            const errorMsg = opResult?.error || 'Unknown error'
+            result.errors.push(`操作失败: ${item.path} -> ${targetPath} (${errorMsg})`)
+            options?.onFailure?.({ originalPath: item.path, targetPath, error: errorMsg })
           }
         } catch (error: any) {
           result.failed++
           result.errors.push(`异常: ${error.message}`)
+          options?.onFailure?.({ originalPath: item.path, targetPath: '', error: error.message })
+        } finally {
+          completedOperations++
+          options?.onProgress?.(completedOperations, totalOperations)
         }
       }
     }

@@ -10,6 +10,11 @@ type ExportResultsPanelProps = {
   history: CompositeV2HistoryRecord[]
   successes: CompositeV2SuccessItem[]
   failures: CompositeV2FailureItem[]
+  distributionStatus: 'idle' | 'running' | 'completed' | 'failed' | 'canceled'
+  distributionCompleted: number
+  distributionTotal: number
+  distributionSuccesses: import('../lib/compositeV2Types').CompositeV2DistributionSuccessItem[]
+  distributionFailures: import('../lib/compositeV2Types').CompositeV2DistributionFailureItem[]
 }
 
 const STATUS_LABELS: Record<CompositeV2ExportStatus, string> = {
@@ -25,8 +30,9 @@ function formatTimestamp(timestamp: number) {
   return new Date(timestamp).toLocaleString()
 }
 
-export function ExportResultsPanel({ status, completed, total, history, successes, failures }: ExportResultsPanelProps) {
+export function ExportResultsPanel({ status, completed, total, history, successes, failures, distributionStatus, distributionCompleted, distributionTotal, distributionSuccesses, distributionFailures }: ExportResultsPanelProps) {
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0
+  const distProgress = distributionTotal > 0 ? Math.round((distributionCompleted / distributionTotal) * 100) : 0
   const latestHistory = history.slice(0, 3)
   const historyRetention = useCompositeV2Store((state) => state.historyRetention)
   const setHistoryRetention = useCompositeV2Store((state) => state.setHistoryRetention)
@@ -59,13 +65,25 @@ export function ExportResultsPanel({ status, completed, total, history, successe
     setDistributingId(record.id)
     updateHistoryRecord(record.id, { distributionStatus: 'running' })
     try {
-      const result = await runDistribution(record.successes, distributionConfig, electronApi, presets)
-      const distributionStatus = result.errors.length > 0 && result.success === 0 ? 'failed' : 'completed'
+      const distSuccesses: import('../lib/compositeV2Types').CompositeV2DistributionSuccessItem[] = []
+      const distFailures: import('../lib/compositeV2Types').CompositeV2DistributionFailureItem[] = []
+      const result = await runDistribution(record.successes, distributionConfig, electronApi, presets, {
+        onProgress: (c, t) => {
+          // You could update store here, but since it's a history record we just let it show '分配中...' 
+          // or we can update the history record with progress if we add progress fields to it.
+          // For now, updating history record constantly might be too heavy.
+        },
+        onSuccess: (item) => distSuccesses.push(item),
+        onFailure: (item) => distFailures.push(item)
+      })
+      const finalDistStatus = result.errors.length > 0 && result.success === 0 ? 'failed' : 'completed'
       updateHistoryRecord(record.id, {
-        distributionStatus,
+        distributionStatus: finalDistStatus,
         distributionSuccessCount: result.success,
         distributionFailureCount: result.failed,
-        distributionErrors: result.errors
+        distributionErrors: result.errors,
+        distributionSuccesses: distSuccesses,
+        distributionFailures: distFailures,
       })
       alert(`重新分配完成：\n成功: ${result.success}\n失败: ${result.failed}\n${result.errors.length > 0 ? '\n错误详情查看控制台' : ''}`)
       if (result.errors.length > 0) {
@@ -86,15 +104,22 @@ export function ExportResultsPanel({ status, completed, total, history, successe
           <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">任务与分配记录</h3>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">导出进度、分配状态与历史记录。</p>
         </div>
-        <span className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 dark:border-white/[0.08] dark:text-gray-300">
-          {STATUS_LABELS[status]}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 dark:border-white/[0.08] dark:text-gray-300">
+            {STATUS_LABELS[status]}
+          </span>
+          {distributionStatus !== 'idle' && (
+            <span className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 dark:border-white/[0.08] dark:text-gray-300">
+              分配: {distributionStatus === 'running' ? '执行中' : distributionStatus === 'completed' ? '已完成' : distributionStatus === 'failed' ? '失败' : '已取消'}
+            </span>
+          )}
+        </div>
       </div>
 
       {(successes.length > 0 || failures.length > 0) && (
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <div>
-            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">成功 {successes.length}</h4>
+            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">导出成功 {successes.length}</h4>
             <div className="mt-2 max-h-36 space-y-1 overflow-auto">
               {successes.map((item) => (
                 <div key={item.path} className="rounded border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08]">
@@ -105,7 +130,7 @@ export function ExportResultsPanel({ status, completed, total, history, successe
             </div>
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">失败 {failures.length}</h4>
+            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">导出失败 {failures.length}</h4>
             <div className="mt-2 max-h-36 space-y-1 overflow-auto">
               {failures.map((item, index) => (
                 <div key={`${item.backgroundPath}-${item.presetId}-${index}`} className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 dark:border-red-500/30 dark:text-red-300">
@@ -118,22 +143,55 @@ export function ExportResultsPanel({ status, completed, total, history, successe
         </div>
       )}
 
+      {(distributionSuccesses.length > 0 || distributionFailures.length > 0) && (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <div>
+            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">分配成功 {distributionSuccesses.length}</h4>
+            <div className="mt-2 max-h-36 space-y-1 overflow-auto">
+              {distributionSuccesses.map((item, index) => (
+                <div key={`dist-succ-${index}`} className="rounded border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08]">
+                  <div className="truncate text-gray-400" title={item.originalPath}>{item.originalPath}</div>
+                  <div className="truncate text-green-600 dark:text-green-400" title={item.targetPath}>-&gt; {item.targetPath}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-300">分配失败 {distributionFailures.length}</h4>
+            <div className="mt-2 max-h-36 space-y-1 overflow-auto">
+              {distributionFailures.map((item, index) => (
+                <div key={`dist-fail-${index}`} className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 dark:border-red-500/30 dark:text-red-300">
+                  <div className="truncate">{item.originalPath}</div>
+                  <div>{item.error}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
         <div className="h-full rounded-full bg-blue-500 transition-[width]" style={{ width: `${progress}%` }} />
       </div>
 
+      {distributionStatus !== 'idle' && (
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+          <div className="h-full rounded-full bg-green-500 transition-[width]" style={{ width: `${distProgress}%` }} />
+        </div>
+      )}
+
       <div className="mt-3 grid gap-3 text-sm text-gray-600 dark:text-gray-300 sm:grid-cols-3">
         <div className="rounded-md bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">
-          <div className="text-[11px] text-gray-400 dark:text-gray-500">已处理</div>
+          <div className="text-[11px] text-gray-400 dark:text-gray-500">导出已处理</div>
           <div className="mt-1 font-medium">{completed} / {total}</div>
         </div>
         <div className="rounded-md bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">
-          <div className="text-[11px] text-gray-400 dark:text-gray-500">进度</div>
+          <div className="text-[11px] text-gray-400 dark:text-gray-500">导出进度</div>
           <div className="mt-1 font-medium">{progress}%</div>
         </div>
         <div className="rounded-md bg-gray-50 px-3 py-2 dark:bg-white/[0.04]">
-          <div className="text-[11px] text-gray-400 dark:text-gray-500">历史</div>
-          <div className="mt-1 font-medium">{history.length} 次</div>
+          <div className="text-[11px] text-gray-400 dark:text-gray-500">分配进度</div>
+          <div className="mt-1 font-medium">{distributionStatus !== 'idle' ? `${distributionCompleted} / ${distributionTotal}` : '-'}</div>
         </div>
       </div>
 

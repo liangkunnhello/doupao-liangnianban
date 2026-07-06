@@ -69,8 +69,18 @@ export function BatchExportTab() {
   const resetExportResults = useCompositeV2Store((state) => state.resetExportResults)
   const addExportSuccess = useCompositeV2Store((state) => state.addExportSuccess)
   const addExportFailure = useCompositeV2Store((state) => state.addExportFailure)
+  const setDistributionProgress = useCompositeV2Store((state) => state.setDistributionProgress)
+  const setDistributionStatus = useCompositeV2Store((state) => state.setDistributionStatus)
+  const resetDistributionResults = useCompositeV2Store((state) => state.resetDistributionResults)
+  const addDistributionSuccess = useCompositeV2Store((state) => state.addDistributionSuccess)
+  const addDistributionFailure = useCompositeV2Store((state) => state.addDistributionFailure)
   const addHistoryRecord = useCompositeV2Store((state) => state.addHistoryRecord)
   const distributionConfig = useCompositeV2Store((state) => state.distributionConfig)
+  const distributionStatus = useCompositeV2Store((state) => state.distributionStatus)
+  const distributionCompleted = useCompositeV2Store((state) => state.distributionCompleted)
+  const distributionTotal = useCompositeV2Store((state) => state.distributionTotal)
+  const distributionSuccesses = useCompositeV2Store((state) => state.distributionSuccesses)
+  const distributionFailures = useCompositeV2Store((state) => state.distributionFailures)
 
   const [backgroundStatus, setBackgroundStatus] = useState('选择文件夹后加载背景图片。')
   const [previewStatus, setPreviewStatus] = useState('加载背景后将随机显示一张预览。')
@@ -462,6 +472,8 @@ export function BatchExportTab() {
       let distributionSuccessCount = 0
       let distributionFailureCount = 0
       let distributionErrors: string[] = []
+      const distributionSuccesses: import('../lib/compositeV2Types').CompositeV2DistributionSuccessItem[] = []
+      const distributionFailures: import('../lib/compositeV2Types').CompositeV2DistributionFailureItem[] = []
 
       if (!canceled && distributionConfig.enabled && successes.length > 0 && electronApi) {
         if (!distributionConfig.startDate || !/^(\d{4})(\d{2})(\d{2})$/.test(distributionConfig.startDate)) {
@@ -471,11 +483,24 @@ export function BatchExportTab() {
         } else {
           setRunStatusText('正在执行分配...')
           distributionStatus = 'running'
-          const distResult = await runDistribution(successes, distributionConfig, electronApi, presets)
+          setDistributionStatus('running')
+          resetDistributionResults()
+          const distResult = await runDistribution(successes, distributionConfig, electronApi, presets, {
+            onProgress: setDistributionProgress,
+            onSuccess: (item) => {
+              distributionSuccesses.push(item)
+              addDistributionSuccess(item)
+            },
+            onFailure: (item) => {
+              distributionFailures.push(item)
+              addDistributionFailure(item)
+            }
+          })
           distributionSuccessCount = distResult.success
           distributionFailureCount = distResult.failed
           distributionErrors = distResult.errors
           distributionStatus = distResult.errors.length > 0 && distResult.success === 0 ? 'failed' : 'completed'
+          setDistributionStatus(distributionStatus)
           finalStatusText += `\n分配完成：${distributionSuccessCount} 成功，${distributionFailureCount} 失败。`
           if (distResult.errors.length > 0) {
             console.error('分发错误：', distResult.errors)
@@ -504,6 +529,8 @@ export function BatchExportTab() {
         distributionSuccessCount,
         distributionFailureCount,
         distributionErrors,
+        distributionSuccesses,
+        distributionFailures,
       })
     } catch (error) {
       setExportStatus('canceled')
@@ -888,6 +915,11 @@ export function BatchExportTab() {
           history={history}
           successes={exportSuccesses}
           failures={exportFailures}
+          distributionStatus={distributionStatus}
+          distributionCompleted={distributionCompleted}
+          distributionTotal={distributionTotal}
+          distributionSuccesses={distributionSuccesses}
+          distributionFailures={distributionFailures}
         />
       </div>
     </div>

@@ -38,14 +38,14 @@ async function renderWithMaxKb(
   maxSizeKb: number,
   callbacks?: { shouldPause: () => boolean; shouldCancel: () => boolean },
 ) {
-  let low = 0.5
+  let low = 0.01
   let high = 0.9
   let bestDataUrl = await renderCompositeV2ToJpegDataUrl({ ...input, quality: low })
   
   if (callbacks?.shouldCancel()) throw new Error('渲染被取消')
 
   if (dataUrlSizeKb(bestDataUrl) > maxSizeKb) {
-    return { dataUrl: bestDataUrl, warning: `最低质量 0.5 仍超过 ${maxSizeKb}KB` }
+    return { dataUrl: bestDataUrl, warning: `最低质量 0.01 仍超过 ${maxSizeKb}KB` }
   }
   for (let iteration = 0; iteration < 8; iteration += 1) {
     if (callbacks?.shouldPause && callbacks?.shouldCancel) {

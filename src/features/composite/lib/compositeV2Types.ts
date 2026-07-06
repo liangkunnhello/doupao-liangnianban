@@ -174,6 +174,17 @@ export type CompositeV2FailureItem = {
   reason: string
 }
 
+export type CompositeV2DistributionSuccessItem = {
+  originalPath: string
+  targetPath: string
+}
+
+export type CompositeV2DistributionFailureItem = {
+  originalPath: string
+  targetPath: string
+  error: string
+}
+
 export type CompositeV2HistoryRecord = {
   id: string
   status: 'completed' | 'canceled' | 'completed-with-failures'
@@ -194,6 +205,8 @@ export type CompositeV2HistoryRecord = {
   distributionSuccessCount?: number
   distributionFailureCount?: number
   distributionErrors?: string[]
+  distributionSuccesses?: CompositeV2DistributionSuccessItem[]
+  distributionFailures?: CompositeV2DistributionFailureItem[]
 }
 
 export type CompositeV2DistributionConfig = {

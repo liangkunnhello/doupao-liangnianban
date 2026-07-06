@@ -211,7 +211,7 @@ type NamingTemplateEditorProps = {
   values: Record<string, string>
   minHeightClass: string
   onActivate: (field: TemplateField, selection: NamingTemplateSelection | null) => void
-  onChange: (value: string) => void
+  onChange: (value: string, caret?: number) => void
 }
 
 function NamingTemplateEditor({
@@ -238,7 +238,11 @@ function NamingTemplateEditor({
       aria-label={ariaLabel}
       data-template-field={field}
       dangerouslySetInnerHTML={{ __html: renderNamingTemplateHtml(value, values) }}
-      onInput={(event) => onChange(readNamingTemplate(event.currentTarget))}
+      onInput={(event) => {
+        const host = event.currentTarget
+        const selection = getNamingSelection(host)
+        onChange(readNamingTemplate(host), selection?.start)
+      }}
       onFocus={(event) => remember(event.currentTarget)}
       onSelect={(event) => remember(event.currentTarget)}
       onClick={(event) => {
@@ -271,7 +275,7 @@ function NamingTemplateEditor({
         const tokenStart = getNamingOffsetBeforeNode(event.currentTarget, chip)
         const token = namingTokenAt(template, tokenStart)
         if (token) {
-          onChange(`${template.slice(0, tokenStart)}${template.slice(tokenStart + token[0].length)}`)
+          onChange(`${template.slice(0, tokenStart)}${template.slice(tokenStart + token[0].length)}`, tokenStart)
         }
       }}
       onContextMenu={(event) => {
@@ -281,10 +285,11 @@ function NamingTemplateEditor({
         const template = readNamingTemplate(event.currentTarget)
         const tokenStart = getNamingOffsetBeforeNode(event.currentTarget, chip)
         const name = chip.dataset.variableName ?? ''
+        const textToInsert = chip.textContent ?? values[name] ?? ''
         onChange(convertNamingVariableToText(template, tokenStart, {
           ...values,
-          [name]: chip.textContent ?? values[name] ?? '',
-        }))
+          [name]: textToInsert,
+        }), tokenStart + textToInsert.length)
       }}
       onDragStart={(event) => {
         const chip = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-variable-name]')
@@ -309,7 +314,7 @@ function NamingTemplateEditor({
         const dropOffset = range && event.currentTarget.contains(range.startContainer)
           ? getNamingBoundaryOffset(event.currentTarget, range.startContainer, range.startOffset)
           : template.length
-        onChange(moveNamingVariable(template, tokenStart, dropOffset))
+        onChange(moveNamingVariable(template, tokenStart, dropOffset), dropOffset)
       }}
       onDragEnd={() => {
         draggedTokenStartRef.current = null
@@ -397,8 +402,8 @@ export function PresetNamingFields({
 
   return (
     <div data-layout="preset-naming-fields" className="space-y-3 border-t border-gray-200 pt-3 dark:border-white/[0.08]">
-      <label className="block text-[11px] text-gray-500">
-        输出根目录
+      <div>
+        <span className="block text-[11px] text-gray-500">输出根目录</span>
         <div className="mt-1 flex gap-2">
           <NamingTemplateEditor
             editorRef={outputRootRef}
@@ -408,7 +413,10 @@ export function PresetNamingFields({
             values={resolvedValues}
             minHeightClass="min-h-10 min-w-0 flex-1"
             onActivate={rememberSelection}
-            onChange={(value) => onUpdatePreset({ outputRootPath: value })}
+            onChange={(value, caret) => {
+              if (caret !== undefined) pendingCaretRef.current = { field: 'outputRootPath', caret }
+              onUpdatePreset({ outputRootPath: value })
+            }}
           />
           <button
             type="button"
@@ -418,7 +426,7 @@ export function PresetNamingFields({
             选择
           </button>
         </div>
-      </label>
+      </div>
       <label className="block text-[11px] text-gray-500">
         全局分配地址
         <input
@@ -429,8 +437,8 @@ export function PresetNamingFields({
           className="mt-1 w-full cursor-text rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900"
         />
       </label>
-      <label className="block text-[11px] text-gray-500">
-        文件名模板
+      <div>
+        <span className="block text-[11px] text-gray-500">文件名模板</span>
         <div className="mt-1">
           <NamingTemplateEditor
           editorRef={filenameRef}
@@ -440,10 +448,13 @@ export function PresetNamingFields({
           values={resolvedValues}
           minHeightClass="min-h-20"
           onActivate={rememberSelection}
-          onChange={(value) => onUpdatePreset({ filenameTemplate: value })}
+          onChange={(value, caret) => {
+            if (caret !== undefined) pendingCaretRef.current = { field: 'filenameTemplate', caret }
+            onUpdatePreset({ filenameTemplate: value })
+          }}
         />
         </div>
-      </label>
+      </div>
 
       <div data-testid="preset-naming-preview" className="rounded-md border border-blue-100 bg-blue-50/50 p-2 text-[11px] text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
         <div>文件预览：<span data-testid="preset-filename-preview">{filenamePreview || '（空文件名）'}.jpg</span></div>

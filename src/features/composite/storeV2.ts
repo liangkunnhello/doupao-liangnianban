@@ -38,6 +38,11 @@ type CompositeV2BatchState = {
   exportTotal: number
   exportSuccesses: CompositeV2SuccessItem[]
   exportFailures: CompositeV2FailureItem[]
+  distributionStatus: 'idle' | 'running' | 'completed' | 'failed' | 'canceled'
+  distributionCompleted: number
+  distributionTotal: number
+  distributionSuccesses: import('./lib/compositeV2Types').CompositeV2DistributionSuccessItem[]
+  distributionFailures: import('./lib/compositeV2Types').CompositeV2DistributionFailureItem[]
   clipboardLayer: CompositeV2Layer | null
 }
 
@@ -107,6 +112,11 @@ type CompositeV2StoreActions = {
   resetExportResults: () => void
   addExportSuccess: (item: CompositeV2SuccessItem) => void
   addExportFailure: (item: CompositeV2FailureItem) => void
+  setDistributionProgress: (completed: number, total: number) => void
+  setDistributionStatus: (status: 'idle' | 'running' | 'completed' | 'failed' | 'canceled') => void
+  resetDistributionResults: () => void
+  addDistributionSuccess: (item: import('./lib/compositeV2Types').CompositeV2DistributionSuccessItem) => void
+  addDistributionFailure: (item: import('./lib/compositeV2Types').CompositeV2DistributionFailureItem) => void
   addHistoryRecord: (record: CompositeV2HistoryRecord) => void
   updateHistoryRecord: (id: string, patch: Partial<CompositeV2HistoryRecord>) => void
   setHistoryRetention: (retention: number) => void
@@ -189,6 +199,11 @@ export function createCompositeV2StoreState(): CompositeV2BatchState & Composite
     exportTotal: 0,
     exportSuccesses: [],
     exportFailures: [],
+    distributionStatus: 'idle',
+    distributionCompleted: 0,
+    distributionTotal: 0,
+    distributionSuccesses: [],
+    distributionFailures: [],
     presets: defaults.presets,
     presetGroups: defaults.presetGroups,
     outputRuleGroups: defaults.outputRuleGroups,
@@ -542,6 +557,11 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
       resetExportResults: () => setWithoutHistory(() => ({ exportSuccesses: [], exportFailures: [], exportCompleted: 0, exportTotal: 0 })),
       addExportSuccess: (item) => setWithoutHistory((state) => ({ exportSuccesses: [...state.exportSuccesses, item] })),
       addExportFailure: (item) => setWithoutHistory((state) => ({ exportFailures: [...state.exportFailures, item] })),
+      setDistributionProgress: (distributionCompleted, distributionTotal) => setWithoutHistory(() => ({ distributionCompleted, distributionTotal })),
+      setDistributionStatus: (distributionStatus) => setWithoutHistory(() => ({ distributionStatus })),
+      resetDistributionResults: () => setWithoutHistory(() => ({ distributionSuccesses: [], distributionFailures: [], distributionCompleted: 0, distributionTotal: 0 })),
+      addDistributionSuccess: (item) => setWithoutHistory((state) => ({ distributionSuccesses: [...state.distributionSuccesses, item] })),
+      addDistributionFailure: (item) => setWithoutHistory((state) => ({ distributionFailures: [...state.distributionFailures, item] })),
       addHistoryRecord: (record) => setWithoutHistory((state) => ({
         history: addCompositeHistoryRecord(state.history, record, state.historyRetention),
       })),
