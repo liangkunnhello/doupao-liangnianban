@@ -18,6 +18,13 @@ function context(patch: Partial<AssistantInputContext> = {}): AssistantInputCont
 }
 
 describe('assistant action matcher', () => {
+  it('uses a skill-named word group by default and migrates the previous numbered default', () => {
+    expect(normalizeAssistantActionPreferences(undefined).actionSettings.wordDerive.targetGroupMode).toBe('skill-name')
+    expect(normalizeAssistantActionPreferences({
+      actionSettings: { wordDerive: { targetGroupMode: 'auto-numbered' } as never } as never,
+    }).actionSettings.wordDerive.targetGroupMode).toBe('skill-name')
+  })
+
   it('keeps core actions visible even when older preferences hid them', () => {
     const preferences = normalizeAssistantActionPreferences({
       hiddenActionIds: ['image-derive', 'prompt-optimize', 'batch-variants'],

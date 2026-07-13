@@ -3,14 +3,13 @@ import type { AssistantAction, AssistantActionId, AssistantSkillContract } from 
 const CONTRACTS: Record<AssistantActionId, AssistantSkillContract> = {
   'image-derive': {
     taskType: 'image-variation',
-    objective: '以参考图为视觉母版生成高相似度局部变体。默认只衍生用户指定对象；未指定时只衍生视觉中心主体。',
-    preserve: ['画幅比例', '构图与元素位置', '背景与色板', '原有文字与排版', '装饰元素', '光影方向和整体风格'],
-    editable: ['用户指定对象；未指定时的视觉中心主体', '目标主体为自然融入所需的局部投影或高光'],
-    forbidden: ['重排版', '改写文字', '改变背景或色板', '切换画幅', '新增人物、场景、贴纸或 CTA', '同时改变多个视觉维度'],
-    variationLevel: 'low',
-    singleVariablePerCandidate: true,
+    objective: '基于参考图的跑量结构生成一条可直接测试的衍生素材，并沉淀可组合的衍生变量词条。',
+    preserve: ['核心卖点和产品事实', '信息层级与跑量结构', '品牌与合规边界', '主色调和视觉风格', '关键文案的语义与位置'],
+    editable: ['主体表现', '首屏钩子', '使用场景或人群切入', '卖点证明方式', '局部构图和装饰表达'],
+    forbidden: ['脱离原图跑量结构重新设计', '擅自改变核心卖点、价格、功效或品牌', '在一条主推素材中同时改变所有测试维度'],
+    variationLevel: 'medium',
     primaryOutput: 'finalPrompt',
-    output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: false },
+    output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: true },
   },
   'prompt-optimize': {
     taskType: 'prompt-optimize',

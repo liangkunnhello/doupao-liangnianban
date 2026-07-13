@@ -926,12 +926,12 @@ export default function DetailModal() {
                 <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · {taskModel}</span>
               </div>
             )}
-            {!isEditingParams && (task.scheduledOutputPath || task.scheduledOutputSubFolder) && (   
+            {!isEditingParams && (task.scheduledOutputPath || task.scheduledOutputSubFolder || task.localSaveBatchFolder) && (
               <div className="mb-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
                 <span className="text-gray-400 dark:text-gray-500">输出地址</span>
                 <br />
                 <span className="font-medium text-gray-700 dark:text-gray-200 break-all select-text">
-                  {task.scheduledOutputPath || task.scheduledOutputSubFolder}   
+                  {[task.scheduledOutputPath || task.scheduledOutputSubFolder, task.localSaveBatchFolder].filter(Boolean).join(task.scheduledOutputPath?.includes('/') ? '/' : '\\')}
                 </span>
               </div>
             )}

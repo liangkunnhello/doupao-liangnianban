@@ -2,7 +2,7 @@ import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
 import type { AssistantAction, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillTrigger, WordDeriveActionSettings } from './types'
 
 export const DEFAULT_WORD_DERIVE_SETTINGS: WordDeriveActionSettings = {
-  targetGroupMode: 'auto-numbered',
+  targetGroupMode: 'skill-name',
   targetGroupId: null,
   variableCount: 20,
   categories: ['产品主体', '目标人群', '痛点场景', '核心卖点', '视觉钩子', '情绪氛围', '人物状态', '使用场景', '信任背书', '优惠机制', 'CTA', '平台版式'],
@@ -67,13 +67,12 @@ function normalizeWordDeriveSettings(value: Partial<WordDeriveActionSettings> | 
   const categories = Array.isArray(value?.categories)
     ? value.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
     : DEFAULT_WORD_DERIVE_SETTINGS.categories
-  const targetGroupMode = value?.targetGroupMode === 'selected' || value?.targetGroupMode === 'skill-name'
-    ? value.targetGroupMode
-    : 'auto-numbered'
+  const targetGroupId = typeof value?.targetGroupId === 'string' && value.targetGroupId ? value.targetGroupId : null
+  const targetGroupMode = value?.targetGroupMode === 'selected' && targetGroupId ? 'selected' : 'skill-name'
 
   return {
     targetGroupMode,
-    targetGroupId: typeof value?.targetGroupId === 'string' && value.targetGroupId ? value.targetGroupId : null,
+    targetGroupId,
     variableCount,
     categories: categories.length ? categories : DEFAULT_WORD_DERIVE_SETTINGS.categories,
     promptMode: value?.promptMode === 'append' ? 'append' : 'replace',

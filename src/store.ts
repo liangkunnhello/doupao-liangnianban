@@ -82,7 +82,7 @@ import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, getDirectoryBaseName, readDirectory } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, getDirectoryBaseName, readDirectory, joinPath } from './lib/localSave'
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 import { ByteLruCache } from './lib/byteLruCache'
@@ -213,6 +213,34 @@ function getNextTaskFilenameBatch(createdAt: number, targetTabId: string | null,
   return getNextGeneratedImageBatch(unownedTasks, createdAt)
 }
 
+function formatLocalSaveBatchFolder(createdAt: number, filenameBatch = 1): string {
+  const date = new Date(createdAt)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  const batch = String(Math.max(1, filenameBatch)).padStart(3, '0')
+  return `${year}${month}${day}-${hours}${minutes}${seconds}-batch-${batch}`
+}
+
+function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number): string | undefined {
+  const settings = normalizeSettings(useStore.getState().settings)
+  return settings.imageSaveLayout === 'batch-folder'
+    ? formatLocalSaveBatchFolder(createdAt, filenameBatch)
+    : undefined
+}
+
+async function getTaskImageSaveDirectory(task: TaskRecord, subFolder?: string): Promise<string | null> {
+  const baseDir = task.scheduledOutputPath
+    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
+    : await getLocalImageSaveDirectory(subFolder)
+  if (!baseDir) return null
+  if (!task.localSaveBatchFolder) return baseDir
+  return getExplicitImageSaveDirectory(await joinPath(baseDir, task.localSaveBatchFolder))
+}
+
 async function getTaskLocalFilenameState(taskId: string) {
   const state = useStore.getState()
   const task = state.tasks.find((item) => item.id === taskId)
@@ -220,9 +248,7 @@ async function getTaskLocalFilenameState(taskId: string) {
 
   const containingTab = state.workspaceTabs.find((tab) => tab.tasks.some((item) => item.id === taskId))
   const subFolder = task.scheduledOutputPath ? undefined : (task.scheduledOutputSubFolder ?? containingTab?.name)
-  const imagesDir = task.scheduledOutputPath
-    ? await getExplicitImageSaveDirectory(task.scheduledOutputPath)
-    : await getLocalImageSaveDirectory(subFolder)
+  const imagesDir = await getTaskImageSaveDirectory(task, subFolder)
   if (!imagesDir) return null
 
   const context = {
@@ -240,7 +266,7 @@ async function getTaskLocalFilenameState(taskId: string) {
   }
   const startSequence = findNextGeneratedImageSequence(fileNames, context, settings)
 
-  return { task, subFolder, context, settings, startSequence }
+  return { task, context, settings, startSequence, imagesDir }
 }
 
 async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], imageIndexOffset: number = 0) {
@@ -256,7 +282,7 @@ async function saveTaskImagesToLocalFSNow(taskId: string, imageIds: string[], im
 
   const filenameState = await getTaskLocalFilenameState(taskId)
   if (!filenameState) return
-  const { task, subFolder, context, settings, startSequence } = filenameState
+  const { task, context, settings, startSequence, imagesDir } = filenameState
 
   let sequenceOffset = 0
   for (let i = 0; i < imageIds.length; i++) {
@@ -264,7 +290,7 @@ async function saveTaskImagesToLocalFSNow(taskId: string, imageIds: string[], im
     const dataUrl = await ensureImageCached(imageId)
     if (dataUrl) {
       const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
-      const saved = await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, fileNameBase)
+      const saved = await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), undefined, imagesDir, fileNameBase)
       if (saved) {
         sequenceOffset++
       }
@@ -302,7 +328,7 @@ async function saveTaskToLocalFSNow(taskId: string) {
 
   const filenameState = await getTaskLocalFilenameState(taskId)
   if (!filenameState) return
-  const { task, subFolder, context, settings, startSequence } = filenameState
+  const { task, context, settings, startSequence, imagesDir } = filenameState
 
   let imageFailCount = 0
   let sequenceOffset = 0
@@ -312,7 +338,7 @@ async function saveTaskToLocalFSNow(taskId: string) {
       const dataUrl = await ensureImageCached(imageId)
       if (dataUrl) {
         const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
-        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), subFolder, task.scheduledOutputPath, fileNameBase)
+        const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), undefined, imagesDir, fileNameBase)
         if (saved) {
           sequenceOffset++
         } else {
@@ -4282,6 +4308,7 @@ export async function submitTaskWithData(
   const tabIdToUpdate = targetTabId ?? taskState.activeWorkspaceTabId ?? taskState.workspaceTabs[0]?.id ?? null
   const createdAt = Date.now()
   const taskId = genId()
+  const filenameBatch = getNextTaskFilenameBatch(createdAt, tabIdToUpdate)
   const task: TaskRecord = {
     id: taskId,
     prompt: prompt.trim(),
@@ -4296,7 +4323,7 @@ export async function submitTaskWithData(
     maskTargetImageId,
     maskImageId,
     outputImages: [],
-    filenameBatch: getNextTaskFilenameBatch(createdAt, tabIdToUpdate),
+    filenameBatch,
     status: 'running',
     error: null,
     progressStage: 'queued',
@@ -4306,6 +4333,7 @@ export async function submitTaskWithData(
     elapsed: null,
     scheduledOutputPath,
     scheduledOutputSubFolder,
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
   }
 
   const latestTasks = useStore.getState().tasks
@@ -5474,6 +5502,7 @@ async function executeAgentRound(
       }
 
       const createdAt = options.createdAt ?? Date.now()
+      const filenameBatch = getNextTaskFilenameBatch(createdAt, null, 'image')
       const task: TaskRecord = {
         id: genId(),
         prompt: taskPrompt,
@@ -5487,13 +5516,14 @@ async function executeAgentRound(
         maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : round.maskTargetImageId ?? null,
         maskImageId: options.maskImageId !== undefined ? options.maskImageId : round.maskImageId ?? null,
         outputImages: [],
-        filenameBatch: getNextTaskFilenameBatch(createdAt, null, 'image'),
+        filenameBatch,
         status: 'running',
         error: null,
         createdAt,
         finishedAt: null,
         elapsed: null,
         sourceMode: 'agent',
+        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
         agentConversationId: conversationId,
         agentRoundId: roundId,
         agentMessageId: assistantMessageId,
@@ -5859,6 +5889,7 @@ async function executeAgentRound(
           ...(Object.keys(stored.actualParams ?? {}).length ? stored.actualParams : {}),
           n: 1,
         }
+        const filenameBatch = getNextTaskFilenameBatch(startedAt, null, 'image')
         const task: TaskRecord = {
           id: genId(),
           prompt: image.revisedPrompt ?? round?.prompt ?? userMessage.content,
@@ -5872,7 +5903,7 @@ async function executeAgentRound(
           maskTargetImageId: round?.maskTargetImageId ?? null,
           maskImageId: round?.maskImageId ?? null,
           outputImages: [imgId],
-          filenameBatch: getNextTaskFilenameBatch(startedAt, null, 'image'),
+          filenameBatch,
           actualParams,
           actualParamsByImage: { [imgId]: actualParams },
           revisedPromptByImage: image.revisedPrompt ? { [imgId]: image.revisedPrompt } : undefined,
@@ -5883,6 +5914,7 @@ async function executeAgentRound(
           finishedAt: Date.now(),
           elapsed: Date.now() - startedAt,
           sourceMode: 'agent',
+          localSaveBatchFolder: getTaskLocalSaveBatchFolder(startedAt, filenameBatch),
           agentConversationId: conversationId,
           agentRoundId: roundId,
           agentMessageId: assistantMessageId,
@@ -6904,6 +6936,7 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
         favoriteOutputUseDateVariable: undefined,
         scheduledOutputPath: undefined,
         scheduledOutputSubFolder: undefined,
+        localSaveBatchFolder: undefined,
       }
       newFavoriteTasks.push(duplicateTask)
       return task // 原任务卡不会被改变
@@ -7054,6 +7087,7 @@ export async function retryTask(task: TaskRecord) {
   const tabIdToUpdate = sourceTabId ?? activeWorkspaceTabId ?? workspaceTabs[0]?.id ?? null
   const createdAt = Date.now()
   const taskId = genId()
+  const filenameBatch = getNextTaskFilenameBatch(createdAt, tabIdToUpdate)
   const newTask: TaskRecord = {
     id: taskId,
     prompt: task.prompt,
@@ -7068,12 +7102,13 @@ export async function retryTask(task: TaskRecord) {
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
     outputImages: [],
-    filenameBatch: getNextTaskFilenameBatch(createdAt, tabIdToUpdate),
+    filenameBatch,
     status: 'running',
     error: null,
     createdAt,
     finishedAt: null,
     elapsed: null,
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
   }
 
   const latestTasks = useStore.getState().tasks

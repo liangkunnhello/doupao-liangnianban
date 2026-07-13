@@ -13,6 +13,7 @@ import type {
   CustomProviderTemplate,
   ReferenceImageEditAction,
   WordLibraryDerivativeRule,
+  ImageSaveLayout,
 } from '../types'
 import type { AssistantActionPreferences } from '../features/assistantActions/types'
 import { normalizeThemeMode } from './theme'
@@ -109,6 +110,10 @@ export function normalizeAgentMaxToolRounds(value: unknown, fallback: number | u
 
 function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAction {
   return value === 'replace-reference' || value === 'add-mask' ? value : 'ask'
+}
+
+function normalizeImageSaveLayout(value: unknown): ImageSaveLayout {
+  return value === 'batch-folder' ? 'batch-folder' : 'flat'
 }
 
 function normalizeZipDownloadRoutes(value: unknown) {
@@ -617,6 +622,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
+    imageSaveLayout: normalizeImageSaveLayout(record.imageSaveLayout),
     imageFilenameDatePrefix: typeof record.imageFilenameDatePrefix === 'boolean' ? record.imageFilenameDatePrefix : true,
     imageFilenameUsePrompt: typeof record.imageFilenameUsePrompt === 'boolean' ? record.imageFilenameUsePrompt : false,
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
@@ -940,6 +946,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   enterSubmit: false,
   referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,
+  imageSaveLayout: 'flat',
   imageFilenameDatePrefix: true,
   imageFilenameUsePrompt: false,
   agentScrollToBottomAfterSubmit: true,

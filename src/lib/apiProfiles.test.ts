@@ -49,6 +49,12 @@ describe('generated image filename settings', () => {
     expect(settings.imageFilenameDatePrefix).toBe(false)
     expect(settings.imageFilenameUsePrompt).toBe(true)
   })
+
+  it('keeps flat image saving as the default layout', () => {
+    expect(DEFAULT_SETTINGS.imageSaveLayout).toBe('flat')
+    expect(normalizeSettings({}).imageSaveLayout).toBe('flat')
+    expect(normalizeSettings({ imageSaveLayout: 'batch-folder' }).imageSaveLayout).toBe('batch-folder')
+  })
 })
 
 describe('word library derivative rule settings', () => {

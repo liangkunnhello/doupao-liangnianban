@@ -6,6 +6,7 @@ import type { AssistantActionPreferences } from './features/assistantActions/typ
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent' | 'postprocess'
 export type ThemeMode = 'light' | 'dark'
+export type ImageSaveLayout = 'flat' | 'batch-folder'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
   'task-selection',
@@ -112,6 +113,7 @@ export interface AppSettings {
   enterSubmit: boolean
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
+  imageSaveLayout: ImageSaveLayout
   imageFilenameDatePrefix: boolean
   imageFilenameUsePrompt: boolean
   agentScrollToBottomAfterSubmit: boolean
@@ -291,6 +293,7 @@ export interface TaskRecord {
   scheduledOutputPath?: string
   /** 日程运行任务的输出子目录 */
   scheduledOutputSubFolder?: string
+  localSaveBatchFolder?: string
   /** 来源模式：画廊 / Agent */
   sourceMode?: AppMode
   /** Agent 对话 ID */

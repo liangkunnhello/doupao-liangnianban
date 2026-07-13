@@ -540,7 +540,7 @@ function getAssistantActionDescription(action: AssistantAction) {
 
   switch (action.id) {
     case 'image-derive':
-      return '以参考图为母版做高相似度局部衍生：默认锁定排版、颜色、文字、背景和风格，只改指定对象或视觉中心主体。'
+      return '保留参考图的跑量结构，生成 1 条主推衍生素材；通过变量词条沉淀主体、钩子、场景等后续测试组合。'
     case 'image-describe':
       return '忠实拆解参考图的构图、主体、色板、文字层级、风格和广告信息结构，不生成新素材。'
     case 'super-derive':
@@ -724,7 +724,6 @@ function AssistantActionSettingsPanel({
                 value={wordSettings.targetGroupMode}
                 onChange={(value) => onChangeWord({ targetGroupMode: value as WordDeriveActionSettings['targetGroupMode'] })}
                 options={[
-                  { value: 'auto-numbered', label: '每次新建序号分组' },
                   { value: 'skill-name', label: '使用技能名称分组' },
                   { value: 'selected', label: '使用固定分组' },
                 ]}

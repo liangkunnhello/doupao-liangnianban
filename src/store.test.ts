@@ -1080,6 +1080,65 @@ describe('mask draft lifecycle in store actions', () => {
     ])
   })
 
+  it('saves images from one task into the same batch folder when enabled', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-06-20T12:34:56+08:00').getTime())
+    const savedPaths: string[] = []
+    const existingFiles = new Set<string>()
+    const electronAPI = {
+      isElectron: true,
+      getLocalSavePath: vi.fn(async () => 'D:\\LocalSaves'),
+      getDefaultPath: vi.fn(async () => 'D:\\LocalSaves'),
+      setLocalSavePath: vi.fn(async () => {}),
+      ensureDir: vi.fn(async () => true),
+      pathJoin: vi.fn(async (...parts: string[]) => parts.join('\\')),
+      saveImage: vi.fn(async (filePath: string) => {
+        savedPaths.push(filePath)
+        existingFiles.add(filePath.split('\\').pop()!)
+        return true
+      }),
+      saveJson: vi.fn(async () => true),
+      saveText: vi.fn(async () => true),
+      checkExists: vi.fn(async (filePath: string) => existingFiles.has(filePath.split('\\').pop()!)),
+      readDir: vi.fn(async () => [...existingFiles]),
+    }
+    Object.defineProperty(globalThis, 'window', {
+      value: { electronAPI },
+      configurable: true,
+    })
+    vi.mocked(callImageApi).mockImplementation(async (opts) => ({
+      images: [`data:image/png;base64,${opts.params.n}-${savedPaths.length}`],
+      actualParams: { n: opts.params.n },
+      actualParamsList: [{ n: opts.params.n }],
+      revisedPrompts: [],
+    }))
+    const activeTab = workspaceTab({ id: 'tab-fast', name: '蹇墜' })
+    useStore.setState({
+      appMode: 'gallery',
+      params: { ...DEFAULT_PARAMS, n: 2 },
+      workspaceTabs: [activeTab],
+      activeWorkspaceTabId: activeTab.id,
+      settings: {
+        ...useStore.getState().settings,
+        imageSaveLayout: 'batch-folder',
+        imageFilenameDatePrefix: false,
+        imageFilenameUsePrompt: false,
+      },
+    })
+
+    await submitTask()
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks[0].status).toBe('done')
+      expect(electronAPI.saveJson).toHaveBeenCalled()
+    })
+    expect(useStore.getState().tasks[0].localSaveBatchFolder).toBe('20260620-123456-batch-001')
+    expect(savedPaths).toEqual([
+      'D:\\LocalSaves\\images\\蹇墜\\20260620-123456-batch-001\\蹇墜-1-1.png',
+      'D:\\LocalSaves\\images\\蹇墜\\20260620-123456-batch-001\\蹇墜-1-2.png',
+    ])
+    nowSpy.mockRestore()
+  })
+
   it('keeps only recent stream partial images when a task fails', async () => {
     await clearImages()
     vi.mocked(callImageApi).mockImplementationOnce(async (opts) => {

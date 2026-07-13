@@ -135,7 +135,7 @@ export interface AssistantActionSettings {
   wordDerive: WordDeriveActionSettings
 }
 
-export type WordDeriveTargetGroupMode = 'auto-numbered' | 'selected' | 'skill-name'
+export type WordDeriveTargetGroupMode = 'selected' | 'skill-name'
 
 export interface WordDeriveActionSettings {
   targetGroupMode: WordDeriveTargetGroupMode

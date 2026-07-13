@@ -4,9 +4,11 @@ import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
 import type { AdChannel, AssistantActionId, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantResultSection, AssistantSkillContract, AssistantWordEntryGroup, SellingPointPolicy } from './types'
 import { AD_CHANNEL_OPTIONS, SELLING_POINT_POLICY_OPTIONS } from './types'
 import { DEFAULT_ASSISTANT_ACTION_SETTINGS, normalizeAssistantActionSettings } from './matcher'
+import { INFORMATION_FLOW_AD_COMPLIANCE_PROMPT, sanitizeInformationFlowAdResult } from './adCompliance'
 
 interface AssistantJsonPayload {
   summary?: string
+  sourceAnchors?: string[]
   finalPrompt?: string
   variablePrompt?: string
   prompts?: string[]
@@ -109,13 +111,15 @@ export async function runAssistantAction(
   }
 
   opts.onProgress?.({ stage: 'validate-result', detail: '正在校验提示词、候选项和变量词条完整性。' })
-  const normalized = normalizeParsedPayload(actionId, parsed, fallback, opts.customSkill?.name, opts.customSkill, actionSettings)
+  const grounded = attachSourceAnchors(parsed, context)
+  const normalized = normalizeParsedPayload(actionId, grounded, fallback, opts.customSkill?.name, opts.customSkill, actionSettings)
   const repaired = await completeWordEntriesIfNeeded(normalized, actionSettings, context, opts)
   opts.onProgress?.({ stage: 'organize-result', detail: '正在整理主推提示词、候选项和测试计划。' })
   return enrichAssistantResult(repaired, actionSettings)
 }
 
 function enrichAssistantResult(result: AssistantActionResult, actionSettings: AssistantActionSettings): AssistantActionResult {
+  result = sanitizeInformationFlowAdResult(result)
   const channel = actionSettings.channel
   const sellingPointPolicy = actionSettings.sellingPointPolicy
   const testPlan = buildTestPlan(result, actionSettings)
@@ -159,7 +163,7 @@ export async function createAssistantSkillDraft(description: string, opts: { set
     profile: opts.profile,
     params: opts.params,
     input: [{ role: 'user', content: [{ type: 'input_text', text: [
-      '你是信息流广告跑量素材技能设计师。用户用自然语言描述想要的功能，请把它做成一个可执行的小技能。',
+      '你是图片与素材技能设计师。用户用自然语言描述想要的功能，请把它做成一个可执行的小技能。所有技能都必须把参考图片和用户原始文字作为最高事实源，最终输出不得被行业常识或通用模板替代。',
       '只返回严格 JSON，不要 Markdown：',
       '{"name":"不超过8字的技能名称","icon":"image|wand|sparkles|palette|tags|thumbs-up","steps":["步骤1","步骤2"],"instruction":"给执行模型的完整中文指令。必须明确技能目标、必须保留项、仅允许改变项、禁止改变项、变化强度和所需 JSON 输出字段；只写与该技能名称直接相关的要求，不能默认加入跑量角度、首屏钩子、CTA、渠道版式、变量词条或测试命名。"}',
       `用户需求：${description}`,
@@ -188,6 +192,15 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '返回必须是严格 JSON，不要 Markdown，不要代码块，不要解释。',
         '当前技能契约中的“必须保留项”和“禁止项”优先级最高；它们与渠道建议、广告建议或你的创意偏好冲突时，必须以技能契约为准。',
         '',
+        '【参考输入优先规则，所有技能强制执行】',
+        '参考图片和用户原始文字是最高事实源；技能名称只决定如何处理这些输入，不允许用行业常识、通用广告模板或常见案例替换参考输入。',
+        '先观察参考图并提取 3–8 个可验证的 sourceAnchors，包括真实主体、主体位置与占比、构图、背景、颜色、文字与排版、场景、材质、光影和视觉风格；不得把推测的人群、行业、卖点或效果写成图片事实。',
+        '最终提示词必须以 sourceAnchors 和用户原始文字为主干，逐项写出需要保留的参考特征，再执行当前技能允许的改变；不能只在分析中提到参考图，最终提示词却改用通用行业方案。',
+        '行业知识只能补足完成任务不可缺少且参考输入没有说明的中性执行细节；不得新增产品、人物、场景、卖点、功效、受众、品牌、价格、活动、CTA 或渠道版式。',
+        '每个 finalPrompt、variablePrompt 和 prompts 候选都必须能逐项追溯到参考输入。无法从参考输入确认的内容必须省略，不能用“通常、行业常见、建议”等理由补造。',
+        'sourceAnchors 仅用于内部规划和“参考输入依据”分析区，严禁把 sourceAnchors 列表、原始文字全文、分析过程、判断理由、测试策略或“参考输入基准”等说明性前缀拼接到生图提示词。',
+        'finalPrompt、variablePrompt 和 prompts 必须直接描述要生成的画面以及必要的保留/修改指令，不写“经过分析”“基于上述分析”“跑量逻辑是”“测试目的是”等解释性内容。',
+        '',
         '【卖点保护规则，必须严格遵守】',
         '默认不得改变用户输入中的核心卖点、价格、承诺、适用人群、活动机制和品牌信息。',
         `当前卖点策略为「${getSellingPointPolicyLabel(actionSettings.sellingPointPolicy)}」：${getSellingPointPolicyRule(actionSettings.sellingPointPolicy)}`,
@@ -195,15 +208,18 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '除非开启“允许探索新卖点”，否则只能改变画面表达、场景、人群切入、视觉钩子、版式、字幕位置和 CTA。',
         '',
         contract ? formatSkillContract(contract) : '',
+        INFORMATION_FLOW_AD_COMPLIANCE_PROMPT,
+        '',
         'JSON 结构：',
         '{',
         '  "summary": "一句话说明这组素材适合测试的方向",',
-        '  "finalPrompt": "最推荐直接用于生图的完整信息流广告素材提示词，可为空",',
+        '  "sourceAnchors": ["从参考图或原始文字中提取的可验证依据，3–8 条；没有参考输入时为空数组"],',
+        '  "finalPrompt": "以参考输入和 sourceAnchors 为主干、按当前技能做受控处理的完整生图提示词，可为空",',
         allowVariableOutput
           ? '  "variablePrompt": "仅当该技能需要变量词条时填写，且占位符必须与 wordEntries.category 完全一致，例如 {{产品主体}}；否则为空",'
           : '  "variablePrompt": "",',
-        '  "prompts": ["候选素材提示词1", "候选素材提示词2"],',
-        '  "sections": [{"title": "素材角度/首屏钩子/标题字幕/CTA/平台版式/测试命名/风险提醒", "items": ["具体内容"]}],',
+        '  "prompts": ["以同一参考输入为基准的候选提示词1", "以同一参考输入为基准的候选提示词2"],',
+        '  "sections": [{"title": "参考输入依据/技能处理结果/风险提醒", "items": ["具体内容"]}],',
         allowVariableOutput
           ? '  "wordEntries": [{"category": "必须与 variablePrompt 中的 {{变量名}} 完全一致", "entries": ["可直接替换该变量的短词条"]}]'
           : '  "wordEntries": []',
@@ -240,6 +256,25 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
   }
 
   return [{ role: 'user', content }]
+}
+
+function attachSourceAnchors(
+  payload: AssistantJsonPayload,
+  context: AssistantInputContext,
+): AssistantJsonPayload {
+  if (!context.hasText && !context.hasImage) return payload
+
+  const sourceAnchors = normalizeStringArray(payload.sourceAnchors).slice(0, 8)
+  const existingSections = Array.isArray(payload.sections) ? payload.sections : []
+  const hasSourceSection = existingSections.some((section) => section?.title?.trim() === '参考输入依据')
+
+  return {
+    ...payload,
+    sourceAnchors,
+    sections: sourceAnchors.length > 0 && !hasSourceSection
+      ? [{ title: '参考输入依据', items: sourceAnchors }, ...existingSections]
+      : payload.sections,
+  }
 }
 
 function canActionOutputVariables(actionId: AssistantActionId, customSkill?: AssistantCustomSkill) {
@@ -314,13 +349,14 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
   switch (actionId) {
     case 'image-derive':
       return [
-        '这是“图片衍生”技能，不是重新设计整张图，也不是广告角度探索。把参考图视为严格的视觉母版。',
-        '先识别画幅、构图、主体位置、背景、色板、文字、装饰、留白、光影和视觉风格，并将它们作为锁定基准。',
-        '用户明确指定修改对象时，只衍生该对象；用户未指定时，只衍生视觉中心的主要主体。仅可为目标主体自然融入而细微调整其局部投影或高光。',
-        'finalPrompt 必须明确写出“除目标主体外保持原图不变”，并逐项约束画幅、构图、背景、色板、文字和排版。',
-        `prompts 输出最多 ${actionSettings.outputCount} 条候选；每条只改变目标主体的一个维度，例如轮廓、内部结构、细节或同类替换。`,
-        '不得输出 variablePrompt 或 wordEntries。不得引入人物、场景、CTA、渠道版式或新的广告结构。',
-        'sections 仅包含：锁定元素、衍生目标、每条候选的唯一变化点、风险提醒。',
+        '这是“图片衍生”技能。目标是保留参考图已经验证的跑量结构，产出一条有明确测试价值的衍生主推素材，不是像素级复刻，也不是完全重做。',
+        '先拆解参考图的跑量结构：信息层级、首屏钩子、主体表现、卖点证明、关键文案位置、主色调、视觉风格和 CTA 逻辑。',
+        '主推素材只选择 1–2 个受控测试维度进行变化，优先从主体表现、钩子、场景或人群切入、卖点证明方式、局部构图中选择；其余跑量结构保持稳定。',
+        'finalPrompt 只输出 1 条完整主推提示词，必须写清楚保留的跑量结构、发生变化的测试维度和画面执行方式。',
+        'prompts 必须为空数组，不要输出候选提示词。',
+        `variablePrompt 将 finalPrompt 中适合组合测试的语义替换为变量占位符；wordEntries 只输出与 variablePrompt 对应的变量词条，每个分类至少 ${actionSettings.wordDerive.variableCount} 个。`,
+        'sections 仅包含：跑量结构保留项、主推衍生策略、测试变量、风险提醒。',
+        getSellingPointWordEntryRule(actionSettings.sellingPointPolicy),
       ].join('\n')
     case 'image-describe':
       return [
@@ -335,10 +371,10 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         '这是“爆款衍生”技能，是信息流广告跑量素材的核心工作流，请严格按以下要求执行。',
         '1. 如果有参考图片，先拆解它的跑量结构：首屏钩子、人物/产品主体、痛点场景、卖点表达、视觉冲突、情绪氛围、信任背书、CTA、平台原生感。',
         '2. 如果有文字，按产品信息、目标人群、投放目标、卖点、价格/优惠、素材限制进行理解。',
-        '3. finalPrompt 必须是一段最符合 GPT Image 2 生图提示词规范的信息流广告素材提示词，结构清晰，包含平台竖版画面、主体、场景、钩子、卖点、构图、光线、色彩、真实感、字幕/贴纸位置和合规约束。',
+        '3. finalPrompt 必须从参考图与原始文字继续生长：先逐项写明保留的主体、结构、色板、排版、文案语义、场景和视觉风格，再写允许衍生的部分；不能套用通用竖版广告模板覆盖原素材。',
         `3. variablePrompt 必须把 finalPrompt 中可变的核心语义换成占位符，占位符只能从这些分类中选择：${settings.categories.map((item) => `{{${item}}}`).join('、')}。`,
         `4. wordEntries 必须只按这些分类输出：${settings.categories.join('、')}。每个 category 必须给 ${settings.variableCount} 个可替换短变量，必须能直接替换进 variablePrompt。`,
-        '5. prompts 给 8 条不同素材方向，覆盖痛点型、结果型、对比型、场景型、测评型、福利型、反常识型、真实体验型。',
+        '5. prompts 给 8 条不同素材方向，但每条必须继承同一组参考锚点，只改变一个有参考依据的测试维度；不要求机械覆盖固定行业角度。',
         '6. sections 必须包含：素材角度、首屏钩子、画面构图、标题文案、字幕文案、CTA、适合平台、测试命名、风险提醒。',
         getSellingPointWordEntryRule(actionSettings.sellingPointPolicy),
         '7. 避免绝对化承诺、医疗/金融夸大、虚假前后对比、平台禁词、侵犯第三方品牌或肖像。',
@@ -372,7 +408,7 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
     case 'prompt-examples':
       return [
         '这是“爆款案例”技能。提供高潜信息流广告结构案例，不得在没有投放数据时声称一定是爆款。',
-        `prompts 输出 ${actionSettings.outputCount} 条案例，覆盖痛点解决、结果展示、用户测评、场景种草、限时福利或反常识钩子。`,
+        `prompts 输出 ${actionSettings.outputCount} 条案例；存在参考图或原始文字时，每条必须继承其中的产品事实、主体关系和视觉锚点，只改变案例结构，不得换成无关行业模板。`,
         '每条都要完整可直接用于生图，并包含标题/字幕位置和 CTA。',
         'sections 列出每个案例的测试假设和适合平台。',
       ].join('\n')
@@ -393,7 +429,7 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
     case 'angle-matrix':
       return [
         '这是“角度矩阵”技能。围绕当前产品/素材信息生成可投放测试的素材角度矩阵。',
-        'prompts 输出 10 条素材提示词，覆盖痛点型、结果型、对比型、场景型、测评型、清单型、福利型、反常识型、身份认同型、避坑型。',
+        'prompts 输出 10 条素材提示词；每条先继承参考输入的主体、产品事实、核心卖点和视觉身份，再仅改变营销切入角度。角度没有参考依据时不得强行套入固定行业模板。',
         'sections 每条包含：角度、首屏钩子、画面、标题、字幕、CTA、适合平台、测试命名。',
         `wordEntries 只允许使用设置中的变量分类，每个输出分类至少给 ${actionSettings.wordDerive.variableCount} 个可测试短变量。`,
       ].join('\n')
@@ -429,21 +465,21 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         'sections 必须包含：保留内容、渠道改写点、目标渠道版提示词、审核风险。',
       ].join('\n')
     default:
-      return '根据输入完成信息流广告素材技能任务，并返回可直接用于测试的生图提示词、素材角度和变量词条。'
+      return '严格以参考图片和用户原始文字为基准执行自定义技能；最终结果必须保留可观察事实和原始意图，只在技能明确允许的范围内处理，不得替换成通用行业方案。'
   }
 }
 
 function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, fallback: AssistantActionResult, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS): AssistantActionResult {
-  const candidates = normalizeStringArray(payload.prompts)
+  const contract = getActionContract(actionId, customSkill)
+  const candidates = contract?.output.candidates === false ? [] : normalizeStringArray(payload.prompts)
   const sections = normalizeSections(payload.sections)
   const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
   const rawWordEntries = allowVariableOutput ? normalizeWordEntries(payload.wordEntries) : []
-  const finalPrompt = typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
+  const finalPrompt = contract?.output.finalPrompt === false ? '' : typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
   const rawVariablePrompt = allowVariableOutput && typeof payload.variablePrompt === 'string' ? payload.variablePrompt.trim() : ''
   const { variablePrompt, wordEntries } = normalizeVariableOutput(rawVariablePrompt, rawWordEntries, actionSettings.wordDerive.categories)
   const summary = typeof payload.summary === 'string' ? payload.summary.trim() : ''
   const content = formatPayloadContent({ summary, finalPrompt, variablePrompt, candidates, sections, wordEntries })
-  const contract = getActionContract(actionId, customSkill)
   const primaryText = getPrimaryText(contract?.primaryOutput, { finalPrompt, variablePrompt, candidates, sections, content, fallback })
 
   return {
@@ -535,6 +571,7 @@ async function completeWordEntriesIfNeeded(
         `目标：把每个 wordEntries.category 补足到 ${targetCount} 个不重复短词条。`,
         `允许的分类只有：${actionSettings.wordDerive.categories.join('、')}。`,
         '不要输出“画幅比例、风格、构图、光影、材质、合规禁忌”等工具型分类。',
+        INFORMATION_FLOW_AD_COMPLIANCE_PROMPT,
         '不要改 category 名称。entries 必须是短词条，可直接替换对应变量，不要长句。',
         '返回格式：{"wordEntries":[{"category":"分类名","entries":["词条1"]}]}',
         `当前 variablePrompt：${result.variablePrompt || '（无）'}`,
@@ -580,15 +617,15 @@ function ensureVariablePromptCoversGroups(result: AssistantActionResult): Assist
   )
   const missingGroups = groups.filter((group) => !placeholderNames.has(group.category))
   if (existingPrompt && missingGroups.length === 0) {
-    return { ...result, primaryText: existingPrompt }
+    return { ...result, primaryText: resolveResultPrimaryText(result) }
   }
 
   const rebuiltPrompt = buildVariablePrompt(groups, result.candidates?.[0] ?? result.primaryText ?? '')
-  return {
+  const nextResult = {
     ...result,
     variablePrompt: rebuiltPrompt,
-    primaryText: rebuiltPrompt,
   }
+  return { ...nextResult, primaryText: resolveResultPrimaryText(nextResult) }
 }
 
 function buildVariablePrompt(groups: AssistantWordEntryGroup[], seedPrompt: string) {
@@ -632,7 +669,19 @@ function rebuildResultContent(result: AssistantActionResult): AssistantActionRes
     sections: result.sections ?? [],
     wordEntries: result.wordEntries ?? [],
   })
-  return { ...result, content: content || result.content, primaryText: result.variablePrompt || result.primaryText }
+  const nextResult = { ...result, content: content || result.content }
+  return { ...nextResult, primaryText: resolveResultPrimaryText(nextResult) }
+}
+
+function resolveResultPrimaryText(result: AssistantActionResult) {
+  return getPrimaryText(getActionContract(result.actionId)?.primaryOutput, {
+    finalPrompt: result.candidates?.[0] ?? '',
+    variablePrompt: result.variablePrompt ?? '',
+    candidates: result.candidates ?? [],
+    sections: result.sections ?? [],
+    content: result.content,
+    fallback: result,
+  })
 }
 
 function uniqueStrings(items: string[]) {
@@ -741,8 +790,14 @@ function createFallbackResult(actionId: AssistantActionId, context: AssistantInp
   const seed = getSeedText(context)
   switch (actionId) {
     case 'image-derive': {
-      const finalPrompt = `将参考图作为严格的视觉母版进行局部衍生。保持原图的画幅比例、构图、背景、色板、排版、文字内容与位置、装饰元素、留白、光影方向和整体风格不变。${context.hasText ? `用户要求：${context.text}。` : '未指定修改对象时，只衍生画面视觉中心主体。'} 除目标主体及其为自然融入所需的局部投影或高光外，其他区域不得改变；不得新增人物、场景、贴纸、CTA 或新的广告结构。`
-      return { actionId, title: ACTION_TITLES[actionId], content: `最终提示词：${finalPrompt}`, candidates: [finalPrompt], primaryText: finalPrompt }
+      const finalPrompt = `${seed}，基于参考图的跑量结构制作一条主推衍生素材：保留原有信息层级、核心卖点、关键文案位置、主色调和视觉风格；仅调整主体表现与首屏视觉钩子，使变化可归因且适合单独测试。`
+      const variablePrompt = `保留参考图的{{平台版式}}和信息层级，以{{产品主体}}为核心主体，使用{{视觉钩子}}呈现核心卖点。`
+      const wordEntries = [
+        { category: '产品主体', entries: ['核心主体特写', '主体使用瞬间', '主体卖点放大'] },
+        { category: '视觉钩子', entries: ['主体功能放大', '结果感视觉提示', '问题解决瞬间'] },
+        { category: '平台版式', entries: ['保留原图信息层级', '保留原图主色调版式', '保留原图标题与主体关系'] },
+      ]
+      return { actionId, title: ACTION_TITLES[actionId], content: `最终提示词：${finalPrompt}\n\n词条提示词：${variablePrompt}`, candidates: [finalPrompt], wordEntries, primaryText: finalPrompt, variablePrompt }
     }
     case 'image-describe': {
       const prompt = `参考图作为信息流广告素材：竖版构图，前 3 秒有明确视觉钩子，突出产品/人物主体、用户痛点、核心卖点、真实使用场景、短字幕区域和 CTA，画面自然可信，避免夸大承诺。`

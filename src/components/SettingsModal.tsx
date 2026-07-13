@@ -2568,6 +2568,21 @@ export default function SettingsModal() {
                           )}
                         </div>
                       </div>
+                      <div>
+                        <span className="block text-sm text-gray-600 dark:text-gray-300 mb-2">图片保存方式</span>
+                        <Select
+                          value={draft.imageSaveLayout}
+                          onChange={(value) => commitSettings({ ...draft, imageSaveLayout: value as AppSettings['imageSaveLayout'] })}
+                          options={[
+                            { label: '平铺保存', value: 'flat' },
+                            { label: '按批次保存到子目录', value: 'batch-folder' },
+                          ]}
+                          className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-white/[0.05] border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-700 dark:text-gray-300"
+                        />
+                        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                          开启批次子目录后，每次提交生成的图片会保存到目标文件夹下同一个批次文件夹中。
+                        </p>
+                      </div>
                       {localSavePath && (
                       <div className="text-xs text-gray-400 dark:text-gray-500">
                         <code>images/</code> 图片 &nbsp;·&nbsp; <code>tasks/</code> 元数据 &nbsp;·&nbsp; <code>prompts/</code> 提示词 &nbsp;·&nbsp; <code>agent/</code> 对话
