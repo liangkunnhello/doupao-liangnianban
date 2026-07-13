@@ -1,5 +1,5 @@
 import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
-import type { AssistantAction, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillTrigger, WordDeriveActionSettings } from './types'
+import type { AssistantAction, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillContract, AssistantSkillTaskType, AssistantSkillTrigger, AssistantVariationLevel, WordDeriveActionSettings } from './types'
 
 export const DEFAULT_WORD_DERIVE_SETTINGS: WordDeriveActionSettings = {
   targetGroupMode: 'skill-name',
@@ -89,7 +89,7 @@ function normalizeHiddenActionIds(value: unknown): AssistantActionId[] {
   return normalizeActionIds(value).filter((id) => !CORE_VISIBLE_ACTION_IDS.has(id))
 }
 
-function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
+export function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
   if (!Array.isArray(value)) return []
   const icons = new Set(['image', 'wand', 'sparkles', 'palette', 'tags', 'thumbs-up'])
   const triggers = new Set<AssistantSkillTrigger>(['always', 'image', 'text', 'image_text'])
@@ -104,8 +104,68 @@ function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
     const icon = typeof record.icon === 'string' && icons.has(record.icon) ? record.icon as AssistantCustomSkill['icon'] : 'sparkles'
     const trigger = typeof record.trigger === 'string' && triggers.has(record.trigger as AssistantSkillTrigger) ? record.trigger as AssistantSkillTrigger : 'always'
     const enabled = typeof record.enabled === 'boolean' ? record.enabled : true
-    return [{ id, name, instruction, steps, icon, trigger, enabled, priority: 65, when: getWhenByTrigger(trigger), outputMode: 'show-candidates', isCustom: true }]
+    // P3: 三个显式开关是契约的单一事实来源；contract 由它们推导或保留。
+    const requiresAdContext = typeof record.requiresAdContext === 'boolean' ? record.requiresAdContext : false
+    const allowWordEntries = typeof record.allowWordEntries === 'boolean' ? record.allowWordEntries : false
+    const allowExploreSellingPoint = typeof record.allowExploreSellingPoint === 'boolean' ? record.allowExploreSellingPoint : false
+    const contract = buildCustomSkillContract(record.contract, instruction, requiresAdContext, allowWordEntries, allowExploreSellingPoint)
+    return [{
+      id, name, instruction, steps, icon, trigger, enabled, priority: 65,
+      when: getWhenByTrigger(trigger), outputMode: 'show-candidates', isCustom: true,
+      requiresAdContext, allowWordEntries, allowExploreSellingPoint, contract,
+    }]
   })
+}
+
+/** Build the stable contract for a custom skill.
+ *  When the model returned a contract, keep its objective / preserve / editable /
+ *  forbidden / taskType / variationLevel / primaryOutput but force the three
+ *  toggle-driven fields to the explicit switch values. Old skills without a
+ *  contract get a conservative default that never assumes ad context or explores
+ *  new selling points. */
+export function buildCustomSkillContract(
+  raw: unknown,
+  instruction: string,
+  requiresAdContext: boolean,
+  allowWordEntries: boolean,
+  allowExploreSellingPoint: boolean,
+): AssistantSkillContract {
+  const base: AssistantSkillContract = {
+    taskType: 'prompt-optimize',
+    objective: instruction.slice(0, 60) || '执行自定义技能',
+    preserve: ['参考图片和用户原始文字中的可观察事实', '原始意图'],
+    editable: ['技能明确允许的处理'],
+    forbidden: ['套用行业通用模板替换参考输入', '把推断内容当作输入事实'],
+    variationLevel: 'low',
+    requiresAdContext,
+    allowExploreSellingPoint,
+    primaryOutput: 'finalPrompt',
+    output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: allowWordEntries },
+  }
+  if (!raw || typeof raw !== 'object') return base
+  const record = raw as Record<string, unknown>
+  const taskTypeOptions = new Set<AssistantSkillTaskType>(['analyze', 'prompt-optimize', 'image-variation', 'layout-variation', 'creative-expansion', 'extract-variables', 'review-data'])
+  const variationLevels = new Set<AssistantVariationLevel>(['none', 'low', 'medium', 'high'])
+  const primaryOutputs = new Set<AssistantSkillContract['primaryOutput']>(['finalPrompt', 'variablePrompt', 'analysis', 'candidate'])
+  const output = (record.output && typeof record.output === 'object') ? record.output as Record<string, unknown> : null
+  const stringArray = (value: unknown) => Array.isArray(value) ? value.map(String).filter((item) => Boolean(item)) : []
+  return {
+    taskType: taskTypeOptions.has(record.taskType as AssistantSkillTaskType) ? (record.taskType as AssistantSkillTaskType) : base.taskType,
+    objective: typeof record.objective === 'string' && record.objective.trim() ? record.objective.trim() : base.objective,
+    preserve: stringArray(record.preserve).length ? stringArray(record.preserve) : base.preserve,
+    editable: stringArray(record.editable).length ? stringArray(record.editable) : base.editable,
+    forbidden: stringArray(record.forbidden).length ? stringArray(record.forbidden) : base.forbidden,
+    variationLevel: variationLevels.has(record.variationLevel as AssistantVariationLevel) ? (record.variationLevel as AssistantVariationLevel) : base.variationLevel,
+    requiresAdContext,
+    allowExploreSellingPoint,
+    primaryOutput: primaryOutputs.has(record.primaryOutput as AssistantSkillContract['primaryOutput']) ? (record.primaryOutput as AssistantSkillContract['primaryOutput']) : base.primaryOutput,
+    output: {
+      finalPrompt: output ? Boolean(output.finalPrompt) : base.output.finalPrompt,
+      candidates: output ? Boolean(output.candidates) : base.output.candidates,
+      analysis: output ? Boolean(output.analysis) : base.output.analysis,
+      wordEntries: allowWordEntries,
+    },
+  }
 }
 
 export function getWhenByTrigger(trigger: AssistantSkillTrigger): AssistantAction['when'] {

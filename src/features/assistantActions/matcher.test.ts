@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AssistantInputContext } from './types'
 import {
+  buildCustomSkillContract,
   getMoreAssistantActions,
   getRecommendedAssistantActions,
   normalizeAssistantActionPreferences,
@@ -67,5 +68,25 @@ describe('assistant action matcher', () => {
     ]
 
     expect(allVisibleIds).not.toContain('channel-rewrite')
+  })
+
+  it('rebuilds custom skill contract fields from explicit toggles', () => {
+    const contract = buildCustomSkillContract({
+      taskType: 'creative-expansion',
+      objective: '跑量衍生',
+      preserve: ['产品事实'],
+      editable: ['场景'],
+      forbidden: ['虚构功效'],
+      variationLevel: 'high',
+      requiresAdContext: false,
+      allowExploreSellingPoint: false,
+      primaryOutput: 'variablePrompt',
+      output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: false },
+    }, '做跑量衍生', true, true, true)
+
+    expect(contract.requiresAdContext).toBe(true)
+    expect(contract.output.wordEntries).toBe(true)
+    expect(contract.allowExploreSellingPoint).toBe(true)
+    expect(contract.objective).toBe('跑量衍生')
   })
 })

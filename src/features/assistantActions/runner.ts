@@ -1,14 +1,17 @@
 import type { ApiProfile, AppSettings, TaskParams } from '../../types'
 import { callAgentResponsesApi } from '../../lib/agentApi'
 import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
-import type { AdChannel, AssistantActionId, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantResultSection, AssistantSkillContract, AssistantWordEntryGroup, SellingPointPolicy } from './types'
+import { buildGroundingProfile } from './context'
+import type { AdChannel, AssistantActionId, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantQualityState, AssistantResultSection, AssistantSkillContract, AssistantWordEntryGroup, GroundingProfile, SellingPointPolicy, VisualIdentity } from './types'
 import { AD_CHANNEL_OPTIONS, SELLING_POINT_POLICY_OPTIONS } from './types'
-import { DEFAULT_ASSISTANT_ACTION_SETTINGS, normalizeAssistantActionSettings } from './matcher'
+import { buildCustomSkillContract, DEFAULT_ASSISTANT_ACTION_SETTINGS, normalizeAssistantActionSettings } from './matcher'
 import { INFORMATION_FLOW_AD_COMPLIANCE_PROMPT, sanitizeInformationFlowAdResult } from './adCompliance'
 
 interface AssistantJsonPayload {
   summary?: string
   sourceAnchors?: string[]
+  assumptions?: string[]
+  visualIdentity?: VisualIdentity
   finalPrompt?: string
   variablePrompt?: string
   prompts?: string[]
@@ -62,6 +65,7 @@ export interface AssistantSkillDraft {
   icon: AssistantCustomSkill['icon']
   steps: string[]
   instruction: string
+  contract?: AssistantSkillContract
 }
 
 export async function runAssistantAction(
@@ -80,51 +84,143 @@ export async function runAssistantAction(
     throw new Error('请先在设置中配置 Agent 使用的 API Key')
   }
 
-  opts.onProgress?.({ stage: 'prepare-input', detail: context.hasImage ? `已读取 ${context.imageCount} 张参考图和当前提示词。` : '已读取当前提示词和技能设置。' })
-  const fallback = createFallbackResult(actionId, context, opts.customSkill)
   const actionSettings = normalizeAssistantActionSettings(opts.actionSettings ?? DEFAULT_ASSISTANT_ACTION_SETTINGS)
+  const requiresAd = skillRequiresAdContext(actionId, opts.customSkill)
+  const grounding = buildGroundingProfile(context)
+  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, opts.customSkill, actionSettings)
+  if (requiresAd) {
+    grounding.adContext = { channel: actionSettings.channel, sellingPointPolicy: effectiveSellingPointPolicy }
+  }
+
+  opts.onProgress?.({ stage: 'prepare-input', detail: context.hasImage ? `已建立输入事实卡，读取 ${context.imageCount} 张参考图和当前提示词。` : '已建立输入事实卡，读取当前提示词和技能设置。' })
+
+  const buildInput = () => createAssistantActionInput(actionId, context, actionSettings, opts.customSkill, grounding)
+
   opts.onProgress?.({ stage: 'request-model', detail: '请求已发送，正在等待模型返回结果。' })
-  const result = await callAgentResponsesApi({
+  let rawText = (await callAgentResponsesApi({
     settings: opts.settings,
     profile: opts.profile,
     params: opts.params,
-    input: createAssistantActionInput(actionId, context, actionSettings, opts.customSkill),
-  })
+    input: buildInput(),
+  })).text.trim()
 
-  opts.onProgress?.({ stage: 'parse-response', detail: '模型已返回，正在解析结构化结果。' })
-  const text = result.text.trim()
-  if (!text) {
-    opts.onProgress?.({ stage: 'organize-result', detail: '模型未返回可解析内容，使用本地兜底结果。' })
-    return enrichAssistantResult(fallback, actionSettings)
+  if (!rawText) {
+    // Retry once before giving up — never silently replace a failed run with a
+    // fixed local template that pretends to understand the input.
+    opts.onProgress?.({ stage: 'request-model', detail: '首次未返回可用内容，正在自动重试一次。' })
+    rawText = (await callAgentResponsesApi({
+      settings: opts.settings,
+      profile: opts.profile,
+      params: opts.params,
+      input: buildInput(),
+    })).text.trim()
+    if (!rawText) {
+      throw new Error('模型未返回可用内容，已自动重试一次仍失败。请检查输入或稍后重试。')
+    }
   }
 
-  const parsed = parseAssistantJsonPayload(text)
+  opts.onProgress?.({ stage: 'parse-response', detail: '模型已返回，正在解析结构化结果。' })
+  const parsed = parseAssistantJsonPayload(rawText)
   if (!parsed) {
     opts.onProgress?.({ stage: 'organize-result', detail: '结果不是标准 JSON，正在整理为普通候选内容。' })
     const result: AssistantActionResult = {
-      ...fallback,
-      content: text,
-      candidates: extractNumberedPrompts(text) ?? [extractPrimaryPrompt(text) || text],
-      primaryText: extractPrimaryPrompt(text) || text,
+      actionId,
+      title: opts.customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能',
+      content: rawText,
+      candidates: extractNumberedPrompts(rawText) ?? [extractPrimaryPrompt(rawText) || rawText],
+      primaryText: extractPrimaryPrompt(rawText) || rawText,
     }
-    return enrichAssistantResult(result, actionSettings)
+    return withResultMeta(
+      enrichAssistantResult(applyQualityState(result, actionId), actionSettings, opts.customSkill, effectiveSellingPointPolicy),
+      grounding,
+    )
   }
 
   opts.onProgress?.({ stage: 'validate-result', detail: '正在校验提示词、候选项和变量词条完整性。' })
   const grounded = attachSourceAnchors(parsed, context)
-  const normalized = normalizeParsedPayload(actionId, grounded, fallback, opts.customSkill?.name, opts.customSkill, actionSettings)
+  // P2: 把模型回报的结构化图片观察回填进输入事实卡，避免本地硬猜图片内容。
+  const groundedVisual = parsed.visualIdentity
+    ? attachVisualIdentity(grounding, normalizeVisualIdentity(parsed.visualIdentity))
+    : grounding
+  const normalized = normalizeParsedPayload(actionId, grounded, opts.customSkill?.name, opts.customSkill, actionSettings)
   const repaired = await completeWordEntriesIfNeeded(normalized, actionSettings, context, opts)
   opts.onProgress?.({ stage: 'organize-result', detail: '正在整理主推提示词、候选项和测试计划。' })
-  return enrichAssistantResult(repaired, actionSettings)
+  return withResultMeta(
+    enrichAssistantResult(applyQualityState(repaired, actionId), actionSettings, opts.customSkill, effectiveSellingPointPolicy),
+    groundedVisual,
+    parsed.sourceAnchors ? normalizeStringArray(parsed.sourceAnchors) : undefined,
+    parsed.assumptions ? normalizeStringArray(parsed.assumptions) : undefined,
+  )
 }
 
-function enrichAssistantResult(result: AssistantActionResult, actionSettings: AssistantActionSettings): AssistantActionResult {
+/** Attach the read-only input fact card and the model's reported anchors /
+ *  assumptions so the result page can render the four-layer structure. */
+function withResultMeta(
+  result: AssistantActionResult,
+  grounding?: GroundingProfile,
+  sourceAnchors?: string[],
+  assumptions?: string[],
+): AssistantActionResult {
+  return {
+    ...result,
+    grounding,
+    sourceAnchors: sourceAnchors && sourceAnchors.length ? sourceAnchors : result.sourceAnchors,
+    assumptions: assumptions && assumptions.length ? assumptions : result.assumptions,
+  }
+}
+
+function skillRequiresAdContext(actionId: AssistantActionId, customSkill?: AssistantCustomSkill): boolean {
+  return getActionContract(actionId, customSkill)?.requiresAdContext === true
+}
+
+/** When a skill's contract forbids exploring new selling points, force the
+ *  lock policy regardless of the global setting so the model cannot drift. */
+function getEffectiveSellingPointPolicy(actionId: AssistantActionId, customSkill: AssistantCustomSkill | undefined, actionSettings: AssistantActionSettings): SellingPointPolicy {
+  const contract = getActionContract(actionId, customSkill)
+  if (contract?.allowExploreSellingPoint === false) return 'lock'
+  return actionSettings.sellingPointPolicy
+}
+
+function enrichAssistantResult(
+  result: AssistantActionResult,
+  actionSettings: AssistantActionSettings,
+  customSkill?: AssistantCustomSkill,
+  effectiveSellingPointPolicy: SellingPointPolicy = actionSettings.sellingPointPolicy,
+): AssistantActionResult {
+  // Only ad-creative skills carry channel / selling-point / test-plan packaging.
+  // Analysis and plain-optimization skills must not be polluted by ad templates.
   if (result.actionId === 'image-derive') return result
+  if (!skillRequiresAdContext(result.actionId, customSkill)) return result
   result = sanitizeInformationFlowAdResult(result)
   const channel = actionSettings.channel
-  const sellingPointPolicy = actionSettings.sellingPointPolicy
-  const testPlan = buildTestPlan(result, actionSettings)
+  const sellingPointPolicy = effectiveSellingPointPolicy
+  const testPlan = buildTestPlan(result, actionSettings, sellingPointPolicy)
   return { ...result, channel, sellingPointPolicy, testPlan }
+}
+
+function applyQualityState(result: AssistantActionResult, actionId: AssistantActionId): AssistantActionResult {
+  if (result.qualityState) return result
+  const contract = getActionContract(actionId)
+  const hasContent = Boolean(result.primaryText || result.content.trim() || (result.candidates ?? []).length)
+  if (!hasContent && contract?.taskType === 'review-data') {
+    return {
+      ...result,
+      qualityState: 'insufficient-data',
+      qualityNote: '未检测到可用的投放数据，已停止生成通用广告素材；请以真实数据复核。',
+    }
+  }
+  return { ...result, qualityState: hasContent ? 'complete' : 'insufficient-data' }
+}
+
+function summarizeGrounding(profile: GroundingProfile): string {
+  const parts: string[] = []
+  if (profile.observedFacts.length) {
+    parts.push('已确认事实：' + profile.observedFacts.map((fact) => `${fact.fact}（来源：${fact.sourceRef ?? fact.source}）`).join('；'))
+  }
+  if (profile.missingInformation.length) {
+    parts.push('缺失信息：' + profile.missingInformation.join('；'))
+  }
+  return parts.join('\n')
 }
 
 function getChannelLabel(channel: AdChannel) {
@@ -135,12 +231,12 @@ function getSellingPointPolicyLabel(policy: SellingPointPolicy) {
   return SELLING_POINT_POLICY_OPTIONS.find((option) => option.value === policy)?.label ?? policy
 }
 
-function buildTestPlan(result: AssistantActionResult, actionSettings: AssistantActionSettings) {
+function buildTestPlan(result: AssistantActionResult, actionSettings: AssistantActionSettings, sellingPointPolicy: SellingPointPolicy = actionSettings.sellingPointPolicy) {
   const lines: string[] = []
   lines.push('素材测试计划')
   lines.push(`技能：${result.title}`)
   lines.push(`渠道：${getChannelLabel(actionSettings.channel)}`)
-  lines.push(`卖点策略：${getSellingPointPolicyLabel(actionSettings.sellingPointPolicy)}`)
+  lines.push(`卖点策略：${getSellingPointPolicyLabel(sellingPointPolicy)}`)
   const primary = result.variablePrompt || result.primaryText || result.candidates?.[0] || result.content
   if (primary) lines.push(`主推提示词：${primary}`)
   const candidates = result.candidates ?? []
@@ -166,7 +262,8 @@ export async function createAssistantSkillDraft(description: string, opts: { set
     input: [{ role: 'user', content: [{ type: 'input_text', text: [
       '你是图片与素材技能设计师。用户用自然语言描述想要的功能，请把它做成一个可执行的小技能。所有技能都必须把参考图片和用户原始文字作为最高事实源，最终输出不得被行业常识或通用模板替代。',
       '只返回严格 JSON，不要 Markdown：',
-      '{"name":"不超过8字的技能名称","icon":"image|wand|sparkles|palette|tags|thumbs-up","steps":["步骤1","步骤2"],"instruction":"给执行模型的完整中文指令。必须明确技能目标、必须保留项、仅允许改变项、禁止改变项、变化强度和所需 JSON 输出字段；只写与该技能名称直接相关的要求，不能默认加入跑量角度、首屏钩子、CTA、渠道版式、变量词条或测试命名。"}',
+      '{"name":"不超过8字的技能名称","icon":"image|wand|sparkles|palette|tags|thumbs-up","steps":["步骤1","步骤2"],"instruction":"给执行模型的完整中文指令。必须明确技能目标、必须保留项、仅允许改变项、禁止改变项、变化强度和所需 JSON 输出字段；只写与该技能名称直接相关的要求，不能默认加入跑量角度、首屏钩子、CTA、渠道版式、变量词条或测试命名。","contract":{"taskType":"analyze|prompt-optimize|image-variation|layout-variation|creative-expansion|extract-variables|review-data","objective":"一句话技能目标","preserve":["必须保留项"],"editable":["仅允许改变项"],"forbidden":["禁止改变项"],"variationLevel":"none|low|medium|high","requiresAdContext":false,"allowExploreSellingPoint":false,"primaryOutput":"finalPrompt|variablePrompt|analysis|candidate","output":{"finalPrompt":true,"candidates":true,"analysis":true,"wordEntries":false}}}',
+      'contract 必须保守：除非用户明确要求投放/跑量/渠道，requiresAdContext 必须为 false；除非用户明确要求扩展新卖点，allowExploreSellingPoint 必须为 false；除非用户明确要求生成变量词条，output.wordEntries 必须为 false。',
       `用户需求：${description}`,
     ].join('\n') }] }],
   })
@@ -177,14 +274,25 @@ export async function createAssistantSkillDraft(description: string, opts: { set
   const validIcons: AssistantCustomSkill['icon'][] = ['image', 'wand', 'sparkles', 'palette', 'tags', 'thumbs-up']
   const icon = validIcons.includes(parsed?.icon as AssistantCustomSkill['icon']) ? parsed?.icon as AssistantCustomSkill['icon'] : 'sparkles'
   const steps = Array.isArray(parsed?.steps) ? parsed.steps.map(String).map((step) => step.trim()).filter(Boolean).slice(0, 8) : []
-  return { name, icon, steps, instruction }
+  const contractRaw = parsed?.contract && typeof parsed.contract === 'object' ? parsed.contract : undefined
+  const readBool = (obj: unknown, key: string) => Boolean(obj && typeof obj === 'object' && (obj as Record<string, unknown>)[key])
+  const rawRequiresAd = readBool(contractRaw, 'requiresAdContext')
+  const rawExplore = readBool(contractRaw, 'allowExploreSellingPoint')
+  const rawOutput = contractRaw && typeof contractRaw === 'object' ? (contractRaw as unknown as Record<string, unknown>).output : undefined
+  const rawWordEntries = readBool(rawOutput, 'wordEntries')
+  const contract = contractRaw
+    ? buildCustomSkillContract(contractRaw, instruction, rawRequiresAd, rawWordEntries, rawExplore)
+    : undefined
+  return { name, icon, steps, instruction, contract }
 }
 
-function createAssistantActionInput(actionId: AssistantActionId, context: AssistantInputContext, actionSettings: AssistantActionSettings, customSkill?: AssistantCustomSkill) {
+function createAssistantActionInput(actionId: AssistantActionId, context: AssistantInputContext, actionSettings: AssistantActionSettings, customSkill?: AssistantCustomSkill, grounding?: GroundingProfile) {
   if (actionId === 'image-derive' && !customSkill) return createConceptExtractionInput(context)
 
+  const requiresAd = skillRequiresAdContext(actionId, customSkill)
   const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
   const contract = getActionContract(actionId, customSkill)
+  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, customSkill, actionSettings)
   const wordSettings = actionSettings.wordDerive
   const content: Array<Record<string, string>> = [
     {
@@ -198,6 +306,7 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '【参考输入优先规则，所有技能强制执行】',
         '参考图片和用户原始文字是最高事实源；技能名称只决定如何处理这些输入，不允许用行业常识、通用广告模板或常见案例替换参考输入。',
         '先观察参考图并提取 3–8 个可验证的 sourceAnchors，包括真实主体、主体位置与占比、构图、背景、颜色、文字与排版、场景、材质、光影和视觉风格；不得把推测的人群、行业、卖点或效果写成图片事实。',
+        '同时按字段回填 visualIdentity（subject / composition / color / scene / textLayout / style），每个字段只写图片中可直接观察到的内容，无法观察的字段留空字符串；没有参考图时省略 visualIdentity。',
         '最终提示词必须以 sourceAnchors 和用户原始文字为主干，逐项写出需要保留的参考特征，再执行当前技能允许的改变；不能只在分析中提到参考图，最终提示词却改用通用行业方案。',
         '行业知识只能补足完成任务不可缺少且参考输入没有说明的中性执行细节；不得新增产品、人物、场景、卖点、功效、受众、品牌、价格、活动、CTA 或渠道版式。',
         '每个 finalPrompt、variablePrompt 和 prompts 候选都必须能逐项追溯到参考输入。无法从参考输入确认的内容必须省略，不能用“通常、行业常见、建议”等理由补造。',
@@ -206,17 +315,20 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '',
         '【卖点保护规则，必须严格遵守】',
         '默认不得改变用户输入中的核心卖点、价格、承诺、适用人群、活动机制和品牌信息。',
-        `当前卖点策略为「${getSellingPointPolicyLabel(actionSettings.sellingPointPolicy)}」：${getSellingPointPolicyRule(actionSettings.sellingPointPolicy)}`,
+        `当前卖点策略为「${getSellingPointPolicyLabel(effectiveSellingPointPolicy)}」：${getSellingPointPolicyRule(effectiveSellingPointPolicy)}`,
         '如果必须推断卖点，必须明确标注为“推断卖点”，不得当作用户已确认卖点。',
         '除非开启“允许探索新卖点”，否则只能改变画面表达、场景、人群切入、视觉钩子、版式、字幕位置和 CTA。',
         '',
         contract ? formatSkillContract(contract) : '',
+        grounding && summarizeGrounding(grounding) ? `【输入事实卡，所有技能复用同一份真实内容，不得用通用模板或行业常识替换】\n${summarizeGrounding(grounding)}` : '',
         INFORMATION_FLOW_AD_COMPLIANCE_PROMPT,
         '',
         'JSON 结构：',
         '{',
         '  "summary": "一句话说明这组素材适合测试的方向",',
-        '  "sourceAnchors": ["从参考图或原始文字中提取的可验证依据，3–8 条；没有参考输入时为空数组"],',
+        '  "sourceAnchors": ["从参考图或原始文字中提取的可验证依据，3–8 条；每条必须能直接追溯到输入，不得写入推断；没有参考输入时为空数组"],',
+        '  "assumptions": ["无法从参考输入确认、必须由模型给出的假设或推断，例如推断的人群/卖点/效果；纯分析无假设时为空数组；所有假设必须明确标注为推断，不得当作输入事实"],',
+        '  "visualIdentity": {"subject":"图片中可见主体","composition":"主体位置、占比、构图","color":"主色与辅助色","scene":"场景/背景","textLayout":"文字、字幕或 CTA 区域","style":"材质、光影、真实/插画/3D 等"},  仅当有参考图且可观察时填写，无法观察的字段留空字符串；无参考图时省略该字段',
         '  "finalPrompt": "以参考输入和 sourceAnchors 为主干、按当前技能做受控处理的完整生图提示词，可为空",',
         allowVariableOutput
           ? '  "variablePrompt": "仅当该技能需要变量词条时填写，且占位符必须与 wordEntries.category 完全一致，例如 {{产品主体}}；否则为空",'
@@ -242,7 +354,7 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '',
         `功能条：${customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能'}`,
         `目标渠道：${getChannelLabel(actionSettings.channel)}`,
-        `卖点策略：${getSellingPointPolicyLabel(actionSettings.sellingPointPolicy)}`,
+        `卖点策略：${getSellingPointPolicyLabel(effectiveSellingPointPolicy)}`,
         `当前文字：${context.text || '（无）'}`,
         `参考图片数量：${context.imageCount}`,
         '',
@@ -309,6 +421,25 @@ function attachSourceAnchors(
     sections: sourceAnchors.length > 0 && !hasSourceSection
       ? [{ title: '参考输入依据', items: sourceAnchors }, ...existingSections]
       : payload.sections,
+  }
+}
+
+/** Merge the model-reported structured image observation into the input fact card. */
+function attachVisualIdentity(profile: GroundingProfile, visualIdentity: VisualIdentity): GroundingProfile {
+  return { ...profile, visualIdentity }
+}
+
+function normalizeVisualIdentity(value: unknown): VisualIdentity {
+  const empty: VisualIdentity = { subject: '', composition: '', color: '', scene: '', textLayout: '', style: '' }
+  if (!value || typeof value !== 'object') return empty
+  const record = value as Record<string, unknown>
+  return {
+    subject: typeof record.subject === 'string' ? record.subject.trim() : '',
+    composition: typeof record.composition === 'string' ? record.composition.trim() : '',
+    color: typeof record.color === 'string' ? record.color.trim() : '',
+    scene: typeof record.scene === 'string' ? record.scene.trim() : '',
+    textLayout: typeof record.textLayout === 'string' ? record.textLayout.trim() : '',
+    style: typeof record.style === 'string' ? record.style.trim() : '',
   }
 }
 
@@ -412,11 +543,11 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
       ].join('\n')
     case 'prompt-optimize':
       return [
-        '这是“提示词优化”技能。用户输入了一段提示词或产品描述，请在不改变原意的前提下提升其清晰度、完整性和可执行性。',
-        '“原始提示词诊断”：只指出画面表达、主体关系、场景、风格、约束或合规上的不足；用户未要求时不要主动补充钩子、版式、CTA 或渠道要求。',
+        '这是“提示词优化”技能。用户输入了一段提示词或产品描述，请在不改变原意、事实和承诺的前提下提升其清晰度、完整性与可执行性。',
+        '“原始提示词诊断”：只指出画面表达、主体关系、场景、风格、约束或合规上的不足；用户未要求时，不要主动补充钩子、版式、CTA、渠道要求或变量词条。',
         '“锁定内容”：不得改变核心卖点、产品事实、品牌、价格、承诺、适用人群、画幅和用户明确指定的风格或场景。',
-        'finalPrompt 只放最终可直接使用的完整生图提示词。',
-        `prompts 输出 ${actionSettings.outputCount} 条轻微不同的优化版本，只允许改变表达清晰度和细节组织，不得发散成新创意方向。`,
+        'finalPrompt 只放最终可直接使用的完整生图提示词，不要套用信息流广告模板。',
+        `prompts 输出 ${actionSettings.outputCount} 条轻微不同的优化版本，只允许改变表达清晰度和细节组织，不得发散成新创意方向，不要默认改成竖版信息流广告。`,
         'sections 必须包含：原始提示词诊断、锁定内容、优化后主提示词、候选优化版本、合规风险。',
         '不要做变量拆解，不要输出变量词条，不要把画幅比例、风格、构图、光影、材质等做成 {{变量}}。',
         'variablePrompt 必须为空字符串，wordEntries 必须为空数组。',
@@ -524,7 +655,7 @@ function normalizeConceptExtractionPrompt(value: string) {
   return prompt
 }
 
-function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, fallback: AssistantActionResult, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS): AssistantActionResult {
+function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS): AssistantActionResult {
   const contract = getActionContract(actionId, customSkill)
   const candidates = contract?.output.candidates === false ? [] : normalizeStringArray(payload.prompts)
   const sections = contract?.output.analysis === false ? [] : normalizeSections(payload.sections)
@@ -533,21 +664,21 @@ function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJ
   const rawFinalPrompt = contract?.output.finalPrompt === false ? '' : typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
   const finalPrompt = actionId === 'image-derive' ? normalizeConceptExtractionPrompt(rawFinalPrompt) : rawFinalPrompt
   const rawVariablePrompt = allowVariableOutput && typeof payload.variablePrompt === 'string' ? payload.variablePrompt.trim() : ''
-  const blockedWordEntryValues = new Set(sections.flatMap((section) => section.items.map((item) => item.trim()).filter(Boolean)))
+  const blockedWordEntryValues = new Set((sections ?? []).flatMap((section) => section.items.map((item) => item.trim()).filter(Boolean)))
   const { variablePrompt, wordEntries } = normalizeVariableOutput(rawVariablePrompt, rawWordEntries, actionSettings.wordDerive.categories, blockedWordEntryValues)
   const summary = typeof payload.summary === 'string' ? payload.summary.trim() : ''
-  const content = formatPayloadContent({ summary, finalPrompt, variablePrompt, candidates, sections, wordEntries })
-  const primaryText = getPrimaryText(contract?.primaryOutput, { finalPrompt, variablePrompt, candidates, sections, content, fallback })
+  const content = formatPayloadContent({ summary, finalPrompt, variablePrompt, candidates, sections: sections ?? [], wordEntries })
+  const primaryText = getPrimaryText(contract?.primaryOutput, { finalPrompt, variablePrompt, candidates, sections: sections ?? [], content })
 
   return {
     actionId,
     title: title ?? ACTION_TITLES[actionId] ?? '自定义技能',
-    content: content || fallback.content,
-    candidates: candidates.length ? candidates : finalPrompt ? [finalPrompt] : fallback.candidates,
-    sections: sections.length ? sections : fallback.sections,
-    wordEntries: wordEntries.length ? wordEntries : allowVariableOutput ? fallback.wordEntries : undefined,
+    content,
+    candidates: candidates.length ? candidates : finalPrompt ? [finalPrompt] : [],
+    sections: sections.length ? sections : undefined,
+    wordEntries: wordEntries.length ? wordEntries : allowVariableOutput ? [] : undefined,
     primaryText,
-    variablePrompt: variablePrompt || (allowVariableOutput ? fallback.variablePrompt : undefined),
+    variablePrompt: variablePrompt || undefined,
   }
 }
 
@@ -559,16 +690,14 @@ function getPrimaryText(
     candidates: string[]
     sections: AssistantResultSection[]
     content: string
-    fallback: AssistantActionResult
   },
 ) {
-  const fallback = value.fallback.primaryText || value.fallback.candidates?.[0] || value.fallback.content
   switch (primaryOutput) {
-    case 'finalPrompt': return value.finalPrompt || value.candidates[0] || fallback
-    case 'variablePrompt': return value.variablePrompt || value.finalPrompt || value.candidates[0] || fallback
-    case 'analysis': return value.content || value.sections[0]?.items.join('\n') || fallback
-    case 'candidate': return value.candidates[0] || value.finalPrompt || fallback
-    default: return value.variablePrompt || value.finalPrompt || value.candidates[0] || fallback
+    case 'finalPrompt': return value.finalPrompt || value.candidates[0] || ''
+    case 'variablePrompt': return value.variablePrompt || value.finalPrompt || value.candidates[0] || ''
+    case 'analysis': return value.content || value.sections[0]?.items.join('\n') || ''
+    case 'candidate': return value.candidates[0] || value.finalPrompt || ''
+    default: return value.variablePrompt || value.finalPrompt || value.candidates[0] || ''
   }
 }
 
@@ -591,7 +720,10 @@ function normalizeVariableOutput(variablePrompt: string, wordEntries: AssistantW
       category: group.category.trim(),
       entries: sanitizeVariableEntryValues(group.category, group.entries, blockedValues),
     }))
-    .filter((group) => allowedCategorySet.has(group.category) && (placeholderNames.size === 0 || placeholderNames.has(group.category)) && group.entries.length > 0)
+    // Keep every allowed category with entries. Missing placeholders are patched
+    // locally afterwards (only when a model-provided variable prompt exists),
+    // so we must not drop them here.
+    .filter((group) => allowedCategorySet.has(group.category) && group.entries.length > 0)
   const validNames = new Set(filteredWordEntries.map((group) => group.category))
   const normalizedPrompt = variablePrompt.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, name: string) => {
     const normalizedName = String(name).trim()
@@ -603,7 +735,7 @@ function normalizeVariableOutput(variablePrompt: string, wordEntries: AssistantW
 async function completeWordEntriesIfNeeded(
   result: AssistantActionResult,
   actionSettings: AssistantActionSettings,
-  context: AssistantInputContext,
+  _context: AssistantInputContext,
   opts: {
     settings: AppSettings
     profile: ApiProfile
@@ -613,128 +745,57 @@ async function completeWordEntriesIfNeeded(
   },
 ): Promise<AssistantActionResult> {
   if (result.actionId === 'word-extract') return result
-  const targetCount = actionSettings.wordDerive.variableCount
   const allowedCategorySet = new Set(actionSettings.wordDerive.categories)
-  const blockedValues = new Set(result.sections?.flatMap((section) => section.items.map((item) => item.trim()).filter(Boolean)) ?? [])
   const groups = (result.wordEntries ?? [])
     .filter((group) => allowedCategorySet.has(group.category))
-    .map((group) => ({ ...group, entries: sanitizeVariableEntryValues(group.category, group.entries, blockedValues).slice(0, targetCount) }))
+    .map((group) => ({ ...group, entries: sanitizeVariableEntryValues(group.category, group.entries).filter(Boolean) }))
+    .filter((group) => group.entries.length > 0)
   if (groups.length === 0) return result
-  const missing = groups.filter((group) => group.entries.length < targetCount)
-  if (missing.length === 0) return rebuildResultContent(ensureVariablePromptCoversGroups({ ...result, wordEntries: groups }))
 
-  try {
-    opts.onProgress?.({ stage: 'repair-variables', detail: `发现 ${missing.length} 个变量分类数量不足，正在补全词条。` })
-    const repairContent: Array<Record<string, string>> = [{
-      type: 'input_text',
-      text: [
-        '你是信息流广告变量词条补全器。只返回严格 JSON，不要 Markdown。',
-        '必须先理解用户原始提示词、参考图片和已有分析，再补全变量；词条必须贴合当前素材主题，禁止输出泛泛模板词。',
-        `用户原始提示词：${context.text || '（无）'}`,
-        `参考图片数量：${context.imageCount}`,
-        `目标：把每个 wordEntries.category 补足到 ${targetCount} 个不重复短词条。`,
-        `允许的分类只有：${actionSettings.wordDerive.categories.join('、')}。`,
-        '不要输出“画幅比例、风格、构图、光影、材质、合规禁忌”等工具型分类。',
-        INFORMATION_FLOW_AD_COMPLIANCE_PROMPT,
-        '不要改 category 名称。entries 必须是短词条，可直接替换对应变量，不要长句。',
-        '返回格式：{"wordEntries":[{"category":"分类名","entries":["词条1"]}]}',
-        `当前 variablePrompt：${result.variablePrompt || '（无）'}`,
-        `主推/候选提示词：${JSON.stringify(result.candidates ?? [])}`,
-        `分析说明：${JSON.stringify(result.sections ?? [])}`,
-        `现有 wordEntries：${JSON.stringify(groups)}`,
-        `需要补足的分类：${missing.map((group) => `${group.category} 还缺 ${targetCount - group.entries.length} 个`).join('；')}`,
-      ].join('\n'),
-    }]
-    for (const image of context.images) {
-      repairContent.push({ type: 'input_image', image_url: image.dataUrl })
-    }
-    const repairResponse = await callAgentResponsesApi({
-      settings: opts.settings,
-      profile: opts.profile,
-      params: opts.params,
-      input: [{
-        role: 'user',
-        content: repairContent,
-      }],
-    })
-    const parsed = parseAssistantJsonPayload(repairResponse.text)
-    const repairedEntries = normalizeWordEntries(parsed?.wordEntries)
-    const repairedByCategory = new Map(repairedEntries.map((group) => [group.category, group.entries]))
-    const merged = groups.map((group) => ({
-      category: group.category,
-      entries: sanitizeVariableEntryValues(group.category, [...group.entries, ...(repairedByCategory.get(group.category) ?? [])], blockedValues).slice(0, targetCount),
-    }))
-    return rebuildResultContent(ensureVariablePromptCoversGroups({ ...result, wordEntries: merged }))
-  } catch {
-    return rebuildResultContent(ensureVariablePromptCoversGroups({ ...result, wordEntries: groups }))
-  }
-}
-
-function ensureVariablePromptCoversGroups(result: AssistantActionResult): AssistantActionResult {
-  const groups = result.wordEntries?.filter((group) => group.entries.length > 0) ?? []
-  if (groups.length === 0) return result
   const existingPrompt = result.variablePrompt ?? ''
-  const placeholderNames = new Set(
-    [...existingPrompt.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
-      .map((match) => match[1]?.trim())
-      .filter((name): name is string => Boolean(name)),
-  )
-  const missingGroups = groups.filter((group) => !placeholderNames.has(group.category))
-  if (existingPrompt && missingGroups.length === 0) {
-    return { ...result, primaryText: resolveResultPrimaryText(result) }
-  }
 
-  const rebuiltPrompt = buildVariablePrompt(groups, result.candidates?.[0] ?? result.primaryText ?? '')
-  const nextResult = {
-    ...result,
-    variablePrompt: rebuiltPrompt,
-  }
-  return { ...nextResult, primaryText: resolveResultPrimaryText(nextResult) }
-}
-
-function buildVariablePrompt(groups: AssistantWordEntryGroup[], seedPrompt: string) {
-  const categories = groups.map((group) => group.category)
-  const categorySet = new Set(categories)
-  const fragments: string[] = []
-  const append = (category: string, text: string) => {
-    if (categorySet.has(category)) fragments.push(text)
-  }
-
-  append('产品主体', '以{{产品主体}}为核心主体')
-  append('目标人群', '面向{{目标人群}}')
-  append('痛点场景', '呈现{{痛点场景}}')
-  append('核心卖点', '突出{{核心卖点}}')
-  append('视觉钩子', '首屏使用{{视觉钩子}}')
-  append('情绪氛围', '营造{{情绪氛围}}')
-  append('人物状态', '人物呈现{{人物状态}}')
-  append('使用场景', '放在{{使用场景}}中')
-  append('信任背书', '加入{{信任背书}}')
-  append('优惠机制', '保留{{优惠机制}}')
-  append('CTA', '底部预留{{CTA}}')
-  append('平台版式', '采用{{平台版式}}')
-
-  for (const category of categories) {
-    if (!fragments.some((fragment) => fragment.includes(`{{${category}}}`))) {
-      fragments.push(`包含{{${category}}}`)
+  // P1: 模型没有返回变量主提示词时，不本地新建。宁可少生成，
+  // 也别生成一条看起来“像完成”的空模板提示词（裸拼 {{分类}} 仍像变量皮肤）。
+  if (!existingPrompt.trim()) {
+    opts.onProgress?.({ stage: 'repair-variables', detail: '模型返回了变量词条，但没有返回可用的变量主提示词；已保留词条，未自动拼接模板。' })
+    return {
+      ...result,
+      wordEntries: groups,
+      qualityState: 'insufficient-data',
+      qualityNote: '模型返回了变量词条，但没有返回可替换的变量主提示词；已保留词条，未自动拼接模板。',
     }
   }
 
-  const base = fragments.join('，')
-  const suffix = '，信息流广告竖版素材，主体清晰，画面干净，字幕少而精，适合投放测试，避免夸大承诺和违规元素。'
-  return base ? `${seedPrompt ? `基于当前素材方向：${seedPrompt}。` : ''}${base}${suffix}` : seedPrompt
+  // 模型返回了变量主提示词：只允许局部补缺少的占位符，不重建原文。
+  const patchedPrompt = patchVariablePromptPlaceholders(existingPrompt, groups)
+  if (patchedPrompt === existingPrompt) {
+    return { ...result, wordEntries: groups }
+  }
+  opts.onProgress?.({ stage: 'repair-variables', detail: '变量主提示词缺少对应占位符，正在局部补位（不重建原文）。' })
+  const next: AssistantActionResult = {
+    ...result,
+    variablePrompt: patchedPrompt,
+    wordEntries: groups,
+    qualityState: 'repaired',
+  }
+  return { ...next, primaryText: resolveResultPrimaryText(next) }
 }
 
-function rebuildResultContent(result: AssistantActionResult): AssistantActionResult {
-  const content = formatPayloadContent({
-    summary: '',
-    finalPrompt: result.candidates?.[0] ?? '',
-    variablePrompt: result.variablePrompt ?? '',
-    candidates: result.candidates ?? [],
-    sections: result.sections ?? [],
-    wordEntries: result.wordEntries ?? [],
-  })
-  const nextResult = { ...result, content: content || result.content }
-  return { ...nextResult, primaryText: resolveResultPrimaryText(nextResult) }
+function extractPlaceholders(text: string): string[] {
+  return [...text.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
+    .map((match) => match[1]?.trim())
+    .filter((name): name is string => Boolean(name))
+}
+
+function patchVariablePromptPlaceholders(variablePrompt: string, groups: AssistantWordEntryGroup[]): string {
+  const existing = variablePrompt ?? ''
+  // P1: 没有现成变量主提示词时，绝不本地裸拼 {{分类}} 当成变量皮肤。
+  if (!existing.trim()) return existing
+  const placeholderNames = new Set(extractPlaceholders(existing))
+  const missing = groups.filter((group) => group.entries.length > 0 && !placeholderNames.has(group.category))
+  if (missing.length === 0) return existing
+  const additions = missing.map((group) => `{{${group.category}}}`)
+  return [existing.trim(), ...additions].filter(Boolean).join('，')
 }
 
 function resolveResultPrimaryText(result: AssistantActionResult) {
@@ -744,7 +805,6 @@ function resolveResultPrimaryText(result: AssistantActionResult) {
     candidates: result.candidates ?? [],
     sections: result.sections ?? [],
     content: result.content,
-    fallback: result,
   })
 }
 
@@ -842,78 +902,4 @@ function extractPrimaryPrompt(text: string) {
   const numbered = text.match(/^\s*(?:1[.、)]\s*)(.+)$/m)
   if (numbered?.[1]?.trim()) return numbered[1].trim()
   return text.trim()
-}
-
-function getSeedText(context: AssistantInputContext) {
-  if (context.hasText) return context.text
-  if (context.hasImage) return '参考图中的核心主体与画面氛围'
-  return '一个有明确主体、背景、风格和构图的画面'
-}
-
-function createFallbackResult(actionId: AssistantActionId, context: AssistantInputContext, customSkill?: AssistantCustomSkill): AssistantActionResult {
-  const seed = getSeedText(context)
-  switch (actionId) {
-    case 'image-derive': {
-      const finalPrompt = '基于参考图生成一张独立画面，提炼并呈现一个新的核心功能符号；整体视觉风格和构图、配色、材质、光线、视角、背景、主体尺度与留白均严格沿用参考图，仅替换主体语义，保持单一清晰焦点，禁止拼图、九宫格、多联画和同画布多方案。'
-      return { actionId, title: ACTION_TITLES[actionId], content: finalPrompt, candidates: [finalPrompt], primaryText: finalPrompt }
-    }
-    case 'image-describe': {
-      const prompt = `参考图作为信息流广告素材：竖版构图，前 3 秒有明确视觉钩子，突出产品/人物主体、用户痛点、核心卖点、真实使用场景、短字幕区域和 CTA，画面自然可信，避免夸大承诺。`
-      return { actionId, title: ACTION_TITLES[actionId], content: prompt, candidates: [prompt], primaryText: prompt }
-    }
-    case 'super-derive': {
-      const finalPrompt = `${seed}，信息流广告竖版素材，首屏钩子清晰，目标人群一眼能理解痛点，产品主体突出，真实使用场景，强卖点可视化，字幕和 CTA 预留在画面下方，平台原生感，真实可信，避免绝对化承诺。`
-      const variablePrompt = `{{产品主体}}，面向{{目标人群}}，呈现{{痛点场景}}，突出{{核心卖点}}，使用{{视觉钩子}}，{{情绪氛围}}，{{人物状态}}，{{使用场景}}，加入{{信任背书}}和{{优惠机制}}，下方预留{{CTA}}，采用{{平台版式}}。`
-      const wordEntries = [
-        { category: '产品主体', entries: ['核心产品特写', '产品使用瞬间', '产品前后对比', '包装与手部互动', '产品卖点放大'] },
-        { category: '痛点场景', entries: ['日常困扰现场', '使用前混乱状态', '高频生活问题', '用户犹豫瞬间', '场景化需求触发'] },
-        { category: '视觉钩子', entries: ['强对比画面', '夸张但合规的结果展示', '手持近景开场', '疑问式字幕', '三秒变化瞬间'] },
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: `最终提示词：${finalPrompt}\n\n词条提示词：${variablePrompt}`, candidates: [finalPrompt], wordEntries, primaryText: variablePrompt, variablePrompt }
-    }
-    case 'prompt-optimize': {
-      const prompt = `${seed}，优化为信息流广告竖版素材提示词：首屏钩子明确，痛点和卖点可视化，人物/产品主体突出，真实场景，标题字幕区域清晰，CTA 自然，适合投放测试，避免夸大和违规表达。`
-      return { actionId, title: ACTION_TITLES[actionId], content: prompt, candidates: [prompt], primaryText: prompt }
-    }
-    case 'style-expand': {
-      const candidates = [
-        `${seed}，真人口播感竖版信息流素材，人物半身近景，顶部疑问式钩子字幕，下方 CTA。`,
-        `${seed}，UGC 测评感素材，手持产品近景，真实家居场景，字幕列出 3 个卖点。`,
-        `${seed}，强对比海报感素材，左右对比构图，痛点和结果并列，下方行动按钮区。`,
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: candidates.map((item, index) => `${index + 1}. ${item}`).join('\n'), candidates, primaryText: candidates[0] }
-    }
-    case 'word-extract': {
-      const wordEntries = [
-        { category: '产品主体', entries: context.hasText ? [seed] : ['核心产品特写'] },
-        { category: '痛点场景', entries: ['日常困扰', '使用前问题', '高频需求场景'] },
-        { category: '视觉钩子', entries: ['强对比开场', '疑问式字幕', '三秒变化'] },
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: formatPayloadContent({ summary: '', finalPrompt: '', variablePrompt: '', candidates: [], sections: [], wordEntries }), wordEntries, primaryText: '' }
-    }
-    case 'prompt-examples': {
-      const candidates = [
-        '竖版信息流广告素材，真实用户在家中展示产品使用前后的变化，顶部大字钩子“原来问题出在这里”，产品近景清晰，下方预留 CTA。',
-        'UGC 测评风格广告素材，手持产品对镜头展示，桌面真实生活场景，字幕列出 3 个核心卖点，画面自然可信。',
-        '痛点解决型素材，左侧展示用户困扰场景，右侧展示使用后的清爽结果，中间放产品主体，下方行动按钮区域。',
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: candidates.map((item, index) => `${index + 1}. ${item}`).join('\n'), candidates, primaryText: candidates[0] }
-    }
-    case 'market-breakdown':
-    case 'viral-remix':
-    case 'angle-matrix':
-    case 'batch-variants':
-    case 'ad-review': {
-      const candidates = [
-        `${seed}，痛点解决型信息流广告竖版素材，首屏用强问题钩子吸引目标人群，产品主体清晰，真实场景展示解决路径，下方 CTA。`,
-        `${seed}，结果展示型素材，前后状态形成视觉对比，卖点用短字幕表达，画面真实可信，适合 A/B 测试。`,
-        `${seed}，UGC 测评型素材，人物自然展示产品，字幕列出核心卖点和信任背书，平台原生感强。`,
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: candidates.map((item, index) => `${index + 1}. ${item}`).join('\n'), candidates, primaryText: candidates[0] }
-    }
-    default: {
-      const prompt = `${seed}，根据「${customSkill?.name ?? '自定义技能'}」处理并生成一段可直接使用的高质量生图提示词。`
-      return { actionId, title: customSkill?.name ?? '自定义技能', content: prompt, candidates: [prompt], primaryText: prompt }
-    }
-  }
 }

@@ -3,11 +3,11 @@ import type { WheelEvent } from 'react'
 import { AlertCircle, ArrowDown, ArrowUp, Check, Image, Loader2, Palette, Plus, Settings, Sparkles, Tags, ThumbsUp, Trash2, Type, Wand2, X } from 'lucide-react'
 import { buildAssistantInputContext } from './context'
 import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
-import { DEFAULT_SUPER_DERIVE_SETTINGS, getMoreAssistantActions, getRecommendedAssistantActions, getWhenByTrigger, normalizeAssistantActionPreferences } from './matcher'
+import { buildCustomSkillContract, DEFAULT_SUPER_DERIVE_SETTINGS, getMoreAssistantActions, getRecommendedAssistantActions, getWhenByTrigger, normalizeAssistantActionPreferences } from './matcher'
 import { createAssistantSkillDraft, runAssistantAction } from './runner'
 import type { AssistantRunnerProgressUpdate, AssistantSkillDraft } from './runner'
 import type { ApiProfile, AppSettings, InputImage, TaskParams, WordLibraryGroup } from '../../types'
-import type { AdChannel, AssistantAction, AssistantActionIcon, AssistantActionPreferences, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantSkillTrigger, AssistantWordEntryGroup, SellingPointPolicy, WordDeriveActionSettings } from './types'
+import type { AdChannel, AssistantAction, AssistantActionIcon, AssistantActionPreferences, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantSkillTrigger, AssistantWordEntryGroup, SellingPointPolicy, VisualIdentity, WordDeriveActionSettings } from './types'
 import { AD_CHANNEL_OPTIONS, OUTPUT_COUNT_OPTIONS, SELLING_POINT_POLICY_OPTIONS } from './types'
 import Select from '../../components/Select'
 
@@ -546,7 +546,7 @@ function getAssistantActionDescription(action: AssistantAction) {
     case 'super-derive':
       return '围绕有效素材结构进行大幅创意扩展，探索新的场景、钩子、人物和表现形式。'
     case 'prompt-optimize':
-      return '将普通描述优化成适合信息流投放测试的生图提示词，补齐钩子、卖点、版式和合规约束，默认不改核心卖点。'
+      return '在不改变原意、事实和承诺的前提下提升提示词清晰度、完整性与可执行性；不默认加入钩子、版式、CTA 或渠道要求，也不生成变量词条。'
     case 'style-expand':
       return '锁定主体、内容、色板和视觉风格，只扩展标题、主体、图文比例和 CTA 的布局方式。'
     case 'word-extract':
@@ -923,6 +923,40 @@ function AssistantActionResultPanel({
   const wordEntryCount = result.wordEntries?.reduce((sum, group) => sum + group.entries.length, 0) ?? 0
   const channelLabel = result.channel ? (AD_CHANNEL_OPTIONS.find((option) => option.value === result.channel)?.label ?? result.channel) : '通用信息流'
   const policyLabel = result.sellingPointPolicy ? (SELLING_POINT_POLICY_OPTIONS.find((option) => option.value === result.sellingPointPolicy)?.label ?? result.sellingPointPolicy) : '锁定原卖点'
+  const qualityState = result.qualityState ?? 'complete'
+  const qualityLabel =
+    qualityState === 'repaired' ? '已局部修复'
+      : qualityState === 'insufficient-data' ? '数据不足'
+        : qualityState === 'failed' ? '生成失败'
+          : '完成'
+  const qualityNote = result.qualityNote
+  const [factOpen, setFactOpen] = useState(true)
+  const [sourceOpen, setSourceOpen] = useState(true)
+  const grounding = result.grounding
+  const observedFacts = grounding?.observedFacts ?? []
+  const missingInfo = grounding?.missingInformation ?? []
+  const sourceAnchors = result.sourceAnchors ?? []
+  const assumptions = result.assumptions ?? []
+  const visualIdentity = grounding?.visualIdentity
+  const visualIdentityFields: Array<{ key: keyof VisualIdentity; label: string }> = [
+    { key: 'subject', label: '主体' },
+    { key: 'composition', label: '构图' },
+    { key: 'color', label: '色彩' },
+    { key: 'scene', label: '场景' },
+    { key: 'textLayout', label: '文字/字幕' },
+    { key: 'style', label: '风格' },
+  ]
+  const hasVisualIdentity = !!visualIdentity && visualIdentityFields.some((field) => (visualIdentity as VisualIdentity)[field.key])
+  const hadImage = grounding?.observedFacts.some((fact) => fact.source === 'image') ?? false
+  // P0: 第4层不再写死“无依据事实：0”。系统没有做逐句事实校验，
+  // 因此只展示可解释的质量指标：模型是否回报了输入依据与假设。
+  const evidenceLabel =
+    sourceAnchors.length > 0 ? `输入依据 ${sourceAnchors.length}` : '未返回输入依据'
+  const assumptionLabel =
+    assumptions.length > 0 ? `假设 ${assumptions.length}` : '无显式假设'
+  const placeholderNames = extractPlaceholderNames(result.variablePrompt ?? '')
+  const placeholderMapped = placeholderNames.filter((name) => (result.wordEntries ?? []).some((group) => group.category === name))
+  const placeholderUnmapped = placeholderNames.filter((name) => !placeholderMapped.includes(name))
   const copyTestPlan = async () => {
     const text = result.testPlan || mainPrompt
     try {
@@ -986,27 +1020,114 @@ function AssistantActionResultPanel({
     setWordEntriesOpen(false)
     setAnalysisOpen(false)
     setShowAllCandidates(false)
+    setFactOpen(true)
+    setSourceOpen(true)
   }, [result])
 
   return (
     <div className="absolute bottom-full left-0 right-0 z-40 mb-2 rounded-2xl border border-gray-200/70 bg-white p-3 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-gray-900 dark:ring-white/10">
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2"><Check className="h-4 w-4 shrink-0 text-green-500" /><div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{result.title}完成</div></div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">渠道：{channelLabel}</span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">卖点：{policyLabel}</span>
+          <div className="flex items-center gap-2">
+            {qualityState === 'failed' ? (
+              <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+            ) : qualityState === 'repaired' ? (
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
+            ) : qualityState === 'insufficient-data' ? (
+              <AlertCircle className="h-4 w-4 shrink-0 text-blue-500" />
+            ) : (
+              <Check className="h-4 w-4 shrink-0 text-green-500" />
+            )}
+            <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {result.title}
+              <span className="ml-1 text-[11px] font-normal text-gray-400">{qualityLabel}</span>
+            </div>
           </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {result.channel && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">渠道：{channelLabel}</span>
+            )}
+            {result.sellingPointPolicy && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">卖点：{policyLabel}</span>
+            )}
+            {qualityState === 'repaired' && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">局部修复</span>
+            )}
+            {qualityState === 'insufficient-data' && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/15 dark:text-blue-300">数据不足</span>
+            )}
+          </div>
+          {qualityNote && <div className="mt-1 text-[11px] leading-relaxed text-amber-600 dark:text-amber-300">{qualityNote}</div>}
         </div>
         <button type="button" onClick={onClose} className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"><X className="h-4 w-4" /></button>
       </div>
-      <div className="max-h-64 overflow-auto rounded-xl bg-gray-50 p-3 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-200">
+      <div className="max-h-72 overflow-auto rounded-xl bg-gray-50 p-3 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-200">
+        {/* Layer 1: 输入事实卡（只读，供用户确认“你理解的是这些”） */}
+        {(observedFacts.length > 0 || missingInfo.length > 0) && (
+          <div className="mb-2 rounded-xl border border-gray-200/70 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <button type="button" onClick={() => setFactOpen((open) => !open)} className="flex w-full items-center justify-between gap-2 px-2 py-2 text-left">
+              <span className="flex items-center gap-1.5 font-medium text-gray-800 dark:text-gray-100">
+                <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-white/[0.08] dark:text-gray-400">第1层</span>输入事实卡
+              </span>
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">{observedFacts.length} 条事实 · {factOpen ? '收起' : '展开'}</span>
+            </button>
+            {factOpen && (
+              <div className="space-y-1.5 border-t border-gray-100 p-2 dark:border-white/[0.08]">
+                {observedFacts.map((fact, index) => (
+                  <div key={index} className="flex items-start gap-1.5">
+                    <span className="mt-0.5 shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">已确认</span>
+                    <span className="text-gray-600 dark:text-gray-300">{fact.fact}<span className="ml-1 text-[10px] text-gray-400">（{fact.sourceRef ?? fact.source}）</span></span>
+                  </div>
+                ))}
+                {missingInfo.map((info, index) => (
+                  <div key={`m-${index}`} className="flex items-start gap-1.5">
+                    <span className="mt-0.5 shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600 dark:bg-amber-500/15 dark:text-amber-300">缺信息</span>
+                    <span className="text-gray-600 dark:text-gray-300">{info}</span>
+                  </div>
+                ))}
+                {hasVisualIdentity ? (
+                  <div className="mt-1.5 border-t border-gray-100 pt-1.5 dark:border-white/[0.08]">
+                    <div className="mb-1 text-[11px] font-medium text-blue-700 dark:text-blue-300">图片结构化观察（来自模型，非本地猜测）</div>
+                    <dl className="space-y-0.5 text-[11px] text-gray-600 dark:text-gray-300">
+                      {visualIdentityFields.map((field) => {
+                        const value = (visualIdentity as VisualIdentity)[field.key]
+                        if (!value) return null
+                        return (
+                          <div key={field.key} className="flex gap-1">
+                            <span className="shrink-0 text-gray-400">{field.label}：</span>
+                            <span>{value}</span>
+                          </div>
+                        )
+                      })}
+                    </dl>
+                  </div>
+                  ) : (
+                  hadImage && (
+                    <div className="mt-1.5 border-t border-gray-100 pt-1.5 text-[11px] text-gray-400 dark:border-white/[0.08]">
+                      未返回图片结构化观察，请勿将其误认为已理解图片内容。
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Layer 2: 生成内容 */}
+        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-gray-500 dark:text-gray-400">
+          <span className="rounded bg-blue-50 px-1 text-[10px] text-blue-600 dark:bg-blue-500/15 dark:text-blue-300">第2层</span>生成内容
+        </div>
         <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-2 dark:border-blue-500/30 dark:bg-blue-500/10">
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="font-medium text-blue-700 dark:text-blue-200">{canApplyWordPrompt ? '变量主提示词' : '主推提示词'}</div>
             {canApplyWordPrompt && <span className="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-medium text-white">词条版</span>}
           </div>
           <div className="whitespace-pre-wrap text-gray-800 dark:text-gray-100">{mainPrompt}</div>
+          {placeholderNames.length > 0 && (
+            <div className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${placeholderUnmapped.length === 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'}`}>
+              占位符与词条对齐 {placeholderMapped.length}/{placeholderNames.length}
+            </div>
+          )}
         </div>
         {hasWordEntries && (
           <div className="mt-2 rounded-xl border border-gray-200/70 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
@@ -1091,6 +1212,52 @@ function AssistantActionResultPanel({
         {!mainPrompt && sections.length === 0 && candidates.length === 0 && (
           <pre className="whitespace-pre-wrap font-sans">{result.content}</pre>
         )}
+
+        {/* Layer 3: 来源校验 —— 区分来自输入的依据与模型假设 */}
+        {(sourceAnchors.length > 0 || assumptions.length > 0) && (
+          <div className="mt-2 rounded-xl border border-gray-200/70 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <button type="button" onClick={() => setSourceOpen((open) => !open)} className="flex w-full items-center justify-between gap-2 px-2 py-2 text-left">
+              <span className="flex items-center gap-1.5 font-medium text-gray-800 dark:text-gray-100">
+                <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500 dark:bg-white/[0.08] dark:text-gray-400">第3层</span>来源校验
+              </span>
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">输入 {sourceAnchors.length} · 假设 {assumptions.length} · {sourceOpen ? '收起' : '展开'}</span>
+            </button>
+            {sourceOpen && (
+              <div className="space-y-2 border-t border-gray-100 p-2 dark:border-white/[0.08]">
+                {sourceAnchors.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">来自输入的依据</div>
+                    <ul className="space-y-1">
+                      {sourceAnchors.map((anchor, index) => (
+                        <li key={index} className="text-gray-600 dark:text-gray-300">{anchor}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {assumptions.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">模型假设 / 推断（非输入事实）</div>
+                    <ul className="space-y-1">
+                      {assumptions.map((item, index) => (
+                        <li key={index} className="text-gray-600 dark:text-gray-300">{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Layer 4: 质量状态与信任 */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-xl bg-gray-100/70 px-2 py-1.5 text-[10px] text-gray-500 dark:bg-white/[0.04] dark:text-gray-400">
+          <span className="rounded-full bg-gray-200 px-1.5 py-0.5 font-medium text-gray-600 dark:bg-white/[0.08] dark:text-gray-300">第4层</span>
+          <span>状态：{qualityLabel}</span>
+          <span>· {evidenceLabel}</span>
+          <span>· {assumptionLabel}</span>
+          {placeholderNames.length > 0 && <span>· 占位符对齐 {placeholderMapped.length}/{placeholderNames.length}</span>}
+          {missingInfo.length > 0 && <span>· 输入缺 {missingInfo.length} 项</span>}
+        </div>
       </div>
       <div className="mt-3 flex flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button type="button" onClick={appendResult} className="h-8 shrink-0 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">追加</button>
@@ -1142,6 +1309,9 @@ function SkillBuilderPanel({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editTrigger, setEditTrigger] = useState<AssistantSkillTrigger>('always')
+  const [editAdContext, setEditAdContext] = useState(false)
+  const [editWordEntries, setEditWordEntries] = useState(false)
+  const [editExplore, setEditExplore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -1164,6 +1334,10 @@ function SkillBuilderPanel({
 
   const saveDraft = () => {
     if (!draft) return
+    // P3: 三个开关从草稿契约中提取，作为该技能契约的单一事实来源。
+    const requiresAdContext = draft.contract?.requiresAdContext ?? false
+    const allowWordEntries = draft.contract?.output?.wordEntries ?? false
+    const allowExploreSellingPoint = draft.contract?.allowExploreSellingPoint ?? false
     const skill: AssistantCustomSkill = {
       id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       name: draft.name,
@@ -1176,6 +1350,10 @@ function SkillBuilderPanel({
       when: getWhenByTrigger(trigger),
       outputMode: 'show-candidates',
       isCustom: true,
+      requiresAdContext,
+      allowWordEntries,
+      allowExploreSellingPoint,
+      contract: draft.contract,
     }
     onUpdatePreferences({ ...preferences, customSkills: [...preferences.customSkills, skill] })
     setDraft(null)
@@ -1231,14 +1409,25 @@ function SkillBuilderPanel({
     setEditingId(skill.id)
     setEditName(skill.name)
     setEditTrigger(skill.trigger ?? 'always')
+    setEditAdContext(skill.requiresAdContext === true)
+    setEditWordEntries(skill.allowWordEntries === true)
+    setEditExplore(skill.allowExploreSellingPoint === true)
   }
 
   const saveEdit = () => {
     if (!editingId || !editName.trim()) return
+    const current = preferences.customSkills.find((skill) => skill.id === editingId)
+    const contract = current
+      ? buildCustomSkillContract(current.contract, current.instruction, editAdContext, editWordEntries, editExplore)
+      : undefined
     updateCustomSkill(editingId, {
       name: editName.trim().slice(0, 16),
       trigger: editTrigger,
       when: getWhenByTrigger(editTrigger),
+      requiresAdContext: editAdContext,
+      allowWordEntries: editWordEntries,
+      allowExploreSellingPoint: editExplore,
+      contract,
     })
     setEditingId(null)
   }
@@ -1309,6 +1498,11 @@ function SkillBuilderPanel({
                             </button>
                           ))}
                         </div>
+                        <div className="space-y-1.5">
+                          <SkillToggleRow label="是否广告投放技能" hint="开启后套用渠道 / 卖点 / 测试计划包装" value={editAdContext} onChange={setEditAdContext} />
+                          <SkillToggleRow label="是否允许生成变量词条" hint="关闭则技能不输出 {{变量}} 与词条" value={editWordEntries} onChange={setEditWordEntries} />
+                          <SkillToggleRow label="是否允许扩展新卖点" hint="关闭则强制锁定用户输入的卖点" value={editExplore} onChange={setEditExplore} />
+                        </div>
                         <div className="flex justify-end gap-2">
                           <button type="button" onClick={() => setEditingId(null)} className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-500 dark:border-white/[0.08] dark:text-gray-400">取消</button>
                           <button type="button" onClick={saveEdit} className="rounded-lg bg-blue-500 px-2.5 py-1 text-xs font-medium text-white">保存</button>
@@ -1357,6 +1551,18 @@ function getTriggerLabel(trigger: AssistantSkillTrigger) {
   return TRIGGER_OPTIONS.find((option) => option.value === trigger)?.label ?? '通用'
 }
 
+function SkillToggleRow({ label, hint, value, onChange }: { label: string; hint: string; value: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <button type="button" onClick={() => onChange(!value)} className="flex w-full items-start justify-between gap-3 rounded-lg border border-gray-200/70 bg-white px-2.5 py-1.5 text-left dark:border-white/[0.08] dark:bg-white/[0.03]">
+      <span className="min-w-0">
+        <span className="block text-xs font-medium text-gray-800 dark:text-gray-100">{label}</span>
+        <span className="block text-[11px] text-gray-400">{hint}</span>
+      </span>
+      <span className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${value ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>{value ? '开' : '关'}</span>
+    </button>
+  )
+}
+
 function getOrderedManageActions(preferences: AssistantActionPreferences): AssistantAction[] {
   const manualOrder = new Map(preferences.actionOrder.map((id, index) => [id, index]))
   return [...BUILT_IN_ASSISTANT_ACTIONS, ...preferences.customSkills].sort((a, b) => {
@@ -1371,4 +1577,9 @@ function getOrderedManageActions(preferences: AssistantActionPreferences): Assis
 
 function isCustomAssistantSkill(action: AssistantAction): action is AssistantCustomSkill {
   return 'isCustom' in action && action.isCustom === true
+}
+
+function extractPlaceholderNames(value: string): string[] {
+  const matches = [...value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
+  return matches.map((match) => String(match[1] ?? '').trim()).filter(Boolean)
 }

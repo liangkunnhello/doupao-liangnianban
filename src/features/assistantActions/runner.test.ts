@@ -112,20 +112,21 @@ describe('assistant action runner', () => {
     expect(result.testPlan).toBeUndefined()
   })
 
-  it('uses an unambiguous reference-driven single-image fallback for concept extraction', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+  it('throws a generation failure instead of a template fallback when the model returns empty', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
 
-    const result = await runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-    })
+    await expect(
+      runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), {
+        settings,
+        profile,
+        params,
+      }),
+    ).rejects.toThrow(/未返回可用内容/)
 
-    expect(result.primaryText).toContain('生成一张独立画面')
-    expect(result.primaryText).toContain('均严格沿用参考图')
-    expect(result.primaryText).toContain('禁止拼图、九宫格、多联画和同画布多方案')
-    expect(result.primaryText).not.toMatch(/一组|系列图片|每张/)
-    expect(result.primaryText).not.toMatch(/蓝色|青色|白色|3D|写实/)
+    // One initial call plus exactly one automatic retry.
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
   })
 
   it('does not invent extra entries when extracting existing variables', async () => {
@@ -170,7 +171,7 @@ describe('assistant action runner', () => {
     expect(result.wordEntries).toEqual([{ category: '产品主体', entries: ['产品特写'] }])
   })
 
-  it('repairs variable word entries that are below the configured count', async () => {
+  it('does not auto-fill variable word entries to a target count', async () => {
     mockedCallAgentResponsesApi
       .mockResolvedValueOnce({
         text: JSON.stringify({
@@ -178,11 +179,6 @@ describe('assistant action runner', () => {
           variablePrompt: '{{产品主体}}',
           prompts: ['图片衍生提示词'],
           wordEntries: [{ category: '产品主体', entries: ['产品特写'] }],
-        }),
-      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          wordEntries: [{ category: '产品主体', entries: ['手持产品', '产品使用瞬间'] }],
         }),
       } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
 
@@ -193,13 +189,15 @@ describe('assistant action runner', () => {
       actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 3 } },
     })
 
-    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
+    // No second model call: entries are never auto-filled to a target count.
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(1)
     expect(result.wordEntries).toEqual([
-      { category: '产品主体', entries: ['产品特写', '手持产品', '产品使用瞬间'] },
+      { category: '产品主体', entries: ['产品特写'] },
     ])
+    expect(result.qualityState).toBe('complete')
   })
 
-  it('rebuilds a variable prompt when word entries are present but placeholders are missing', async () => {
+  it('does not assemble a variable main prompt locally when the model returns word entries but no variable prompt', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
         finalPrompt: '图片衍生提示词',
@@ -219,8 +217,192 @@ describe('assistant action runner', () => {
       actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
     })
 
-    expect(result.variablePrompt).toContain('{{产品主体}}')
-    expect(result.variablePrompt).toContain('{{目标人群}}')
-    expect(result.primaryText).toBe(result.variablePrompt)
+    // P1: 宁可少生成，也不把分类裸拼成看起来“像完成”的变量皮肤。
+    expect(result.variablePrompt).toBeUndefined()
+    expect(result.qualityState).toBe('insufficient-data')
+    expect(result.qualityNote).toContain('没有返回可替换的变量主提示词')
+    expect(result.wordEntries).toEqual([
+      { category: '产品主体', entries: ['产品特写'] },
+      { category: '目标人群', entries: ['年轻女性'] },
+    ])
+  })
+
+  it('only patches missing placeholders when the model returns a variable prompt', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        finalPrompt: '图片衍生提示词',
+        variablePrompt: '{{产品主体}}，突出卖点',
+        prompts: ['图片衍生提示词'],
+        wordEntries: [
+          { category: '产品主体', entries: ['产品特写'] },
+          { category: '目标人群', entries: ['年轻女性'] },
+        ],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
+      settings,
+      profile,
+      params,
+      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
+    })
+
+    // 模型已返回变量主提示词：只允许局部补缺少的占位符，不重建原文。
+    expect(result.variablePrompt).toBe('{{产品主体}}，突出卖点，{{目标人群}}')
+    expect(result.qualityState).toBe('repaired')
+  })
+
+  it('returns the input fact card so the result page can show grounding', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({ finalPrompt: '客观展示产品设计与使用场景', prompts: [] }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('prompt-optimize', context({ text: '一款玻璃水瓶；适合健身人群' }), { settings, profile, params })
+
+    expect(result.grounding?.observedFacts.length).toBe(2)
+    expect(result.grounding?.observedFacts[0]?.fact).toContain('玻璃水瓶')
+    expect(result.grounding?.observedFacts[1]?.fact).toContain('健身人群')
+  })
+
+  it('surfaces model-reported source anchors and assumptions separately', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        finalPrompt: '生成画面',
+        sourceAnchors: ['图片中为哑光黑瓶身'],
+        assumptions: ['推断目标人群为男性健身用户'],
+        prompts: [],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
+      settings,
+      profile,
+      params,
+      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
+    })
+
+    expect(result.sourceAnchors).toEqual(['图片中为哑光黑瓶身'])
+    expect(result.assumptions).toEqual(['推断目标人群为男性健身用户'])
+  })
+
+  it('backfills the structured visualIdentity into the input fact card', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        finalPrompt: '生成画面',
+        visualIdentity: {
+          subject: '哑光黑瓶身',
+          composition: '居中、占画面 60%',
+          color: '黑、银灰',
+          scene: '健身工作室',
+          textLayout: '左下角小字标语',
+          style: '写实、硬光',
+        },
+        prompts: [],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
+      settings,
+      profile,
+      params,
+      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
+    })
+
+    expect(result.grounding?.visualIdentity.subject).toBe('哑光黑瓶身')
+    expect(result.grounding?.visualIdentity.style).toBe('写实、硬光')
+  })
+
+  it('keeps a custom skill contract conservative when the model is silent', async () => {
+    const { normalizeCustomSkills } = await import('./matcher')
+    const normalized = normalizeCustomSkills([
+      { id: 'c1', name: '安静技能', instruction: '只做素材拆解，不投放', trigger: 'always' },
+    ])
+
+    expect(normalized).toHaveLength(1)
+    const skill = normalized[0]!
+    expect(skill.requiresAdContext).toBe(false)
+    expect(skill.allowWordEntries).toBe(false)
+    expect(skill.allowExploreSellingPoint).toBe(false)
+    expect(skill.contract?.output.wordEntries).toBe(false)
+    expect(skill.contract?.requiresAdContext).toBe(false)
+  })
+
+  it('preserves a custom skill contract returned by the model and reflects the three toggles', async () => {
+    const { normalizeCustomSkills } = await import('./matcher')
+    const normalized = normalizeCustomSkills([
+      {
+        id: 'c2',
+        name: '跑量技能',
+        instruction: '做信息流跑量衍生',
+        trigger: 'image',
+        requiresAdContext: true,
+        allowWordEntries: true,
+        allowExploreSellingPoint: true,
+        contract: {
+          taskType: 'creative-expansion',
+          objective: '跑量衍生',
+          preserve: ['产品事实'],
+          editable: ['场景'],
+          forbidden: ['虚构功效'],
+          variationLevel: 'high',
+          requiresAdContext: true,
+          allowExploreSellingPoint: true,
+          primaryOutput: 'variablePrompt',
+          output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: true },
+        },
+      },
+    ])
+
+    const skill = normalized[0]!
+    expect(skill.requiresAdContext).toBe(true)
+    expect(skill.allowWordEntries).toBe(true)
+    expect(skill.allowExploreSellingPoint).toBe(true)
+    expect(skill.contract?.taskType).toBe('creative-expansion')
+    expect(skill.contract?.objective).toBe('跑量衍生')
+    expect(skill.contract?.allowExploreSellingPoint).toBe(true)
+  })
+
+  it('uses the effective locked selling point policy for custom ad skills that forbid exploration', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({ finalPrompt: '保留原始卖点生成素材', prompts: ['保留原始卖点生成素材'] }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('custom-ad', context({ text: '产品卖点：轻便耐用' }), {
+      settings,
+      profile,
+      params,
+      actionSettings: { sellingPointPolicy: 'explore' },
+      customSkill: {
+        id: 'custom-ad',
+        name: '投放改写',
+        icon: 'sparkles',
+        instruction: '只做广告投放改写，不得扩展新卖点',
+        steps: [],
+        trigger: 'text',
+        enabled: true,
+        priority: 65,
+        when: { text: 'required', image: 'optional' },
+        outputMode: 'show-candidates',
+        isCustom: true,
+        requiresAdContext: true,
+        allowWordEntries: false,
+        allowExploreSellingPoint: false,
+        contract: {
+          taskType: 'prompt-optimize',
+          objective: '投放改写',
+          preserve: ['原始卖点'],
+          editable: ['表达方式'],
+          forbidden: ['扩展新卖点'],
+          variationLevel: 'low',
+          requiresAdContext: true,
+          allowExploreSellingPoint: false,
+          primaryOutput: 'finalPrompt',
+          output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: false },
+        },
+      },
+    })
+
+    expect(result.sellingPointPolicy).toBe('lock')
+    expect(result.testPlan).toContain('锁定原卖点')
   })
 })

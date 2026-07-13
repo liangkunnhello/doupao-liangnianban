@@ -134,6 +134,24 @@ const CONTRACTS: Record<AssistantActionId, AssistantSkillContract> = {
   },
 }
 
+/** Skills that genuinely live inside an information-flow ad workflow.
+ *  Everything else (analysis, plain optimization, layout) must not be wrapped
+ *  with channel / selling-point / test-plan packaging. */
+const AD_CONTEXT_SKILL_IDS = new Set<AssistantActionId>([
+  'super-derive',
+  'angle-matrix',
+  'viral-remix',
+  'prompt-examples',
+  'batch-variants',
+  'channel-rewrite',
+])
+
+for (const id of Object.keys(CONTRACTS) as AssistantActionId[]) {
+  const contract = CONTRACTS[id]
+  contract.requiresAdContext = contract.requiresAdContext ?? AD_CONTEXT_SKILL_IDS.has(id)
+  contract.channelAware = contract.channelAware ?? contract.requiresAdContext
+}
+
 export const BUILT_IN_ASSISTANT_ACTIONS: AssistantAction[] = [
   {
     id: 'image-derive',
