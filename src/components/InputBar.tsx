@@ -4,7 +4,7 @@ import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteC
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -1133,6 +1133,7 @@ export default function InputBar() {
     groups.forEach((group) => {
       const key = group.category.trim()
       const entries = [...new Set(group.entries.map((entry) => entry.trim()).filter(Boolean))]
+        .filter((entry) => entry !== key && entry !== `{{${key}}}`)
       if (!key || entries.length === 0) return
 
       const existing = useStore.getState().wordLibraryEntries.find((entry) => entry.groupId === targetGroupId && entry.key === key && entry.deletedAt == null)
@@ -2826,14 +2827,10 @@ export default function InputBar() {
                 if (target.classList.contains('wildcard-var')) {
                   const varName = target.dataset.varName ?? target.textContent ?? ''
                   const entryId = target.dataset.entryId
-                  setWordLibraryPromptSelectedVarName(varName)
-                  setWordLibraryEditEntryId(entryId ?? null)
                   const store = useStore.getState()
-                  const entry = entryId
-                    ? store.wordLibraryEntries.find((e) => e.id === entryId && e.deletedAt == null)
-                    : store.wordLibraryEntries.filter((e) => e.key === varName && e.deletedAt == null).length === 1
-                      ? store.wordLibraryEntries.find((e) => e.key === varName && e.deletedAt == null)
-                      : undefined
+                  const entry = resolveVariableMentionEntry(varName, entryId, store.wordLibraryEntries)
+                  setWordLibraryPromptSelectedVarName(entry ? null : varName)
+                  setWordLibraryEditEntryId(entry?.id ?? entryId ?? null)
                   store.setVarEntryEditor({
                     entryId: entry?.id,
                     varName,
@@ -2875,8 +2872,9 @@ export default function InputBar() {
                   if (target.classList.contains('wildcard-var')) {
                     const varName = target.dataset.varName ?? target.textContent ?? ''
                     const entryId = target.dataset.entryId
-                    setWordLibraryPromptSelectedVarName(varName)
-                    setWordLibraryEditEntryId(entryId ?? null)
+                    const entry = resolveVariableMentionEntry(varName, entryId, useStore.getState().wordLibraryEntries)
+                    setWordLibraryPromptSelectedVarName(entry ? null : varName)
+                    setWordLibraryEditEntryId(entry?.id ?? entryId ?? null)
                   }
                   const sel = window.getSelection()
                   if (sel) {

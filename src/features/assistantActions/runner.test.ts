@@ -67,31 +67,65 @@ describe('assistant action runner', () => {
     expect(result.primaryText).toBe('优化后的普通信息流广告提示词')
   })
 
-  it('uses one final prompt for image derive while retaining variable entries for later testing', async () => {
+  it('uses the concise style-first concept extraction workflow for image derive', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        sourceAnchors: ['白色背景', '青绿色圆形', '中央钥匙图标', '顶部与底部文字'],
-        finalPrompt: '保持原图画幅、白色背景、青绿色圆形、顶部与底部文字和全部排版不变，只衍生中央钥匙图标。',
+        finalPrompt: '思考过程：先分析配色和材质。最终提示词：生成一组功能图标；整体视觉风格和画面参数严格沿用参考图；每张图片只变化核心功能符号。',
         variablePrompt: '{{产品主体}}，{{视觉钩子}}',
-        prompts: ['保持原图不变，只改变钥匙齿形。'],
+        prompts: ['不应保留的候选提示词'],
+        sections: [{ title: '不应保留的分析', items: ['营销分析'] }],
         wordEntries: [{ category: '产品主体', entries: ['钥匙图标'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
 
-    const result = await runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), {
+    const result = await runAssistantAction('image-derive', context({
+      images: [{ id: 'reference-1', dataUrl: 'data:image/png;base64,AAAA' }],
+      hasImage: true,
+      imageCount: 1,
+    }), {
       settings,
       profile,
       params,
       actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
     })
 
-    expect(result.primaryText).toBe('保持原图画幅、白色背景、青绿色圆形、顶部与底部文字和全部排版不变，只衍生中央钥匙图标。')
-    expect(result.primaryText).not.toContain('参考输入基准')
+    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.calls[0]?.[0].input)
+    expect(requestText).toContain('你是“概念抽取”提示词助手')
+    expect(requestText).toContain('只描述当前要生成的一张独立画面')
+    expect(requestText).toContain('不要把这些参数重新写死成颜色名')
+    expect(requestText).toContain('禁止把观察过程、思考过程')
+    expect(requestText).toContain('80–160 个汉字')
+    expect(requestText).not.toContain('信息流广告合规负面约束')
+    expect(requestText).not.toContain('跑量结构保留项')
+    expect(requestText).toContain('data:image/png;base64,AAAA')
+
+    expect(result.title).toBe('概念抽取')
+    expect(result.primaryText).toBe('生成一张独立画面，呈现功能图标；整体视觉风格和画面参数严格沿用参考图；当前画面只变化核心功能符号。')
+    expect(result.primaryText).not.toContain('思考过程')
+    expect(result.primaryText).not.toContain('一组')
+    expect(result.primaryText).not.toContain('每张')
     expect(result.candidates).toHaveLength(1)
-    expect(result.candidates?.[0]).toContain('只衍生中央钥匙图标')
-    expect(result.variablePrompt).toBe('{{产品主体}}，视觉钩子')
-    expect(result.sections?.[0]).toEqual({ title: '参考输入依据', items: ['白色背景', '青绿色圆形', '中央钥匙图标', '顶部与底部文字'] })
-    expect(result.wordEntries).toEqual([{ category: '产品主体', entries: ['钥匙图标'] }])
+    expect(result.candidates?.[0]).toBe(result.primaryText)
+    expect(result.variablePrompt).toBeUndefined()
+    expect(result.sections).toBeUndefined()
+    expect(result.wordEntries).toBeUndefined()
+    expect(result.testPlan).toBeUndefined()
+  })
+
+  it('uses an unambiguous reference-driven single-image fallback for concept extraction', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), {
+      settings,
+      profile,
+      params,
+    })
+
+    expect(result.primaryText).toContain('生成一张独立画面')
+    expect(result.primaryText).toContain('均严格沿用参考图')
+    expect(result.primaryText).toContain('禁止拼图、九宫格、多联画和同画布多方案')
+    expect(result.primaryText).not.toMatch(/一组|系列图片|每张/)
+    expect(result.primaryText).not.toMatch(/蓝色|青色|白色|3D|写实/)
   })
 
   it('does not invent extra entries when extracting existing variables', async () => {

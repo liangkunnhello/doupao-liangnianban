@@ -29,6 +29,41 @@ export function parseVariableMention(rawValue: string) {
   return { varName: rawName.trim(), entryId: rawEntryId?.trim() || undefined }
 }
 
+function hasSubstantiveVariableEntries(entry: WordLibraryEntry): boolean {
+  const values = entry.entries.map((value) => value.trim()).filter(Boolean)
+  return values.length > 0 && !(values.length === 1 && values[0] === entry.key)
+}
+
+export function resolveVariableMentionEntry(
+  varName: string,
+  entryId: string | undefined,
+  wordLibraryEntries: WordLibraryEntry[],
+  options: { preferredGroupId?: string } = {},
+): WordLibraryEntry | undefined {
+  const name = varName.trim()
+  if (!name) return undefined
+
+  const activeEntries = wordLibraryEntries.filter((entry) => entry.deletedAt == null)
+  if (entryId) return activeEntries.find((entry) => entry.id === entryId)
+
+  const sameName = activeEntries.filter((entry) => entry.key === name)
+  if (sameName.length <= 1) return sameName[0]
+
+  if (options.preferredGroupId) {
+    const sameGroup = sameName.filter((entry) => entry.groupId === options.preferredGroupId)
+    if (sameGroup.length === 1) return sameGroup[0]
+  }
+
+  const substantive = sameName.filter(hasSubstantiveVariableEntries)
+  if (substantive.length === 1) return substantive[0]
+
+  const generated = substantive.filter((entry) => entry.sourceSkillName || entry.generationBatchId)
+  if (generated.length === 1) return generated[0]
+
+  const nonDefault = substantive.filter((entry) => entry.groupId !== 'default')
+  return nonDefault.length === 1 ? nonDefault[0] : undefined
+}
+
 export function getImageMentionLabel(index: number) {
   return `@图${index + 1}`
 }
@@ -246,10 +281,7 @@ export function replaceImageMentionsForApi(prompt: string, imageCount?: number, 
     result = result.replace(VAR_MENTION_RE, (_text, rawValue) => {
       const { varName: trimmedVarName, entryId } = parseVariableMention(rawValue)
       if (!trimmedVarName) return ''
-      const sameName = variableResolver.wordLibraryEntries.filter((e) => e.key === trimmedVarName)
-      const entry = entryId
-        ? variableResolver.wordLibraryEntries.find((e) => e.id === entryId)
-        : sameName.length === 1 ? sameName[0] : undefined
+      const entry = resolveVariableMentionEntry(trimmedVarName, entryId, variableResolver.wordLibraryEntries)
       if (!entry || entry.entries.length === 0) return trimmedVarName
       const idx = Math.floor(Math.random() * entry.entries.length)
       return entry.entries[idx]

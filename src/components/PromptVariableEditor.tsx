@@ -7,6 +7,7 @@ import {
   getPromptMentionParts,
   getSelectedImageMentionLabel,
   createVariableMention,
+  resolveVariableMentionEntry,
   VAR_END,
   VAR_START,
 } from '../lib/promptImageMentions'
@@ -91,6 +92,7 @@ export default function PromptVariableEditor({
   const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
   const wordLibraryGroups = useStore((s) => s.wordLibraryGroups)
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
+  const setWordLibraryEditEntryId = useStore((s) => s.setWordLibraryEditEntryId)
   const setVarEntryEditor = useStore((s) => s.setVarEntryEditor)
   const activeWordLibraryEntries = useMemo(() => wordLibraryEntries.filter((e) => e.deletedAt == null), [wordLibraryEntries])
   const renderedHtml = useMemo(() => renderPromptHtml(value, activeWordLibraryEntries), [value, activeWordLibraryEntries])
@@ -134,12 +136,10 @@ export default function PromptVariableEditor({
 
   const openVariableEditor = (varName: string, boundEntryId?: string) => {
     const currentStore = useStore.getState()
-    const matchingEntries = currentStore.wordLibraryEntries.filter((item) => item.key === varName && item.deletedAt == null)
-    const entry = boundEntryId
-      ? currentStore.wordLibraryEntries.find((item) => item.id === boundEntryId && item.deletedAt == null)
-      : matchingEntries.length === 1 ? matchingEntries[0] : undefined
+    const entry = resolveVariableMentionEntry(varName, boundEntryId, currentStore.wordLibraryEntries)
     const groupId = entry?.groupId ?? currentStore.wordLibraryGroups[0]?.id ?? wordLibraryGroups[0]?.id ?? 'default'
-    setWordLibraryPromptSelectedVarName(varName)
+    setWordLibraryPromptSelectedVarName(entry ? null : varName)
+    setWordLibraryEditEntryId(entry?.id ?? boundEntryId ?? null)
     setVarEntryEditor({
       entryId: entry?.id,
       varName,
@@ -191,7 +191,12 @@ export default function PromptVariableEditor({
       onBlur={onBlur}
       onClick={(event) => {
         const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('.wildcard-var')
-        if (target) setWordLibraryPromptSelectedVarName(target.dataset.varName ?? target.textContent ?? '')
+        if (target) {
+          const varName = target.dataset.varName ?? target.textContent ?? ''
+          const entry = resolveVariableMentionEntry(varName, target.dataset.entryId, useStore.getState().wordLibraryEntries)
+          setWordLibraryPromptSelectedVarName(entry ? null : varName)
+          setWordLibraryEditEntryId(entry?.id ?? target.dataset.entryId ?? null)
+        }
         onClick?.(event)
       }}
       onDoubleClick={(event) => {

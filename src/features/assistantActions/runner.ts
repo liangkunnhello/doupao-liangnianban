@@ -30,7 +30,7 @@ export interface AssistantRunnerProgressUpdate {
 }
 
 const ACTION_TITLES: Record<string, string> = {
-  'image-derive': '图片衍生',
+  'image-derive': '概念抽取',
   'image-describe': '素材拆解',
   'super-derive': '爆款衍生',
   'prompt-optimize': '提示词优化',
@@ -119,6 +119,7 @@ export async function runAssistantAction(
 }
 
 function enrichAssistantResult(result: AssistantActionResult, actionSettings: AssistantActionSettings): AssistantActionResult {
+  if (result.actionId === 'image-derive') return result
   result = sanitizeInformationFlowAdResult(result)
   const channel = actionSettings.channel
   const sellingPointPolicy = actionSettings.sellingPointPolicy
@@ -180,6 +181,8 @@ export async function createAssistantSkillDraft(description: string, opts: { set
 }
 
 function createAssistantActionInput(actionId: AssistantActionId, context: AssistantInputContext, actionSettings: AssistantActionSettings, customSkill?: AssistantCustomSkill) {
+  if (actionId === 'image-derive' && !customSkill) return createConceptExtractionInput(context)
+
   const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
   const contract = getActionContract(actionId, customSkill)
   const wordSettings = actionSettings.wordDerive
@@ -247,6 +250,38 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         contract?.taskType === 'creative-expansion' || actionId === 'channel-rewrite'
           ? `【渠道规则】${getChannelRule(actionSettings.channel)}`
           : '',
+      ].join('\n'),
+    },
+  ]
+
+  for (const image of context.images) {
+    content.push({ type: 'input_image', image_url: image.dataUrl })
+  }
+
+  return [{ role: 'user', content }]
+}
+
+function createConceptExtractionInput(context: AssistantInputContext) {
+  const content: Array<Record<string, string>> = [
+    {
+      type: 'input_text',
+      text: [
+        '你是“概念抽取”提示词助手。静默分析参考图，只返回一段用于单张图生图的中文提示词，不要调用图片生成工具。',
+        '只返回严格 JSON，不要 Markdown、解释、分析、标题、列表或代码块：',
+        '{"finalPrompt":"一个自然段的最终生图提示词"}',
+        '',
+        '执行规则：',
+        '1. 当前功能用于图生图。只描述当前要生成的一张独立画面，不得出现“一组、系列、多张、每张、各张、批量、组图、套图”等会让模型在同一画布生成多个方案的措辞。',
+        '2. finalPrompt 必须明确“生成一张独立画面”，并禁止拼图、九宫格、多联画、分镜和同画布多方案。',
+        '3. 参考图是构图、配色、材质、渲染方式、视角、背景、光线、阴影、主体尺度和留白的直接依据。统一概括为“整体视觉风格和画面参数严格沿用参考图”，不要把这些参数重新写死成颜色名、材质名或风格标签。',
+        '4. 只有用户明确要求固定某个视觉参数时，才在 finalPrompt 中写出该参数。',
+        '5. 静默提炼一个简短的功能概念，只把新的核心主体或功能符号写入 finalPrompt；同一画面只保留一个清晰主体，必要时最多加入一个辅助元素。',
+        '6. 禁止把观察过程、思考过程、选择理由、参考图分析、年龄心理、目标人群、营销、跑量、渠道、卖点、CTA、测试策略和变量词条写进 finalPrompt。',
+        '7. finalPrompt 控制在 80–160 个汉字，一个自然段，直接从生成指令开始；不要添加“分析如下、概念母题、最终提示词”等前缀。',
+        '8. 除“禁止拼图、多联画和同画布多方案”外，不堆叠无关负面词。',
+        '',
+        `用户补充文字：${context.text || '（无）'}`,
+        `参考图片数量：${context.imageCount}`,
       ].join('\n'),
     },
   ]
@@ -349,14 +384,10 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
   switch (actionId) {
     case 'image-derive':
       return [
-        '这是“图片衍生”技能。目标是保留参考图已经验证的跑量结构，产出一条有明确测试价值的衍生主推素材，不是像素级复刻，也不是完全重做。',
-        '先拆解参考图的跑量结构：信息层级、首屏钩子、主体表现、卖点证明、关键文案位置、主色调、视觉风格和 CTA 逻辑。',
-        '主推素材只选择 1–2 个受控测试维度进行变化，优先从主体表现、钩子、场景或人群切入、卖点证明方式、局部构图中选择；其余跑量结构保持稳定。',
-        'finalPrompt 只输出 1 条完整主推提示词，必须写清楚保留的跑量结构、发生变化的测试维度和画面执行方式。',
-        'prompts 必须为空数组，不要输出候选提示词。',
-        `variablePrompt 将 finalPrompt 中适合组合测试的语义替换为变量占位符；wordEntries 只输出与 variablePrompt 对应的变量词条，每个分类至少 ${actionSettings.wordDerive.variableCount} 个。`,
-        'sections 仅包含：跑量结构保留项、主推衍生策略、测试变量、风险提醒。',
-        getSellingPointWordEntryRule(actionSettings.sellingPointPolicy),
+        '这是“概念抽取”技能，只输出用于单张独立画面的图生图提示词。',
+        '整体视觉风格和画面参数严格沿用参考图，不把配色、材质、构图等参数重新写死。',
+        '仅更换核心功能符号或主体轮廓；禁止组图、多联画、同画布多方案以及任何分析或思考过程。',
+        'finalPrompt 只输出一个 80–160 个汉字的自然段；prompts、variablePrompt、sections 和 wordEntries 必须为空。',
       ].join('\n')
     case 'image-describe':
       return [
@@ -469,15 +500,41 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
   }
 }
 
+function normalizeConceptExtractionPrompt(value: string) {
+  let prompt = value.trim()
+  const finalPromptMarkers = [...prompt.matchAll(/(?:最终生图提示词|最终提示词|生图提示词)\s*[:：]/g)]
+  const lastMarker = finalPromptMarkers.at(-1)
+  if (lastMarker?.index != null) {
+    prompt = prompt.slice(lastMarker.index + lastMarker[0].length).trim()
+  }
+
+  prompt = prompt
+    .replace(/^(?:(?:分析结果|分析|思考过程|参考图分析|选择理由|概念母题)\s*[:：][^。；\n]*[。；\n]\s*)+/g, '')
+    .replace(/^(?:最终生图提示词|最终提示词|生图提示词)\s*[:：]\s*/g, '')
+    .replace(/(^|[。；])\s*生成(?:一组|一系列|多张|若干张)/g, '$1生成一张独立画面，呈现')
+    .replace(/(?:同风格)?系列(图片|图像|插画|图标|画面)/g, '单张$1')
+    .replace(/(?:每张|各张|每幅|各幅)(?:图片|图像|画面)?/g, '当前画面')
+    .replace(/\s+/g, ' ')
+    .replace(/^[“”"']+|[“”"']+$/g, '')
+    .trim()
+
+  if (prompt && !prompt.includes('一张独立画面')) {
+    prompt = `基于参考图生成一张独立画面；${prompt}`
+  }
+  return prompt
+}
+
 function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, fallback: AssistantActionResult, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS): AssistantActionResult {
   const contract = getActionContract(actionId, customSkill)
   const candidates = contract?.output.candidates === false ? [] : normalizeStringArray(payload.prompts)
-  const sections = normalizeSections(payload.sections)
+  const sections = contract?.output.analysis === false ? [] : normalizeSections(payload.sections)
   const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
   const rawWordEntries = allowVariableOutput ? normalizeWordEntries(payload.wordEntries) : []
-  const finalPrompt = contract?.output.finalPrompt === false ? '' : typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
+  const rawFinalPrompt = contract?.output.finalPrompt === false ? '' : typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
+  const finalPrompt = actionId === 'image-derive' ? normalizeConceptExtractionPrompt(rawFinalPrompt) : rawFinalPrompt
   const rawVariablePrompt = allowVariableOutput && typeof payload.variablePrompt === 'string' ? payload.variablePrompt.trim() : ''
-  const { variablePrompt, wordEntries } = normalizeVariableOutput(rawVariablePrompt, rawWordEntries, actionSettings.wordDerive.categories)
+  const blockedWordEntryValues = new Set(sections.flatMap((section) => section.items.map((item) => item.trim()).filter(Boolean)))
+  const { variablePrompt, wordEntries } = normalizeVariableOutput(rawVariablePrompt, rawWordEntries, actionSettings.wordDerive.categories, blockedWordEntryValues)
   const summary = typeof payload.summary === 'string' ? payload.summary.trim() : ''
   const content = formatPayloadContent({ summary, finalPrompt, variablePrompt, candidates, sections, wordEntries })
   const primaryText = getPrimaryText(contract?.primaryOutput, { finalPrompt, variablePrompt, candidates, sections, content, fallback })
@@ -515,7 +572,13 @@ function getPrimaryText(
   }
 }
 
-function normalizeVariableOutput(variablePrompt: string, wordEntries: AssistantWordEntryGroup[], allowedCategories: string[]) {
+function sanitizeVariableEntryValues(category: string, entries: string[], blockedValues: Set<string> = new Set()) {
+  const key = category.trim()
+  return uniqueStrings(entries.map((entry) => entry.trim()).filter(Boolean))
+    .filter((entry) => entry !== key && entry !== `{{${key}}}` && !blockedValues.has(entry))
+}
+
+function normalizeVariableOutput(variablePrompt: string, wordEntries: AssistantWordEntryGroup[], allowedCategories: string[], blockedValues: Set<string> = new Set()) {
   if (wordEntries.length === 0) return { variablePrompt: '', wordEntries: [] }
   const allowedCategorySet = new Set(allowedCategories.map((category) => category.trim()).filter(Boolean))
   const placeholderNames = new Set(
@@ -526,7 +589,7 @@ function normalizeVariableOutput(variablePrompt: string, wordEntries: AssistantW
   const filteredWordEntries = wordEntries
     .map((group) => ({
       category: group.category.trim(),
-      entries: uniqueStrings(group.entries.map((entry) => entry.trim()).filter(Boolean)),
+      entries: sanitizeVariableEntryValues(group.category, group.entries, blockedValues),
     }))
     .filter((group) => allowedCategorySet.has(group.category) && (placeholderNames.size === 0 || placeholderNames.has(group.category)) && group.entries.length > 0)
   const validNames = new Set(filteredWordEntries.map((group) => group.category))
@@ -552,9 +615,10 @@ async function completeWordEntriesIfNeeded(
   if (result.actionId === 'word-extract') return result
   const targetCount = actionSettings.wordDerive.variableCount
   const allowedCategorySet = new Set(actionSettings.wordDerive.categories)
+  const blockedValues = new Set(result.sections?.flatMap((section) => section.items.map((item) => item.trim()).filter(Boolean)) ?? [])
   const groups = (result.wordEntries ?? [])
     .filter((group) => allowedCategorySet.has(group.category))
-    .map((group) => ({ ...group, entries: uniqueStrings(group.entries).slice(0, targetCount) }))
+    .map((group) => ({ ...group, entries: sanitizeVariableEntryValues(group.category, group.entries, blockedValues).slice(0, targetCount) }))
   if (groups.length === 0) return result
   const missing = groups.filter((group) => group.entries.length < targetCount)
   if (missing.length === 0) return rebuildResultContent(ensureVariablePromptCoversGroups({ ...result, wordEntries: groups }))
@@ -598,7 +662,7 @@ async function completeWordEntriesIfNeeded(
     const repairedByCategory = new Map(repairedEntries.map((group) => [group.category, group.entries]))
     const merged = groups.map((group) => ({
       category: group.category,
-      entries: uniqueStrings([...group.entries, ...(repairedByCategory.get(group.category) ?? [])]).slice(0, targetCount),
+      entries: sanitizeVariableEntryValues(group.category, [...group.entries, ...(repairedByCategory.get(group.category) ?? [])], blockedValues).slice(0, targetCount),
     }))
     return rebuildResultContent(ensureVariablePromptCoversGroups({ ...result, wordEntries: merged }))
   } catch {
@@ -790,14 +854,8 @@ function createFallbackResult(actionId: AssistantActionId, context: AssistantInp
   const seed = getSeedText(context)
   switch (actionId) {
     case 'image-derive': {
-      const finalPrompt = `${seed}，基于参考图的跑量结构制作一条主推衍生素材：保留原有信息层级、核心卖点、关键文案位置、主色调和视觉风格；仅调整主体表现与首屏视觉钩子，使变化可归因且适合单独测试。`
-      const variablePrompt = `保留参考图的{{平台版式}}和信息层级，以{{产品主体}}为核心主体，使用{{视觉钩子}}呈现核心卖点。`
-      const wordEntries = [
-        { category: '产品主体', entries: ['核心主体特写', '主体使用瞬间', '主体卖点放大'] },
-        { category: '视觉钩子', entries: ['主体功能放大', '结果感视觉提示', '问题解决瞬间'] },
-        { category: '平台版式', entries: ['保留原图信息层级', '保留原图主色调版式', '保留原图标题与主体关系'] },
-      ]
-      return { actionId, title: ACTION_TITLES[actionId], content: `最终提示词：${finalPrompt}\n\n词条提示词：${variablePrompt}`, candidates: [finalPrompt], wordEntries, primaryText: finalPrompt, variablePrompt }
+      const finalPrompt = '基于参考图生成一张独立画面，提炼并呈现一个新的核心功能符号；整体视觉风格和构图、配色、材质、光线、视角、背景、主体尺度与留白均严格沿用参考图，仅替换主体语义，保持单一清晰焦点，禁止拼图、九宫格、多联画和同画布多方案。'
+      return { actionId, title: ACTION_TITLES[actionId], content: finalPrompt, candidates: [finalPrompt], primaryText: finalPrompt }
     }
     case 'image-describe': {
       const prompt = `参考图作为信息流广告素材：竖版构图，前 3 秒有明确视觉钩子，突出产品/人物主体、用户痛点、核心卖点、真实使用场景、短字幕区域和 CTA，画面自然可信，避免夸大承诺。`

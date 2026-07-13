@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useStore } from '../store'
 import { CloseIcon, FavoriteIcon, DragHandleIcon, HistoryIcon, ChevronDownIcon } from './icons'
 import { Checkbox } from './Checkbox'
-import { createVariableMention, parseVariableMention, VAR_MENTION_RE, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { createVariableMention, parseVariableMention, resolveVariableMentionEntry, VAR_MENTION_RE, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
 import { getAgentApiProfile, validateApiProfile } from '../lib/apiProfiles'
 import { generateDerivedWordEntries } from '../lib/agentApi'
@@ -878,7 +878,7 @@ export default function WordLibrarySidebar() {
 
   useEffect(() => {
     if (!promptSelectedVarName) return
-    const entry = entries.find((e) => e.key === promptSelectedVarName)
+    const entry = resolveVariableMentionEntry(promptSelectedVarName, undefined, entries)
     if (entry) {
       setActiveId(entry.id)
       setSelGroup(entry.groupId)

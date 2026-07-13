@@ -504,7 +504,7 @@ function getAssistantActionInputHint(action: AssistantAction) {
 function getAssistantActionPurposeHint(action: AssistantAction) {
   switch (action.id) {
     case 'image-derive':
-      return '图片衍生'
+      return '概念抽取'
     case 'image-describe':
       return '素材拆解'
     case 'market-breakdown':
@@ -540,7 +540,7 @@ function getAssistantActionDescription(action: AssistantAction) {
 
   switch (action.id) {
     case 'image-derive':
-      return '保留参考图的跑量结构，生成 1 条主推衍生素材；通过变量词条沉淀主体、钩子、场景等后续测试组合。'
+      return '输出一段简短的单图图生图提示词；画面参数沿用参考图，只变化核心主体，禁止组图和分析过程。'
     case 'image-describe':
       return '忠实拆解参考图的构图、主体、色板、文字层级、风格和广告信息结构，不生成新素材。'
     case 'super-derive':
@@ -574,7 +574,6 @@ function isWordDeriveAction(action: AssistantAction) {
 
 function isVariableResultAction(action: AssistantAction) {
   return action.outputMode === 'create-word-tags' || [
-    'image-derive',
     'super-derive',
     'market-breakdown',
     'angle-matrix',
@@ -1289,7 +1288,7 @@ function SkillBuilderPanel({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-xs font-medium text-gray-700 dark:text-gray-200">管理技能显示与排序</div>
-                <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">图片衍生、提示词优化为固定入口，不可隐藏。</div>
+                <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">概念抽取、提示词优化为固定入口，不可隐藏。</div>
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400">共 {orderedActions.length} 个技能</div>
             </div>

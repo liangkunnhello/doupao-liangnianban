@@ -3,13 +3,13 @@ import type { AssistantAction, AssistantActionId, AssistantSkillContract } from 
 const CONTRACTS: Record<AssistantActionId, AssistantSkillContract> = {
   'image-derive': {
     taskType: 'image-variation',
-    objective: '基于参考图的跑量结构生成一条可直接测试的衍生素材，并沉淀可组合的衍生变量词条。',
-    preserve: ['核心卖点和产品事实', '信息层级与跑量结构', '品牌与合规边界', '主色调和视觉风格', '关键文案的语义与位置'],
-    editable: ['主体表现', '首屏钩子', '使用场景或人群切入', '卖点证明方式', '局部构图和装饰表达'],
-    forbidden: ['脱离原图跑量结构重新设计', '擅自改变核心卖点、价格、功效或品牌', '在一条主推素材中同时改变所有测试维度'],
-    variationLevel: 'medium',
+    objective: '从参考图中提炼简短概念，输出一段只生成单张独立画面、严格沿用参考图视觉参数的图生图提示词。',
+    preserve: ['参考图的整体视觉风格与画面参数', '产品或功能语义', '主体尺度与留白'],
+    editable: ['核心功能符号或主体隐喻', '必要时一个辅助元素'],
+    forbidden: ['要求在同一画面生成组图、套图、多联画或多个方案', '把配色、材质、构图等参考参数改写成无依据的固定描述', '输出思考过程、营销分析、变量词条或多条候选'],
+    variationLevel: 'low',
     primaryOutput: 'finalPrompt',
-    output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: true },
+    output: { finalPrompt: true, candidates: false, analysis: false, wordEntries: false },
   },
   'prompt-optimize': {
     taskType: 'prompt-optimize',
@@ -137,7 +137,7 @@ const CONTRACTS: Record<AssistantActionId, AssistantSkillContract> = {
 export const BUILT_IN_ASSISTANT_ACTIONS: AssistantAction[] = [
   {
     id: 'image-derive',
-    name: '图片衍生',
+    name: '概念抽取',
     icon: 'image',
     priority: 120,
     when: { image: 'required', text: 'optional' },

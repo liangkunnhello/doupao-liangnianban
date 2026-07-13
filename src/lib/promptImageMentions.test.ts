@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { InputImage } from '../types'
-import { convertVariableMentionAtVisibleOffsetToText, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, remapImageMentionsForOrder, replaceImageMentionsForApi, VAR_END, VAR_START } from './promptImageMentions'
+import type { InputImage, WordLibraryEntry } from '../types'
+import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, remapImageMentionsForOrder, replaceImageMentionsForApi, resolveVariableMentionEntry, VAR_END, VAR_START } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
@@ -8,6 +8,19 @@ const images: InputImage[] = [
 ]
 
 const variableMention = (name: string) => `${VAR_START}${name}${VAR_END}`
+const wordEntry = (entry: Partial<WordLibraryEntry> & Pick<WordLibraryEntry, 'id' | 'groupId' | 'key' | 'entries'>): WordLibraryEntry => ({
+  label: entry.key,
+  draw_count: 1,
+  sortOrder: 0,
+  isPinned: false,
+  isFavorite: false,
+  tags: [],
+  deletedAt: null,
+  createdAt: 0,
+  updatedAt: 0,
+  usageCount: 0,
+  ...entry,
+})
 
 describe('prompt image mentions', () => {
   it('detects @ query after the cursor', () => {
@@ -137,6 +150,29 @@ describe('prompt image mentions', () => {
 
     it('keeps deleted variable mentions as plain text when resolving for api', () => {
       expect(replaceImageMentionsForApi(`生成${variableMention('背景')}`, undefined, undefined, { wordLibraryEntries: [] })).toBe('生成背景')
+    })
+
+    it('resolves a name-only variable mention to the only substantive duplicate entry', () => {
+      const entries = [
+        wordEntry({ id: 'default-entry', groupId: 'default', key: 'hero', entries: ['hero'] }),
+        wordEntry({ id: 'skill-entry', groupId: 'skill-group', key: 'hero', entries: ['young founder'] }),
+      ]
+
+      expect(replaceImageMentionsForApi(
+        `make ${createVariableMention('hero')}`,
+        undefined,
+        undefined,
+        { wordLibraryEntries: entries },
+      )).toBe('make young founder')
+    })
+
+    it('uses an embedded variable entry id even when duplicate names exist', () => {
+      const entries = [
+        wordEntry({ id: 'default-entry', groupId: 'default', key: 'hero', entries: ['hero'] }),
+        wordEntry({ id: 'skill-entry', groupId: 'skill-group', key: 'hero', entries: ['young founder'] }),
+      ]
+
+      expect(resolveVariableMentionEntry('hero', 'skill-entry', entries)?.id).toBe('skill-entry')
     })
   })
 
