@@ -42,6 +42,49 @@ export type AssistantVariationLevel = 'none' | 'low' | 'medium' | 'high'
  *  output is never mistaken for a genuine model understanding. */
 export type AssistantQualityState = 'complete' | 'repaired' | 'insufficient-data' | 'failed'
 
+/** The semantic role of a single skill step (its purpose within the flow). */
+export type AssistantStepRole =
+  | 'observe' // 观察输入：提取图片/文本事实
+  | 'lock' // 锁定内容：明确不能改变什么
+  | 'extract' // 提炼方向：总结测试方向/风格/卖点
+  | 'finalPrompt' // 生成最终主提示词
+  | 'variablePrompt' // 生成带 {{变量}} 的提示词
+  | 'wordEntries' // 生成可替换短词条
+  | 'risk' // 风险检查：合规/同质化/误判提醒
+
+/** Where a step's output should be written. */
+export type AssistantStepOutput = 'sections' | 'finalPrompt' | 'variablePrompt' | 'wordEntries'
+
+/** One editable processing step of a skill. A skill is a flow of ordered steps
+ *  instead of a single opaque instruction. */
+export interface AssistantSkillStep {
+  id: string
+  title: string
+  enabled: boolean
+  role: AssistantStepRole
+  instruction: string
+  outputTo: AssistantStepOutput
+  /** Required steps cannot be deleted (only disabled). */
+  required?: boolean
+}
+
+export const STEP_ROLE_OPTIONS: Array<{ value: AssistantStepRole; label: string; defaultOutput: AssistantStepOutput }> = [
+  { value: 'observe', label: '观察输入', defaultOutput: 'sections' },
+  { value: 'lock', label: '锁定内容', defaultOutput: 'sections' },
+  { value: 'extract', label: '提炼方向', defaultOutput: 'sections' },
+  { value: 'finalPrompt', label: '生成最终提示词', defaultOutput: 'finalPrompt' },
+  { value: 'variablePrompt', label: '生成变量提示词', defaultOutput: 'variablePrompt' },
+  { value: 'wordEntries', label: '生成词条', defaultOutput: 'wordEntries' },
+  { value: 'risk', label: '风险检查', defaultOutput: 'sections' },
+]
+
+export const STEP_OUTPUT_OPTIONS: Array<{ value: AssistantStepOutput; label: string }> = [
+  { value: 'sections', label: '查看更多（分析说明）' },
+  { value: 'finalPrompt', label: '主结果（最终提示词）' },
+  { value: 'variablePrompt', label: '变量主提示词' },
+  { value: 'wordEntries', label: '词条库' },
+]
+
 /** Defines the semantic boundary of a built-in skill, not merely its display name. */
 export interface AssistantSkillContract {
   taskType: AssistantSkillTaskType
@@ -58,7 +101,9 @@ export interface AssistantSkillContract {
   channelAware?: boolean
   /** Whether this skill may explore NEW selling points (otherwise it must lock to the input). */
   allowExploreSellingPoint?: boolean
-  primaryOutput: 'finalPrompt' | 'variablePrompt' | 'analysis' | 'candidate'
+  /** Every skill emits exactly one main prompt. Analysis / candidate are never
+   *  primary outputs (analysis lives in sections, candidates are永久关闭). */
+  primaryOutput: 'finalPrompt' | 'variablePrompt'
   output: {
     finalPrompt: boolean
     candidates: boolean
@@ -79,6 +124,8 @@ export interface AssistantAction {
   id: AssistantActionId
   name: string
   icon: AssistantActionIcon
+  /** Optional human description shown in the editor / hover card. */
+  description?: string
   priority: number
   trigger?: AssistantSkillTrigger
   enabled?: boolean
@@ -88,12 +135,18 @@ export interface AssistantAction {
   }
   outputMode: 'replace-input' | 'append-input' | 'show-candidates' | 'create-word-tags'
   contract?: AssistantSkillContract
+  /** Whether this skill ships with the app or was created by the user. */
+  source?: 'builtin' | 'custom'
+  /** Schema version, bumped when built-in step definitions change. */
+  version?: number
+  /** Ordered, editable processing steps. When present, execution is step-based. */
+  steps?: AssistantSkillStep[]
 }
 
 export interface AssistantCustomSkill extends AssistantAction {
   id: string
   instruction: string
-  steps: string[]
+  steps: AssistantSkillStep[]
   isCustom: true
   /** 是否广告投放技能：决定是否需要套用渠道/卖点/测试计划包装。 */
   requiresAdContext?: boolean
@@ -103,6 +156,30 @@ export interface AssistantCustomSkill extends AssistantAction {
   allowExploreSellingPoint?: boolean
 }
 
+/** A user-saved override layer applied on top of a built-in skill.
+ *  Only changed fields are stored, so `builtin + override = actual`, and the
+ *  original built-in definition is never lost (restore = drop the override). */
+export interface AssistantSkillOverride {
+  skillId: AssistantActionId
+  name?: string
+  icon?: AssistantActionIcon
+  description?: string
+  enabled?: boolean
+  priority?: number
+  trigger?: AssistantSkillTrigger
+  /** Full replacement of the step flow once the user edits steps. */
+  steps?: AssistantSkillStep[]
+  /** Partial patch of the output contract (candidates stay permanently off). */
+  contract?: {
+    primaryOutput?: 'finalPrompt' | 'variablePrompt'
+    output?: {
+      finalPrompt?: boolean
+      analysis?: boolean
+      wordEntries?: boolean
+    }
+  }
+}
+
 export interface AssistantActionPreferences {
   enabled: boolean
   pinnedActionIds: AssistantActionId[]
@@ -110,6 +187,8 @@ export interface AssistantActionPreferences {
   actionOrder: AssistantActionId[]
   actionSettings: AssistantActionSettings
   customSkills: AssistantCustomSkill[]
+  /** Override layers for built-in skills; empty means all built-ins use defaults. */
+  skillOverrides: AssistantSkillOverride[]
 }
 
 export type AdChannel = 'general' | 'toutiao' | 'gdt' | 'baidu' | 'multi'

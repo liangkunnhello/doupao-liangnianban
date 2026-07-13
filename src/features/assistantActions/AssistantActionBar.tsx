@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WheelEvent } from 'react'
-import { AlertCircle, ArrowDown, ArrowUp, Check, Image, Loader2, Palette, Plus, Settings, Sparkles, Tags, ThumbsUp, Trash2, Type, Wand2, X } from 'lucide-react'
+import { AlertCircle, ArrowDown, ArrowUp, Check, Copy, Image, Loader2, Palette, Pencil, Plus, RotateCcw, Settings, Sparkles, Tags, ThumbsUp, Trash2, Type, Wand2, X } from 'lucide-react'
 import { buildAssistantInputContext } from './context'
-import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
-import { buildCustomSkillContract, DEFAULT_SUPER_DERIVE_SETTINGS, getMoreAssistantActions, getRecommendedAssistantActions, getWhenByTrigger, normalizeAssistantActionPreferences } from './matcher'
-import { createAssistantSkillDraft, runAssistantAction } from './runner'
+import { BUILT_IN_ASSISTANT_ACTIONS, cloneBuiltInSkillSteps } from './builtInActions'
+import { applySkillOverride, buildCustomSkillContract, DEFAULT_SUPER_DERIVE_SETTINGS, duplicateSkillAsCustom, getMoreAssistantActions, getOrderedManageActions, getRecommendedAssistantActions, getResolvedBuiltInActions, getSkillOverride, getWhenByTrigger, hasSkillOverride, normalizeAssistantActionPreferences, normalizeEditorOutputRule, normalizeSkillSteps, restoreSkillDefault, upsertSkillOverride } from './matcher'
+import { buildSkillInstruction, createAssistantSkillDraft, runAssistantAction } from './runner'
 import type { AssistantRunnerProgressUpdate, AssistantSkillDraft } from './runner'
 import type { ApiProfile, AppSettings, InputImage, TaskParams, WordLibraryGroup } from '../../types'
-import type { AdChannel, AssistantAction, AssistantActionIcon, AssistantActionPreferences, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantSkillTrigger, AssistantWordEntryGroup, SellingPointPolicy, VisualIdentity, WordDeriveActionSettings } from './types'
-import { AD_CHANNEL_OPTIONS, OUTPUT_COUNT_OPTIONS, SELLING_POINT_POLICY_OPTIONS } from './types'
+import type { AdChannel, AssistantAction, AssistantActionIcon, AssistantActionPreferences, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantSkillOverride, AssistantSkillStep, AssistantSkillTrigger, AssistantStepOutput, AssistantStepRole, AssistantWordEntryGroup, SellingPointPolicy, VisualIdentity, WordDeriveActionSettings } from './types'
+import { AD_CHANNEL_OPTIONS, OUTPUT_COUNT_OPTIONS, SELLING_POINT_POLICY_OPTIONS, STEP_OUTPUT_OPTIONS, STEP_ROLE_OPTIONS } from './types'
 import Select from '../../components/Select'
 
 interface AssistantActionBarProps {
@@ -83,7 +83,7 @@ function getAssistantProgressPhases(action: AssistantAction): AssistantActionPro
     phase('prepare-input', '准备输入', '读取当前提示词、参考图和技能设置。'),
     phase('request-model', '等待模型返回', '请求已发送，模型生成阶段无法提供精确百分比。', true),
     phase('parse-response', '解析结果', '解析模型返回的 JSON 或普通文本。'),
-    phase('validate-result', '校验内容', '校验主推提示词、候选项和变量词条完整性。'),
+    phase('validate-result', '校验内容', '校验最终提示词、分析说明和变量词条完整性。'),
     phase('organize-result', '整理结果', '整理可应用的提示词、词条和测试计划。'),
   ]
   if (!isVariableResultAction(action)) return phases
@@ -124,6 +124,14 @@ export default function AssistantActionBar({
   onFeedbackChange,
 }: AssistantActionBarProps) {
   const normalizedPreferences = useMemo(() => normalizeAssistantActionPreferences(preferences), [preferences])
+  const resolvedBuiltInActions = useMemo(
+    () => getResolvedBuiltInActions(normalizedPreferences),
+    [normalizedPreferences],
+  )
+  const allResolvedActions = useMemo(
+    () => [...resolvedBuiltInActions, ...normalizedPreferences.customSkills],
+    [resolvedBuiltInActions, normalizedPreferences.customSkills],
+  )
   const context = useMemo(() => buildAssistantInputContext(prompt, inputImages), [prompt, inputImages])
   const actions = useMemo(() => getRecommendedAssistantActions(context, normalizedPreferences), [context, normalizedPreferences])
   const moreActions = useMemo(() => getMoreAssistantActions(context, normalizedPreferences), [context, normalizedPreferences])
@@ -133,6 +141,7 @@ export default function AssistantActionBar({
   const [settingsAction, setSettingsAction] = useState<PositionedAction | null>(null)
   const [skillEntryOpen, setSkillEntryOpen] = useState(false)
   const [skillPanelMode, setSkillPanelMode] = useState<'add' | 'manage' | null>(null)
+  const [editSkill, setEditSkill] = useState<AssistantAction | null>(null)
   const [hoveredSkill, setHoveredSkill] = useState<{ action: AssistantAction; rect: DOMRect } | null>(null)
 
   const runningActionId = feedback.type === 'loading' ? feedback.action.id : null
@@ -180,6 +189,7 @@ export default function AssistantActionBar({
         params,
         actionSettings: { ...normalizedPreferences.actionSettings, ...settingsOverride },
         customSkill: normalizedPreferences.customSkills.find((skill) => skill.id === action.id),
+        skill: action,
         onProgress: (update) => {
           loadingFeedback = applyAssistantProgress(loadingFeedback, update)
           onFeedbackChange(loadingFeedback)
@@ -197,8 +207,36 @@ export default function AssistantActionBar({
 
   const runAction = (action: AssistantAction) => void runActionWithSettings(action)
 
+  // 所有入口都必须指向“已解析技能”（builtin + override），避免二次入口绕开用户编辑。
   const getActionById = (id: string) =>
-    [...BUILT_IN_ASSISTANT_ACTIONS, ...normalizedPreferences.customSkills].find((action) => action.id === id)
+    allResolvedActions.find((action) => action.id === id)
+
+  const toggleSkillEnabled = (action: AssistantAction) => {
+    if (isCustomAssistantSkill(action)) {
+      updatePreferences({
+        ...normalizedPreferences,
+        customSkills: normalizedPreferences.customSkills.map((skill) =>
+          skill.id === action.id ? { ...skill, enabled: !(skill.enabled ?? true) } : skill),
+      })
+      return
+    }
+    const current = getSkillOverride(normalizedPreferences, action.id)
+    const nextEnabled = !(current?.enabled ?? action.enabled ?? true)
+    updatePreferences(upsertSkillOverride(normalizedPreferences, { skillId: action.id, enabled: nextEnabled }))
+  }
+
+  const duplicateCurrentSkill = (action: AssistantAction) => {
+    const custom = duplicateSkillAsCustom(action)
+    updatePreferences({
+      ...normalizedPreferences,
+      customSkills: [...normalizedPreferences.customSkills, custom],
+    })
+  }
+
+  const restoreBuiltinSkill = (action: AssistantAction) => {
+    if (isCustomAssistantSkill(action)) return
+    updatePreferences(restoreSkillDefault(normalizedPreferences, action.id))
+  }
 
   const runActionWithContext = async (
     action: AssistantAction,
@@ -222,6 +260,8 @@ export default function AssistantActionBar({
         params,
         actionSettings: { ...normalizedPreferences.actionSettings, ...settingsOverride },
         customSkill: normalizedPreferences.customSkills.find((skill) => skill.id === action.id),
+        // 二次入口（继续变体 / 渠道改写等）同样走已解析技能，确保编辑后的步骤生效。
+        skill: action,
         onProgress: (update) => {
           loadingFeedback = applyAssistantProgress(loadingFeedback, update)
           onFeedbackChange(loadingFeedback)
@@ -323,9 +363,28 @@ export default function AssistantActionBar({
           rect={contextAction.rect}
           pinned={normalizedPreferences.pinnedActionIds.includes(contextAction.action.id)}
           canHide={visibleActions.length > 1 && !isCoreVisibleAction(contextAction.action)}
+          isBuiltin={!isCustomAssistantSkill(contextAction.action)}
+          isEnabled={contextAction.action.enabled !== false}
+          canRestore={hasSkillOverride(normalizedPreferences, contextAction.action.id)}
           onRun={() => void runAction(contextAction.action)}
           onSettings={() => {
             setSettingsAction(contextAction)
+            setContextAction(null)
+          }}
+          onEdit={() => {
+            setEditSkill(contextAction.action)
+            setContextAction(null)
+          }}
+          onDuplicate={() => {
+            duplicateCurrentSkill(contextAction.action)
+            setContextAction(null)
+          }}
+          onRestore={() => {
+            restoreBuiltinSkill(contextAction.action)
+            setContextAction(null)
+          }}
+          onToggleEnabled={() => {
+            toggleSkillEnabled(contextAction.action)
             setContextAction(null)
           }}
           onPin={() => {
@@ -367,6 +426,20 @@ export default function AssistantActionBar({
           onModeChange={setSkillPanelMode}
           onClose={() => setSkillPanelMode(null)}
           onUpdatePreferences={updatePreferences}
+        />
+      )}
+
+      {editSkill && (
+        <SkillEditorPanel
+          skill={editSkill}
+          preferences={normalizedPreferences}
+          settings={settings}
+          profile={profile}
+          params={params}
+          prompt={prompt}
+          inputImages={inputImages}
+          onUpdatePreferences={updatePreferences}
+          onClose={() => setEditSkill(null)}
         />
       )}
 
@@ -533,6 +606,7 @@ function getAssistantActionPurposeHint(action: AssistantAction) {
 }
 
 function getAssistantActionDescription(action: AssistantAction) {
+  if (action.description?.trim()) return action.description.trim()
   if (isCustomAssistantSkill(action)) {
     const steps = action.steps.slice(0, 3).join('；')
     return steps || '按你创建技能时的自然语言规则执行，结合当前输入生成可直接使用的素材提示词或变量结果。'
@@ -587,8 +661,15 @@ function AssistantActionContextMenu({
   rect,
   pinned,
   canHide,
+  isBuiltin,
+  isEnabled,
+  canRestore,
   onRun,
   onSettings,
+  onEdit,
+  onDuplicate,
+  onRestore,
+  onToggleEnabled,
   onPin,
   onHide,
   onClose,
@@ -597,21 +678,32 @@ function AssistantActionContextMenu({
   rect: DOMRect
   pinned: boolean
   canHide: boolean
+  isBuiltin: boolean
+  isEnabled: boolean
+  canRestore: boolean
   onRun: () => void
   onSettings: () => void
+  onEdit: () => void
+  onDuplicate: () => void
+  onRestore: () => void
+  onToggleEnabled: () => void
   onPin: () => void
   onHide: () => void
   onClose: () => void
 }) {
-  const width = 160
+  const width = 168
   const viewportWidth = typeof window === 'undefined' ? width : window.innerWidth
   const left = Math.max(8, Math.min(rect.left, viewportWidth - width - 8))
   const top = Math.max(8, rect.top - 8)
 
   return (
-    <div className="fixed z-[90] w-40 -translate-y-full overflow-hidden rounded-2xl border border-gray-200/70 bg-white p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-gray-900 dark:ring-white/10" style={{ left, top }}>
+    <div className="fixed z-[90] -translate-y-full overflow-hidden rounded-2xl border border-gray-200/70 bg-white p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-gray-900 dark:ring-white/10" style={{ left, top, width }}>
       <button type="button" onClick={onRun} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><ActionIcon icon={action.icon} />运行</button>
-      <button type="button" onClick={onSettings} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><Settings className="h-4 w-4 text-blue-500" />设置</button>
+      <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><Pencil className="h-4 w-4 text-blue-500" />编辑技能</button>
+      {isBuiltin && <button type="button" onClick={onDuplicate} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><Copy className="h-4 w-4 text-blue-500" />复制为自定义</button>}
+      {isBuiltin && canRestore && <button type="button" onClick={onRestore} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><RotateCcw className="h-4 w-4 text-amber-500" />恢复默认</button>}
+      <button type="button" onClick={onToggleEnabled} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/[0.06]"><Settings className="h-4 w-4 text-blue-500" />{isEnabled ? '禁用' : '启用'}</button>
+      <button type="button" onClick={onSettings} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]"><Settings className="h-4 w-4 text-gray-400" />通用设置</button>
       <button type="button" onClick={onPin} className="block w-full rounded-xl px-2.5 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]">{pinned ? '取消固定' : '固定'}</button>
       {canHide && <button type="button" onClick={onHide} className="block w-full rounded-xl px-2.5 py-2 text-left text-xs text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]">隐藏</button>}
       <button type="button" onClick={onClose} className="block w-full rounded-xl px-2.5 py-2 text-left text-xs text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]">关闭</button>
@@ -898,16 +990,12 @@ function AssistantActionResultPanel({
   onContinueVariants?: (seedText: string) => void
   onRewriteChannel?: (seedText: string, channel: AdChannel) => void
 }) {
-  const candidates = result.candidates ?? []
   const sections = result.sections ?? []
-  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState(0)
   const [channelMenuOpen, setChannelMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [mainCopied, setMainCopied] = useState(false)
   const [wordEntriesOpen, setWordEntriesOpen] = useState(false)
   const [analysisOpen, setAnalysisOpen] = useState(false)
-  const [showAllCandidates, setShowAllCandidates] = useState(false)
-  const [candidateStates, setCandidateStates] = useState<Record<number, 'appended' | 'replaced' | 'copied'>>({})
   const hasWordEntries = Boolean(result.wordEntries?.some((group) => group.entries.length > 0))
   const canApplyWordPrompt = hasWordEntries && Boolean(result.variablePrompt)
   const applyOptions: AssistantWordEntryApplyOptions = {
@@ -917,9 +1005,7 @@ function AssistantActionResultPanel({
   const applyText = result.variablePrompt || ''
   const mainPrompt = canApplyWordPrompt
     ? applyText
-    : result.primaryText || candidates[0] || result.content
-  const visibleCandidates = showAllCandidates ? candidates : candidates.slice(0, 3)
-  const hiddenCandidateCount = Math.max(0, candidates.length - visibleCandidates.length)
+    : result.primaryText || result.content
   const wordEntryCount = result.wordEntries?.reduce((sum, group) => sum + group.entries.length, 0) ?? 0
   const channelLabel = result.channel ? (AD_CHANNEL_OPTIONS.find((option) => option.value === result.channel)?.label ?? result.channel) : '通用信息流'
   const policyLabel = result.sellingPointPolicy ? (SELLING_POINT_POLICY_OPTIONS.find((option) => option.value === result.sellingPointPolicy)?.label ?? result.sellingPointPolicy) : '锁定原卖点'
@@ -976,29 +1062,9 @@ function AssistantActionResultPanel({
       setMainCopied(false)
     }
   }
-  const markCandidate = (index: number, state: 'appended' | 'replaced' | 'copied') => {
-    setCandidateStates((current) => ({ ...current, [index]: state }))
-  }
-  const copyCandidate = async (text: string, index: number) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      markCandidate(index, 'copied')
-    } catch {
-      // Keep the result panel open even when clipboard permission is unavailable.
-    }
-  }
-  const appendCandidate = (text: string, index: number) => {
-    onAppend(text)
-    markCandidate(index, 'appended')
-  }
-  const replaceCandidate = (text: string, index: number) => {
-    onReplace(text)
-    markCandidate(index, 'replaced')
-  }
   const appendResult = () => {
     if (canApplyWordPrompt && onApplyWordPrompt) {
       onApplyWordPrompt(result.wordEntries ?? [], applyText, { ...applyOptions, promptMode: 'append' })
-      markCandidate(selectedCandidateIndex, 'appended')
       return
     }
     onAppend(mainPrompt)
@@ -1006,20 +1072,16 @@ function AssistantActionResultPanel({
   const replaceResult = () => {
     if (canApplyWordPrompt && onApplyWordPrompt) {
       onApplyWordPrompt(result.wordEntries ?? [], applyText, { ...applyOptions, promptMode: 'replace' })
-      markCandidate(selectedCandidateIndex, 'replaced')
       return
     }
     onReplace(mainPrompt)
   }
 
   useEffect(() => {
-    setSelectedCandidateIndex(0)
-    setCandidateStates({})
     setCopied(false)
     setMainCopied(false)
     setWordEntriesOpen(false)
     setAnalysisOpen(false)
-    setShowAllCandidates(false)
     setFactOpen(true)
     setSourceOpen(true)
   }, [result])
@@ -1146,47 +1208,6 @@ function AssistantActionResultPanel({
             )}
           </div>
         )}
-        {candidates.length > 0 && (
-          <div className="mt-2 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-medium text-gray-800 dark:text-gray-100">候选提示词</div>
-              <div className="text-[11px] text-gray-500 dark:text-gray-400">默认显示 {Math.min(3, candidates.length)} / {candidates.length}</div>
-            </div>
-            {visibleCandidates.map((candidate, index) => {
-              const selected = index === selectedCandidateIndex
-              const state = candidateStates[index]
-              const stateLabel = state === 'appended' ? '已追加' : state === 'replaced' ? '已替换' : state === 'copied' ? '已复制' : ''
-              return (
-              <div
-                key={`${index}-${candidate.slice(0, 16)}`}
-                onClick={() => setSelectedCandidateIndex(index)}
-                className={`block w-full rounded-xl border p-2 text-left transition-colors ${
-                  selected
-                    ? 'border-blue-300 bg-blue-50 text-gray-800 ring-1 ring-blue-200 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-gray-100 dark:ring-blue-500/20'
-                    : 'border-gray-200/70 bg-white text-gray-700 hover:border-blue-200 hover:bg-blue-50/60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:border-blue-500/30 dark:hover:bg-blue-500/10'
-                }`}
-              >
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className={`font-medium ${selected ? 'text-blue-600 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`}>候选 {index + 1}</span>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {stateLabel && <span className="rounded-full bg-green-500 px-2 py-0.5 text-[10px] font-medium text-white">{stateLabel}</span>}
-                    {selected && <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[10px] font-medium text-white">已选</span>}
-                  </div>
-                </div>
-                <div className="whitespace-pre-wrap">{candidate}</div>
-                <div className="mt-2 flex flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  <button type="button" onClick={(event) => { event.stopPropagation(); appendCandidate(candidate, index) }} className="h-6 shrink-0 rounded-md border border-gray-200 bg-white px-2 text-[11px] font-medium leading-none text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">追加</button>
-                  <button type="button" onClick={(event) => { event.stopPropagation(); replaceCandidate(candidate, index) }} className="h-6 shrink-0 rounded-md bg-blue-500 px-2 text-[11px] font-medium leading-none text-white hover:bg-blue-600">替换</button>
-                  <button type="button" onClick={(event) => { event.stopPropagation(); void copyCandidate(candidate, index) }} className="h-6 shrink-0 rounded-md border border-gray-200 bg-white px-2 text-[11px] font-medium leading-none text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">复制</button>
-                </div>
-              </div>
-              )
-            })}
-            {hiddenCandidateCount > 0 && (
-              <button type="button" onClick={() => setShowAllCandidates(true)} className="h-7 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">展开其余 {hiddenCandidateCount} 条</button>
-            )}
-          </div>
-        )}
         {sections.length > 0 && (
           <div className="mt-2 rounded-xl border border-gray-200/70 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
             <button type="button" onClick={() => setAnalysisOpen((open) => !open)} className="flex w-full items-center justify-between gap-2 px-2 py-2 text-left">
@@ -1209,7 +1230,7 @@ function AssistantActionResultPanel({
             )}
           </div>
         )}
-        {!mainPrompt && sections.length === 0 && candidates.length === 0 && (
+        {!mainPrompt && sections.length === 0 && (
           <pre className="whitespace-pre-wrap font-sans">{result.content}</pre>
         )}
 
@@ -1343,7 +1364,7 @@ function SkillBuilderPanel({
       name: draft.name,
       icon: draft.icon,
       instruction: draft.instruction,
-      steps: draft.steps,
+      steps: normalizeSkillSteps(draft.steps, { allowWordEntries }),
       trigger,
       enabled: true,
       priority: 65,
@@ -1540,6 +1561,396 @@ function SkillBuilderPanel({
   )
 }
 
+function SkillEditorPanel({
+  skill,
+  preferences,
+  settings,
+  profile,
+  params,
+  prompt,
+  inputImages,
+  onUpdatePreferences,
+  onClose,
+}: {
+  skill: AssistantAction
+  preferences: AssistantActionPreferences
+  settings: AppSettings
+  profile: ApiProfile
+  params: TaskParams
+  prompt: string
+  inputImages: InputImage[]
+  onUpdatePreferences: (preferences: AssistantActionPreferences) => void
+  onClose: () => void
+}) {
+  const isBuiltin = !isCustomAssistantSkill(skill)
+  const base = isBuiltin ? BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === skill.id) : undefined
+  const iconOptions = Object.keys(iconMap) as AssistantActionIcon[]
+
+  const [name, setName] = useState(skill.name)
+  const [icon, setIcon] = useState<AssistantActionIcon>(skill.icon)
+  const [description, setDescription] = useState(skill.description ?? '')
+  const [enabled, setEnabled] = useState(skill.enabled !== false)
+  const [priority, setPriority] = useState(skill.priority)
+  const [trigger, setTrigger] = useState<AssistantSkillTrigger>(skill.trigger ?? 'always')
+  const [steps, setSteps] = useState<AssistantSkillStep[]>(() => (skill.steps ?? []).map((step) => ({ ...step })))
+  const [primaryOutput, setPrimaryOutput] = useState<'finalPrompt' | 'variablePrompt'>(skill.contract?.primaryOutput === 'variablePrompt' ? 'variablePrompt' : 'finalPrompt')
+  const [allowAnalysis, setAllowAnalysis] = useState(skill.contract?.output.analysis !== false)
+  const [allowWordEntries, setAllowWordEntries] = useState(skill.contract?.output.wordEntries === true)
+  // 输出规则统一由纯函数收敛，杜绝“variablePrompt + 无词条”或“关闭主提示词”这类冲突态。
+  const outputRule = useMemo(
+    () => normalizeEditorOutputRule({ primaryOutput, allowWordEntries, allowAnalysis }),
+    [primaryOutput, allowWordEntries, allowAnalysis],
+  )
+
+  const [testInput, setTestInput] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testError, setTestError] = useState('')
+  const [testResult, setTestResult] = useState<AssistantActionResult | null>(null)
+
+  const editedContract = useMemo(() => {
+    if (!skill.contract) return undefined
+    return {
+      ...skill.contract,
+      primaryOutput: outputRule.primaryOutput,
+      output: {
+        ...skill.contract.output,
+        candidates: false,
+        // finalPrompt 永远开启：所有技能最终只输出一个主提示词。
+        finalPrompt: true,
+        analysis: outputRule.allowAnalysis,
+        wordEntries: outputRule.allowWordEntries,
+      },
+    }
+  }, [skill.contract, outputRule])
+
+  const buildResolved = (): AssistantAction => ({
+    ...skill,
+    name: name.trim() || skill.name,
+    icon,
+    description: description.trim() || undefined,
+    enabled,
+    priority,
+    trigger,
+    when: getWhenByTrigger(trigger),
+    steps,
+    contract: editedContract,
+  })
+
+  const stepId = () => `step-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+
+  const updateStep = (id: string, patch: Partial<AssistantSkillStep>) =>
+    setSteps((current) => current.map((step) => step.id === id ? { ...step, ...patch } : step))
+
+  const moveStep = (id: string, direction: -1 | 1) =>
+    setSteps((current) => {
+      const index = current.findIndex((step) => step.id === id)
+      const next = index + direction
+      if (index < 0 || next < 0 || next >= current.length) return current
+      const copy = [...current]
+      const [item] = copy.splice(index, 1)
+      copy.splice(next, 0, item)
+      return copy
+    })
+
+  const addStep = () =>
+    setSteps((current) => [
+      ...current,
+      { id: stepId(), title: '新步骤', role: 'observe', outputTo: 'sections', instruction: '', enabled: true },
+    ])
+
+  const removeStep = (id: string) =>
+    setSteps((current) => current.filter((step) => step.id !== id || step.required))
+
+  const resetDraft = () => {
+    setName(base?.name ?? skill.name)
+    setIcon(base?.icon ?? skill.icon)
+    setDescription(base?.description ?? skill.description ?? '')
+    setEnabled(base?.enabled ?? true)
+    setPriority(base?.priority ?? skill.priority)
+    setTrigger(base?.trigger ?? 'always')
+    setSteps((base?.steps ?? []).map((step) => ({ ...step })))
+    setPrimaryOutput(base?.contract?.primaryOutput === 'variablePrompt' ? 'variablePrompt' : 'finalPrompt')
+    setAllowAnalysis(base?.contract?.output.analysis !== false)
+    setAllowWordEntries(base?.contract?.output.wordEntries === true)
+    setTestResult(null)
+  }
+
+  const buildOverride = (): AssistantSkillOverride => {
+    const override: AssistantSkillOverride = { skillId: skill.id }
+    if (name.trim() && name.trim() !== (base?.name ?? '')) override.name = name.trim().slice(0, 16)
+    if (icon !== (base?.icon)) override.icon = icon
+    if (description.trim() && description.trim() !== (base?.description ?? '')) override.description = description.trim().slice(0, 120)
+    if (enabled !== (base?.enabled ?? true)) override.enabled = enabled
+    if (priority !== (base?.priority)) override.priority = priority
+    if (trigger !== (base?.trigger)) override.trigger = trigger
+    if (JSON.stringify(steps) !== JSON.stringify(base?.steps ?? [])) override.steps = steps
+    const contractPatch: NonNullable<AssistantSkillOverride['contract']> = {}
+    if (outputRule.primaryOutput !== (base?.contract?.primaryOutput ?? 'finalPrompt')) contractPatch.primaryOutput = outputRule.primaryOutput
+    const outputPatch: NonNullable<NonNullable<AssistantSkillOverride['contract']>['output']> = {}
+    // finalPrompt 恒为 true，永不写入 override 关闭它。
+    if (outputRule.allowAnalysis !== (base?.contract?.output.analysis !== false)) outputPatch.analysis = outputRule.allowAnalysis
+    if (outputRule.allowWordEntries !== (base?.contract?.output.wordEntries === true)) outputPatch.wordEntries = outputRule.allowWordEntries
+    if (Object.keys(outputPatch).length) contractPatch.output = outputPatch
+    if (Object.keys(contractPatch).length) override.contract = contractPatch
+    return override
+  }
+
+  const save = () => {
+    if (isBuiltin) {
+      onUpdatePreferences(upsertSkillOverride(preferences, buildOverride()))
+    } else {
+      const custom = skill as AssistantCustomSkill
+      const patch: AssistantCustomSkill = {
+        ...custom,
+        name: name.trim().slice(0, 16) || custom.name,
+        icon,
+        description: description.trim().slice(0, 120) || undefined,
+        enabled,
+        priority,
+        trigger,
+        when: getWhenByTrigger(trigger),
+        steps,
+        contract: editedContract,
+        requiresAdContext: editedContract?.requiresAdContext,
+        allowWordEntries: editedContract?.output.wordEntries === true,
+        allowExploreSellingPoint: custom.allowExploreSellingPoint,
+        outputMode: editedContract?.output.wordEntries === true ? 'create-word-tags' : 'show-candidates',
+      }
+      onUpdatePreferences({
+        ...preferences,
+        customSkills: preferences.customSkills.map((item) => item.id === skill.id ? patch : item),
+      })
+    }
+  }
+
+  const runTest = async () => {
+    if (testing) return
+    setTesting(true)
+    setTestError('')
+    setTestResult(null)
+    const hasTestInput = testInput.trim().length > 0
+    const context = buildAssistantInputContext(hasTestInput ? testInput : prompt, hasTestInput ? [] : inputImages)
+    const resolved = buildResolved()
+    try {
+      const result = await runAssistantAction(skill.id, context, {
+        settings,
+        profile,
+        params,
+        actionSettings: preferences.actionSettings,
+        customSkill: isBuiltin ? undefined : (resolved as AssistantCustomSkill),
+        skill: resolved,
+        onProgress: () => {},
+      })
+      setTestResult(result)
+    } catch (cause) {
+      setTestError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const selectClassName = 'rounded-xl border border-gray-200 bg-white px-2.5 py-1.5 text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
+  const previewInstruction = buildSkillInstruction(name.trim() || skill.name, steps)
+  const previewJson = JSON.stringify(buildResolved(), null, 2)
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[90vh] w-[min(720px,100%)] flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white shadow-2xl ring-1 ring-black/5 dark:border-white/[0.08] dark:bg-gray-900 dark:ring-white/10"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-white/[0.08]">
+          <div className="flex min-w-0 items-center gap-2">
+            <ActionIcon icon={icon} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">编辑技能：{skill.name}</div>
+              <div className="text-[11px] text-gray-400">{isBuiltin ? '内置技能（通过覆盖层保存，可随时恢复默认）' : '自定义技能'}</div>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.08]"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="grid gap-4 overflow-auto p-4">
+          {/* 1. 基础信息 */}
+          <section className="rounded-xl border border-gray-100 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <div className="mb-2 text-xs font-semibold text-gray-700 dark:text-gray-200">基础信息</div>
+            <div className="grid gap-3 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-2">
+              <label className="grid gap-1">
+                <span>技能名称</span>
+                <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+              </label>
+              <label className="grid gap-1">
+                <span>图标</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {iconOptions.map((option) => {
+                    const Icon = iconMap[option]
+                    return (
+                      <button key={option} type="button" onClick={() => setIcon(option)} className={`flex h-8 w-8 items-center justify-center rounded-lg border ${icon === option ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300' : 'border-gray-200 text-gray-400 dark:border-white/[0.08]'}`}>
+                        <Icon className="h-4 w-4" />
+                      </button>
+                    )
+                  })}
+                </div>
+              </label>
+              <label className="grid gap-1 sm:col-span-2">
+                <span>描述</span>
+                <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} placeholder="一句话说明这个技能做什么，会显示在技能条悬停卡片上" className="w-full resize-none rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+              </label>
+              <label className="grid gap-1">
+                <span>触发条件</span>
+                <Select value={trigger} onChange={(value) => setTrigger(value as AssistantSkillTrigger)} options={TRIGGER_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} className={selectClassName} />
+              </label>
+              <div className="grid gap-1">
+                <span>优先级</span>
+                <input type="number" min={0} max={100} value={priority} onChange={(event) => setPriority(Number(event.target.value) || 0)} className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+              </div>
+            </div>
+            <div className="mt-2">
+              <SkillToggleRow label="是否启用" hint="关闭后该技能从技能条隐藏" value={enabled} onChange={setEnabled} />
+            </div>
+          </section>
+
+          {/* 2. 输出规则 */}
+          <section className="rounded-xl border border-gray-100 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <div className="mb-2 text-xs font-semibold text-gray-700 dark:text-gray-200">输出规则</div>
+            <div className="grid gap-2">
+              <div className="grid gap-1">
+                <span className="text-[11px] text-gray-500 dark:text-gray-400">主输出类型</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    { value: 'finalPrompt', label: '最终提示词' },
+                    { value: 'variablePrompt', label: '变量提示词 + 词条' },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setPrimaryOutput(option.value)
+                        // 选择“变量提示词 + 词条”时自动开启词条，避免出现无词条的变量主输出。
+                        if (option.value === 'variablePrompt') setAllowWordEntries(true)
+                      }}
+                      className={`rounded-lg border px-2.5 py-1 text-xs ${primaryOutput === option.value ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300' : 'border-gray-200 text-gray-500 dark:border-white/[0.08] dark:text-gray-400'}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <SkillToggleRow label="允许分析说明（进入“查看更多”）" hint="关闭则只保留主结果" value={allowAnalysis} onChange={setAllowAnalysis} />
+              <SkillToggleRow
+                label="允许词条（变量主提示词 + 词条库）"
+                hint="关闭则技能不输出 {{变量}} 与词条"
+                value={allowWordEntries}
+                onChange={(next) => {
+                  setAllowWordEntries(next)
+                  // 关闭词条时若当前是变量主输出，自动回落到最终提示词，避免冲突态。
+                  if (!next && primaryOutput === 'variablePrompt') setPrimaryOutput('finalPrompt')
+                }}
+              />
+              <div className="flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50/70 px-2.5 py-1.5 text-[11px] text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                所有技能都会输出一个最终主提示词；词条技能会额外输出变量提示词和词条。候选版本已永久关闭，不可开启。
+              </div>
+            </div>
+          </section>
+
+          {/* 3. 步骤编排 */}
+          <section className="rounded-xl border border-gray-100 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold text-gray-700 dark:text-gray-200">步骤编排（按顺序排列，模型逐步执行）</div>
+              <button type="button" onClick={addStep} className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-600 hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"><Plus className="h-3.5 w-3.5" />添加步骤</button>
+            </div>
+            <div className="space-y-2">
+              {steps.map((step, index) => (
+                <div key={step.id} className="rounded-xl border border-gray-200/70 bg-white p-2.5 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <div className="flex items-center gap-2">
+                    <input value={step.title} onChange={(event) => updateStep(step.id, { title: event.target.value })} className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs font-medium text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+                    <button type="button" onClick={() => moveStep(step.id, -1)} disabled={index === 0} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-white/[0.06]"><ArrowUp className="h-3.5 w-3.5" /></button>
+                    <button type="button" onClick={() => moveStep(step.id, 1)} disabled={index === steps.length - 1} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-white/[0.06]"><ArrowDown className="h-3.5 w-3.5" /></button>
+                    {!step.required && (
+                      <button type="button" onClick={() => removeStep(step.id)} className="rounded-lg p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button>
+                    )}
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className="grid gap-1">
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">作用</span>
+                      <Select value={step.role} onChange={(value) => updateStep(step.id, { role: value as AssistantStepRole })} options={STEP_ROLE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} className={selectClassName} />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">输出到</span>
+                      <Select value={step.outputTo} onChange={(value) => updateStep(step.id, { outputTo: value as AssistantStepOutput })} options={STEP_OUTPUT_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} className={selectClassName} />
+                    </label>
+                  </div>
+                  <textarea value={step.instruction} onChange={(event) => updateStep(step.id, { instruction: event.target.value })} rows={3} placeholder="这一步要模型具体做什么" className="mt-2 w-full resize-none rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+                  <label className="mt-2 flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+                    <input type="checkbox" checked={step.enabled} onChange={(event) => updateStep(step.id, { enabled: event.target.checked })} />
+                    启用此步骤{step.required ? '（必需步骤，不可删除）' : ''}
+                  </label>
+                </div>
+              ))}
+              {steps.length === 0 && <div className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/[0.04]">暂无步骤，请添加。</div>}
+            </div>
+            {previewInstruction && (
+              <div className="mt-3">
+                <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">实时指令预览（发送给模型）</div>
+                <pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2.5 text-[11px] leading-relaxed text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">{previewInstruction}</pre>
+              </div>
+            )}
+          </section>
+
+          {/* 4. JSON 预览 / 测试运行 */}
+          <section className="rounded-xl border border-gray-100 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <div className="mb-2 text-xs font-semibold text-gray-700 dark:text-gray-200">JSON 预览 / 测试运行</div>
+            <label className="grid gap-1">
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">测试输入（留空则使用当前输入框内容）</span>
+              <textarea value={testInput} onChange={(event) => setTestInput(event.target.value)} rows={2} placeholder="输入一段文字或描述，运行当前技能查看效果" className="w-full resize-none rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-800 outline-none dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100" />
+            </label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => void runTest()} disabled={testing || !profile.apiKey.trim()} className="inline-flex items-center gap-1.5 rounded-xl bg-blue-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:cursor-wait disabled:opacity-60">
+                {testing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {testing ? '运行中' : '测试运行'}
+              </button>
+              <button type="button" onClick={() => setTestResult(null)} className="rounded-xl border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">清除结果</button>
+            </div>
+            {!profile.apiKey.trim() && <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">未配置 API Key，无法测试运行。</div>}
+            {testError && <div className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-200">{testError}</div>}
+            {testResult && (
+              <div className="mt-2 space-y-2 rounded-lg bg-gray-50 p-2.5 text-xs dark:bg-white/[0.04]">
+                <div className="font-medium text-gray-800 dark:text-gray-100">主提示词</div>
+                <div className="whitespace-pre-wrap text-gray-700 dark:text-gray-200">{testResult.primaryText || testResult.content}</div>
+                {testResult.sections && testResult.sections.length > 0 && (
+                  <div className="font-medium text-gray-800 dark:text-gray-100">分析说明（{testResult.sections.length} 组）</div>
+                )}
+                {testResult.wordEntries && testResult.wordEntries.some((group) => group.entries.length > 0) && (
+                  <div className="font-medium text-gray-800 dark:text-gray-100">词条（{testResult.wordEntries.filter((group) => group.entries.length > 0).length} 类）</div>
+                )}
+              </div>
+            )}
+            <div className="mt-3">
+              <div className="mb-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">执行结构 JSON</div>
+              <pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2.5 text-[11px] leading-relaxed text-gray-600 dark:bg-white/[0.04] dark:text-gray-300">{previewJson}</pre>
+            </div>
+          </section>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-gray-100 px-4 py-3 dark:border-white/[0.08]">
+          <div>
+            {isBuiltin && (
+              <button type="button" onClick={() => { resetDraft(); onUpdatePreferences(restoreSkillDefault(preferences, skill.id)) }} className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 dark:border-white/[0.08] dark:text-amber-300 dark:hover:bg-amber-500/10">
+                <RotateCcw className="h-3.5 w-3.5" />恢复默认
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="rounded-xl border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">取消</button>
+            <button type="button" onClick={() => { save(); onClose() }} className="rounded-xl bg-blue-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const TRIGGER_OPTIONS: Array<{ value: AssistantSkillTrigger; label: string }> = [
   { value: 'always', label: '通用' },
   { value: 'image', label: '图片' },
@@ -1561,18 +1972,6 @@ function SkillToggleRow({ label, hint, value, onChange }: { label: string; hint:
       <span className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${value ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>{value ? '开' : '关'}</span>
     </button>
   )
-}
-
-function getOrderedManageActions(preferences: AssistantActionPreferences): AssistantAction[] {
-  const manualOrder = new Map(preferences.actionOrder.map((id, index) => [id, index]))
-  return [...BUILT_IN_ASSISTANT_ACTIONS, ...preferences.customSkills].sort((a, b) => {
-    const aManual = manualOrder.get(a.id)
-    const bManual = manualOrder.get(b.id)
-    if (aManual != null && bManual != null && aManual !== bManual) return aManual - bManual
-    if (aManual != null) return -1
-    if (bManual != null) return 1
-    return b.priority - a.priority
-  })
 }
 
 function isCustomAssistantSkill(action: AssistantAction): action is AssistantCustomSkill {

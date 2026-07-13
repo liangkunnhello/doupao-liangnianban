@@ -3,7 +3,8 @@ import type { ApiProfile, AppSettings, TaskParams } from '../../types'
 import { callAgentResponsesApi } from '../../lib/agentApi'
 import { DEFAULT_WORD_DERIVE_SETTINGS } from './matcher'
 import { runAssistantAction } from './runner'
-import type { AssistantInputContext } from './types'
+import { buildSkillInstruction } from './runner'
+import type { AssistantAction, AssistantInputContext } from './types'
 
 vi.mock('../../lib/agentApi', () => ({
   callAgentResponsesApi: vi.fn(),
@@ -104,10 +105,9 @@ describe('assistant action runner', () => {
     expect(result.primaryText).not.toContain('思考过程')
     expect(result.primaryText).not.toContain('一组')
     expect(result.primaryText).not.toContain('每张')
-    expect(result.candidates).toHaveLength(1)
-    expect(result.candidates?.[0]).toBe(result.primaryText)
+    expect(result.candidates).toEqual([])
     expect(result.variablePrompt).toBeUndefined()
-    expect(result.sections).toBeUndefined()
+    expect(result.sections).toEqual([{ title: '不应保留的分析', items: ['营销分析'] }])
     expect(result.wordEntries).toBeUndefined()
     expect(result.testPlan).toBeUndefined()
   })
@@ -348,7 +348,7 @@ describe('assistant action runner', () => {
           requiresAdContext: true,
           allowExploreSellingPoint: true,
           primaryOutput: 'variablePrompt',
-          output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: true },
+          output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: true },
         },
       },
     ])
@@ -397,12 +397,124 @@ describe('assistant action runner', () => {
           requiresAdContext: true,
           allowExploreSellingPoint: false,
           primaryOutput: 'finalPrompt',
-          output: { finalPrompt: true, candidates: true, analysis: true, wordEntries: false },
+          output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: false },
         },
       },
     })
 
     expect(result.sellingPointPolicy).toBe('lock')
     expect(result.testPlan).toContain('锁定原卖点')
+  })
+
+  it('keeps market breakdown as a single final prompt instead of an analysis report', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        finalPrompt: '适合测试安全防护、权限控制、加密与设备保护类图标素材的一致性和差异化表达。',
+        prompts: ['不应保留的候选'],
+        sections: [{ title: '样本范围', items: ['不应保留的分析'] }],
+        wordEntries: [{ category: '产品主体', entries: ['盾牌图标'] }],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('market-breakdown', context({ hasImage: true, imageCount: 9 }), {
+      settings,
+      profile,
+      params,
+      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
+    })
+
+    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.calls[0]?.[0].input)
+    expect(requestText).toContain('只输出一个自然段')
+    expect(result.primaryText).toBe('适合测试安全防护、权限控制、加密与设备保护类图标素材的一致性和差异化表达。')
+    expect(result.candidates).toEqual([])
+    expect(result.sections).toEqual([{ title: '样本范围', items: ['不应保留的分析'] }])
+    expect(result.wordEntries).toBeUndefined()
+    expect(result.variablePrompt).toBeUndefined()
+  })
+})
+
+describe('resolved skill steps drive execution', () => {
+  beforeEach(() => {
+    mockedCallAgentResponsesApi.mockReset()
+  })
+
+  it('feeds the edited skill steps into the model instruction', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({ finalPrompt: '生成画面', prompts: [] }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const skill = {
+      id: 'market-breakdown',
+      name: '大盘拆解',
+      icon: 'image',
+      priority: 60,
+      when: { image: 'optional', text: 'optional' },
+      outputMode: 'show-candidates',
+      steps: [
+        { id: 's1', title: '我的自定义步骤', role: 'observe', outputTo: 'sections', instruction: '只看参考图数量并输出编辑后的独特指令', enabled: true },
+      ],
+    } as AssistantAction
+
+    await runAssistantAction('market-breakdown', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, skill })
+
+    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.lastCall?.[0].input)
+    expect(requestText).toContain('你正在执行技能：大盘拆解')
+    expect(requestText).toContain('只看参考图数量并输出编辑后的独特指令')
+  })
+
+  it('runs image-derive through its step flow (not the concept fallback) when the resolved skill has steps', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({ finalPrompt: '生成一张独立画面', prompts: [] }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const skill = {
+      id: 'image-derive',
+      name: '概念抽取',
+      icon: 'image',
+      priority: 120,
+      when: { image: 'required', text: 'optional' },
+      outputMode: 'show-candidates',
+      steps: [
+        { id: 's1', title: '自定义观察', role: 'observe', outputTo: 'sections', instruction: '我编辑后的观察步骤', enabled: true },
+      ],
+    } as AssistantAction
+
+    await runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, skill })
+
+    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.lastCall?.[0].input)
+    expect(requestText).toContain('我编辑后的观察步骤')
+    expect(requestText).not.toContain('你是“概念抽取”提示词助手')
+  })
+})
+
+describe('buildSkillInstruction (step-based assembly)', () => {
+  it('assembles enabled steps in order and labels their output position', () => {
+    const instruction = buildSkillInstruction('大盘拆解', [
+      { id: 's1', title: '第一步：观察样本', role: 'observe', outputTo: 'sections', instruction: '统计参考图数量', enabled: true },
+      { id: 's2', title: '第四步：输出最终提示词', role: 'finalPrompt', outputTo: 'finalPrompt', instruction: '只输出一个自然段', enabled: true },
+    ])
+
+    expect(instruction).toContain('你正在执行技能：大盘拆解')
+    expect(instruction).toContain('第一步：观察样本')
+    expect(instruction).toContain('sections（仅供“查看更多”）')
+    expect(instruction).toContain('第四步：输出最终提示词')
+    expect(instruction).toContain('finalPrompt（主结果）')
+  })
+
+  it('drops disabled steps so they do not participate in execution', () => {
+    const instruction = buildSkillInstruction('测试', [
+      { id: 's1', title: '第一步', role: 'observe', outputTo: 'sections', instruction: '观察', enabled: false },
+      { id: 's2', title: '第二步', role: 'finalPrompt', outputTo: 'finalPrompt', instruction: '生成提示词', enabled: true },
+    ])
+
+    expect(instruction).not.toContain('第一步')
+    expect(instruction).toContain('第二步')
+  })
+
+  it('returns empty when no enabled step has an instruction', () => {
+    expect(buildSkillInstruction('空', [])).toBe('')
+    expect(buildSkillInstruction('空', [
+      { id: 's1', title: 'x', role: 'observe', outputTo: 'sections', instruction: '', enabled: true },
+    ])).toBe('')
   })
 })

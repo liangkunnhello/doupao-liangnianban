@@ -1,8 +1,8 @@
 import type { ApiProfile, AppSettings, TaskParams } from '../../types'
 import { callAgentResponsesApi } from '../../lib/agentApi'
-import { BUILT_IN_ASSISTANT_ACTIONS } from './builtInActions'
+import { BUILT_IN_ASSISTANT_ACTIONS, BUILT_IN_SKILL_STEPS } from './builtInActions'
 import { buildGroundingProfile } from './context'
-import type { AdChannel, AssistantActionId, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantQualityState, AssistantResultSection, AssistantSkillContract, AssistantWordEntryGroup, GroundingProfile, SellingPointPolicy, VisualIdentity } from './types'
+import type { AdChannel, AssistantAction, AssistantActionId, AssistantActionResult, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantQualityState, AssistantResultSection, AssistantSkillContract, AssistantSkillStep, AssistantStepOutput, AssistantWordEntryGroup, GroundingProfile, SellingPointPolicy, VisualIdentity } from './types'
 import { AD_CHANNEL_OPTIONS, SELLING_POINT_POLICY_OPTIONS } from './types'
 import { buildCustomSkillContract, DEFAULT_ASSISTANT_ACTION_SETTINGS, normalizeAssistantActionSettings } from './matcher'
 import { INFORMATION_FLOW_AD_COMPLIANCE_PROMPT, sanitizeInformationFlowAdResult } from './adCompliance'
@@ -55,9 +55,59 @@ const VARIABLE_OUTPUT_ACTION_IDS = new Set<AssistantActionId>([
   'angle-matrix',
 ])
 
-function getActionContract(actionId: AssistantActionId, customSkill?: AssistantCustomSkill): AssistantSkillContract | undefined {
+function getActionContract(actionId: AssistantActionId, customSkill?: AssistantCustomSkill, skill?: AssistantAction): AssistantSkillContract | undefined {
+  if (skill?.contract) return skill.contract
   if (customSkill) return customSkill.contract
   return BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === actionId)?.contract
+}
+
+/** Resolve the effective, ordered step flow for an action. Prefers the resolved
+ *  skill (built-in + override, or custom), then falls back to shipped defaults. */
+function getEffectiveSteps(actionId: AssistantActionId, skill?: AssistantAction, customSkill?: AssistantCustomSkill): AssistantSkillStep[] {
+  if (skill?.steps?.length) return skill.steps
+  if (customSkill?.steps?.length) return customSkill.steps
+  return BUILT_IN_SKILL_STEPS[actionId] ?? []
+}
+
+function getStepRoleLabel(role: AssistantSkillStep['role']): string {
+  switch (role) {
+    case 'observe': return '观察输入'
+    case 'lock': return '锁定内容'
+    case 'extract': return '提炼方向'
+    case 'finalPrompt': return '生成最终提示词'
+    case 'variablePrompt': return '生成变量提示词'
+    case 'wordEntries': return '生成词条'
+    case 'risk': return '风险检查'
+    default: return '处理'
+  }
+}
+
+function getStepOutputLabel(outputTo: AssistantStepOutput): string {
+  switch (outputTo) {
+    case 'finalPrompt': return 'finalPrompt（主结果）'
+    case 'variablePrompt': return 'variablePrompt（变量主提示词）'
+    case 'wordEntries': return 'wordEntries（词条库）'
+    case 'sections':
+    default: return 'sections（仅供“查看更多”）'
+  }
+}
+
+/** Assemble the ordered step flow into a single instruction block. Only enabled
+ *  steps are included, so a disabled step simply drops out of execution. */
+export function buildSkillInstruction(skillName: string, steps: AssistantSkillStep[]): string {
+  const enabled = steps.filter((step) => step.enabled && step.instruction.trim())
+  if (enabled.length === 0) return ''
+  const lines: string[] = [`你正在执行技能：${skillName}。请严格按以下步骤顺序处理，每一步只负责它对应的能力：`]
+  enabled.forEach((step, index) => {
+    lines.push(
+      '',
+      `${step.title?.trim() || `第${index + 1}步`}`,
+      `作用：${getStepRoleLabel(step.role)}。`,
+      `输出位置：${getStepOutputLabel(step.outputTo)}。`,
+      `要求：${step.instruction.trim()}`,
+    )
+  })
+  return lines.join('\n')
 }
 
 export interface AssistantSkillDraft {
@@ -77,6 +127,9 @@ export async function runAssistantAction(
     params: TaskParams
     actionSettings?: Partial<AssistantActionSettings>
     customSkill?: AssistantCustomSkill
+    /** The fully resolved skill (built-in with override applied, or custom).
+     *  When provided, its steps / contract / name drive execution. */
+    skill?: AssistantAction
     onProgress?: (update: AssistantRunnerProgressUpdate) => void
   },
 ): Promise<AssistantActionResult> {
@@ -85,16 +138,16 @@ export async function runAssistantAction(
   }
 
   const actionSettings = normalizeAssistantActionSettings(opts.actionSettings ?? DEFAULT_ASSISTANT_ACTION_SETTINGS)
-  const requiresAd = skillRequiresAdContext(actionId, opts.customSkill)
+  const requiresAd = skillRequiresAdContext(actionId, opts.customSkill, opts.skill)
   const grounding = buildGroundingProfile(context)
-  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, opts.customSkill, actionSettings)
+  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, opts.customSkill, actionSettings, opts.skill)
   if (requiresAd) {
     grounding.adContext = { channel: actionSettings.channel, sellingPointPolicy: effectiveSellingPointPolicy }
   }
 
   opts.onProgress?.({ stage: 'prepare-input', detail: context.hasImage ? `已建立输入事实卡，读取 ${context.imageCount} 张参考图和当前提示词。` : '已建立输入事实卡，读取当前提示词和技能设置。' })
 
-  const buildInput = () => createAssistantActionInput(actionId, context, actionSettings, opts.customSkill, grounding)
+  const buildInput = () => createAssistantActionInput(actionId, context, actionSettings, opts.customSkill, grounding, opts.skill)
 
   opts.onProgress?.({ stage: 'request-model', detail: '请求已发送，正在等待模型返回结果。' })
   let rawText = (await callAgentResponsesApi({
@@ -122,31 +175,31 @@ export async function runAssistantAction(
   opts.onProgress?.({ stage: 'parse-response', detail: '模型已返回，正在解析结构化结果。' })
   const parsed = parseAssistantJsonPayload(rawText)
   if (!parsed) {
-    opts.onProgress?.({ stage: 'organize-result', detail: '结果不是标准 JSON，正在整理为普通候选内容。' })
+    opts.onProgress?.({ stage: 'organize-result', detail: '结果不是标准 JSON，正在整理为最终提示词。' })
     const result: AssistantActionResult = {
       actionId,
-      title: opts.customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能',
+      title: opts.skill?.name ?? opts.customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能',
       content: rawText,
-      candidates: extractNumberedPrompts(rawText) ?? [extractPrimaryPrompt(rawText) || rawText],
+      candidates: [],
       primaryText: extractPrimaryPrompt(rawText) || rawText,
     }
     return withResultMeta(
-      enrichAssistantResult(applyQualityState(result, actionId), actionSettings, opts.customSkill, effectiveSellingPointPolicy),
+      enrichAssistantResult(applyQualityState(result, actionId, opts.skill), actionSettings, opts.customSkill, effectiveSellingPointPolicy, opts.skill),
       grounding,
     )
   }
 
-  opts.onProgress?.({ stage: 'validate-result', detail: '正在校验提示词、候选项和变量词条完整性。' })
+  opts.onProgress?.({ stage: 'validate-result', detail: '正在校验最终提示词、分析说明和变量词条完整性。' })
   const grounded = attachSourceAnchors(parsed, context)
   // P2: 把模型回报的结构化图片观察回填进输入事实卡，避免本地硬猜图片内容。
   const groundedVisual = parsed.visualIdentity
     ? attachVisualIdentity(grounding, normalizeVisualIdentity(parsed.visualIdentity))
     : grounding
-  const normalized = normalizeParsedPayload(actionId, grounded, opts.customSkill?.name, opts.customSkill, actionSettings)
+  const normalized = normalizeParsedPayload(actionId, grounded, opts.skill?.name ?? opts.customSkill?.name, opts.customSkill, actionSettings, opts.skill)
   const repaired = await completeWordEntriesIfNeeded(normalized, actionSettings, context, opts)
-  opts.onProgress?.({ stage: 'organize-result', detail: '正在整理主推提示词、候选项和测试计划。' })
+  opts.onProgress?.({ stage: 'organize-result', detail: '正在整理最终提示词、分析说明和测试计划。' })
   return withResultMeta(
-    enrichAssistantResult(applyQualityState(repaired, actionId), actionSettings, opts.customSkill, effectiveSellingPointPolicy),
+    enrichAssistantResult(applyQualityState(repaired, actionId, opts.skill), actionSettings, opts.customSkill, effectiveSellingPointPolicy, opts.skill),
     groundedVisual,
     parsed.sourceAnchors ? normalizeStringArray(parsed.sourceAnchors) : undefined,
     parsed.assumptions ? normalizeStringArray(parsed.assumptions) : undefined,
@@ -169,14 +222,14 @@ function withResultMeta(
   }
 }
 
-function skillRequiresAdContext(actionId: AssistantActionId, customSkill?: AssistantCustomSkill): boolean {
-  return getActionContract(actionId, customSkill)?.requiresAdContext === true
+function skillRequiresAdContext(actionId: AssistantActionId, customSkill?: AssistantCustomSkill, skill?: AssistantAction): boolean {
+  return getActionContract(actionId, customSkill, skill)?.requiresAdContext === true
 }
 
 /** When a skill's contract forbids exploring new selling points, force the
  *  lock policy regardless of the global setting so the model cannot drift. */
-function getEffectiveSellingPointPolicy(actionId: AssistantActionId, customSkill: AssistantCustomSkill | undefined, actionSettings: AssistantActionSettings): SellingPointPolicy {
-  const contract = getActionContract(actionId, customSkill)
+function getEffectiveSellingPointPolicy(actionId: AssistantActionId, customSkill: AssistantCustomSkill | undefined, actionSettings: AssistantActionSettings, skill?: AssistantAction): SellingPointPolicy {
+  const contract = getActionContract(actionId, customSkill, skill)
   if (contract?.allowExploreSellingPoint === false) return 'lock'
   return actionSettings.sellingPointPolicy
 }
@@ -186,11 +239,12 @@ function enrichAssistantResult(
   actionSettings: AssistantActionSettings,
   customSkill?: AssistantCustomSkill,
   effectiveSellingPointPolicy: SellingPointPolicy = actionSettings.sellingPointPolicy,
+  skill?: AssistantAction,
 ): AssistantActionResult {
   // Only ad-creative skills carry channel / selling-point / test-plan packaging.
   // Analysis and plain-optimization skills must not be polluted by ad templates.
   if (result.actionId === 'image-derive') return result
-  if (!skillRequiresAdContext(result.actionId, customSkill)) return result
+  if (!skillRequiresAdContext(result.actionId, customSkill, skill)) return result
   result = sanitizeInformationFlowAdResult(result)
   const channel = actionSettings.channel
   const sellingPointPolicy = effectiveSellingPointPolicy
@@ -198,9 +252,9 @@ function enrichAssistantResult(
   return { ...result, channel, sellingPointPolicy, testPlan }
 }
 
-function applyQualityState(result: AssistantActionResult, actionId: AssistantActionId): AssistantActionResult {
+function applyQualityState(result: AssistantActionResult, actionId: AssistantActionId, skill?: AssistantAction): AssistantActionResult {
   if (result.qualityState) return result
-  const contract = getActionContract(actionId)
+  const contract = getActionContract(actionId, undefined, skill)
   const hasContent = Boolean(result.primaryText || result.content.trim() || (result.candidates ?? []).length)
   if (!hasContent && contract?.taskType === 'review-data') {
     return {
@@ -239,11 +293,6 @@ function buildTestPlan(result: AssistantActionResult, actionSettings: AssistantA
   lines.push(`卖点策略：${getSellingPointPolicyLabel(sellingPointPolicy)}`)
   const primary = result.variablePrompt || result.primaryText || result.candidates?.[0] || result.content
   if (primary) lines.push(`主推提示词：${primary}`)
-  const candidates = result.candidates ?? []
-  if (candidates.length > 1) {
-    lines.push('候选方向：')
-    candidates.forEach((candidate, index) => lines.push(`${index + 1}. ${candidate}`))
-  }
   if (result.wordEntries?.length) {
     lines.push('变量词条：')
     for (const group of result.wordEntries) {
@@ -262,7 +311,7 @@ export async function createAssistantSkillDraft(description: string, opts: { set
     input: [{ role: 'user', content: [{ type: 'input_text', text: [
       '你是图片与素材技能设计师。用户用自然语言描述想要的功能，请把它做成一个可执行的小技能。所有技能都必须把参考图片和用户原始文字作为最高事实源，最终输出不得被行业常识或通用模板替代。',
       '只返回严格 JSON，不要 Markdown：',
-      '{"name":"不超过8字的技能名称","icon":"image|wand|sparkles|palette|tags|thumbs-up","steps":["步骤1","步骤2"],"instruction":"给执行模型的完整中文指令。必须明确技能目标、必须保留项、仅允许改变项、禁止改变项、变化强度和所需 JSON 输出字段；只写与该技能名称直接相关的要求，不能默认加入跑量角度、首屏钩子、CTA、渠道版式、变量词条或测试命名。","contract":{"taskType":"analyze|prompt-optimize|image-variation|layout-variation|creative-expansion|extract-variables|review-data","objective":"一句话技能目标","preserve":["必须保留项"],"editable":["仅允许改变项"],"forbidden":["禁止改变项"],"variationLevel":"none|low|medium|high","requiresAdContext":false,"allowExploreSellingPoint":false,"primaryOutput":"finalPrompt|variablePrompt|analysis|candidate","output":{"finalPrompt":true,"candidates":true,"analysis":true,"wordEntries":false}}}',
+      '{"name":"不超过8字的技能名称","icon":"image|wand|sparkles|palette|tags|thumbs-up","steps":["步骤1","步骤2"],"instruction":"给执行模型的完整中文指令。必须明确技能目标、必须保留项、仅允许改变项、禁止改变项、变化强度和所需 JSON 输出字段；只写与该技能名称直接相关的要求，不能默认加入跑量角度、首屏钩子、CTA、渠道版式、变量词条或测试命名。","contract":{"taskType":"analyze|prompt-optimize|image-variation|layout-variation|creative-expansion|extract-variables|review-data","objective":"一句话技能目标","preserve":["必须保留项"],"editable":["仅允许改变项"],"forbidden":["禁止改变项"],"variationLevel":"none|low|medium|high","requiresAdContext":false,"allowExploreSellingPoint":false,"primaryOutput":"finalPrompt|variablePrompt","output":{"finalPrompt":true,"candidates":false,"analysis":true,"wordEntries":false}}}',
       'contract 必须保守：除非用户明确要求投放/跑量/渠道，requiresAdContext 必须为 false；除非用户明确要求扩展新卖点，allowExploreSellingPoint 必须为 false；除非用户明确要求生成变量词条，output.wordEntries 必须为 false。',
       `用户需求：${description}`,
     ].join('\n') }] }],
@@ -286,13 +335,15 @@ export async function createAssistantSkillDraft(description: string, opts: { set
   return { name, icon, steps, instruction, contract }
 }
 
-function createAssistantActionInput(actionId: AssistantActionId, context: AssistantInputContext, actionSettings: AssistantActionSettings, customSkill?: AssistantCustomSkill, grounding?: GroundingProfile) {
-  if (actionId === 'image-derive' && !customSkill) return createConceptExtractionInput(context)
+function createAssistantActionInput(actionId: AssistantActionId, context: AssistantInputContext, actionSettings: AssistantActionSettings, customSkill?: AssistantCustomSkill, grounding?: GroundingProfile, skill?: AssistantAction) {
+  // The concept-extraction skill keeps its dedicated single-image workflow only
+  // when it has no step flow (legacy / all steps removed). Otherwise it runs step-based.
+  if (actionId === 'image-derive' && !customSkill && !skill?.steps?.length) return createConceptExtractionInput(context)
 
-  const requiresAd = skillRequiresAdContext(actionId, customSkill)
-  const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
-  const contract = getActionContract(actionId, customSkill)
-  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, customSkill, actionSettings)
+  const requiresAd = skillRequiresAdContext(actionId, customSkill, skill)
+  const allowVariableOutput = canActionOutputVariables(actionId, customSkill, skill)
+  const contract = getActionContract(actionId, customSkill, skill)
+  const effectiveSellingPointPolicy = getEffectiveSellingPointPolicy(actionId, customSkill, actionSettings, skill)
   const wordSettings = actionSettings.wordDerive
   const content: Array<Record<string, string>> = [
     {
@@ -309,7 +360,7 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         '同时按字段回填 visualIdentity（subject / composition / color / scene / textLayout / style），每个字段只写图片中可直接观察到的内容，无法观察的字段留空字符串；没有参考图时省略 visualIdentity。',
         '最终提示词必须以 sourceAnchors 和用户原始文字为主干，逐项写出需要保留的参考特征，再执行当前技能允许的改变；不能只在分析中提到参考图，最终提示词却改用通用行业方案。',
         '行业知识只能补足完成任务不可缺少且参考输入没有说明的中性执行细节；不得新增产品、人物、场景、卖点、功效、受众、品牌、价格、活动、CTA 或渠道版式。',
-        '每个 finalPrompt、variablePrompt 和 prompts 候选都必须能逐项追溯到参考输入。无法从参考输入确认的内容必须省略，不能用“通常、行业常见、建议”等理由补造。',
+        'finalPrompt 和 variablePrompt 必须能逐项追溯到参考输入。无法从参考输入确认的内容必须省略，不能用“通常、行业常见、建议”等理由补造。',
         'sourceAnchors 仅用于内部规划和“参考输入依据”分析区，严禁把 sourceAnchors 列表、原始文字全文、分析过程、判断理由、测试策略或“参考输入基准”等说明性前缀拼接到生图提示词。',
         'finalPrompt、variablePrompt 和 prompts 必须直接描述要生成的画面以及必要的保留/修改指令，不写“经过分析”“基于上述分析”“跑量逻辑是”“测试目的是”等解释性内容。',
         '',
@@ -333,8 +384,8 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         allowVariableOutput
           ? '  "variablePrompt": "仅当该技能需要变量词条时填写，且占位符必须与 wordEntries.category 完全一致，例如 {{产品主体}}；否则为空",'
           : '  "variablePrompt": "",',
-        '  "prompts": ["以同一参考输入为基准的候选提示词1", "以同一参考输入为基准的候选提示词2"],',
-        '  "sections": [{"title": "参考输入依据/技能处理结果/风险提醒", "items": ["具体内容"]}],',
+        '  "prompts": [],',
+        '  "sections": [{"title": "参考输入依据/技能处理结果/风险提醒", "items": ["仅放分析说明，供“查看更多”展开查看；不要把它当最终提示词"]}],',
         allowVariableOutput
           ? '  "wordEntries": [{"category": "必须与 variablePrompt 中的 {{变量名}} 完全一致", "entries": ["可直接替换该变量的短词条"]}]'
           : '  "wordEntries": []',
@@ -342,6 +393,7 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
         allowVariableOutput
           ? '变量约束：不得凭空生成“画幅比例、风格、构图、光影、材质、合规禁忌”等工具型变量；只有确实要保存到词条库并能替换进 variablePrompt 的内容，才能进入 wordEntries。'
           : '当前技能不需要变量词条：严禁输出 {{变量}}、variablePrompt 或 wordEntries，只输出优化后的普通提示词和必要说明。',
+        '所有技能最终只允许一个主提示词：普通技能写入 finalPrompt；带词条技能可以同时写 variablePrompt 和 wordEntries。prompts 必须为空数组，不要输出候选提示词。',
         allowVariableOutput
           ? [
               '变量生成必须先理解整段提示词和参考图片：先提取当前素材的产品/主体、受众、场景、痛点、卖点、画面风格和渠道语境，再围绕这些分析结果衍生变量。',
@@ -352,13 +404,13 @@ function createAssistantActionInput(actionId: AssistantActionId, context: Assist
             ].join('\n')
           : '',
         '',
-        `功能条：${customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能'}`,
+        `功能条：${skill?.name ?? customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能'}`,
         `目标渠道：${getChannelLabel(actionSettings.channel)}`,
         `卖点策略：${getSellingPointPolicyLabel(effectiveSellingPointPolicy)}`,
         `当前文字：${context.text || '（无）'}`,
         `参考图片数量：${context.imageCount}`,
         '',
-        customSkill?.instruction ?? getActionInstruction(actionId, actionSettings),
+        resolveSkillInstruction(actionId, actionSettings, customSkill, skill),
         contract?.taskType === 'creative-expansion' || actionId === 'channel-rewrite'
           ? `【渠道规则】${getChannelRule(actionSettings.channel)}`
           : '',
@@ -443,11 +495,29 @@ function normalizeVisualIdentity(value: unknown): VisualIdentity {
   }
 }
 
-function canActionOutputVariables(actionId: AssistantActionId, customSkill?: AssistantCustomSkill) {
-  const contract = getActionContract(actionId, customSkill)
+function canActionOutputVariables(actionId: AssistantActionId, customSkill?: AssistantCustomSkill, skill?: AssistantAction) {
+  const contract = getActionContract(actionId, customSkill, skill)
   if (contract) return contract.output.wordEntries
   if (customSkill) return customSkill.outputMode === 'create-word-tags'
   return VARIABLE_OUTPUT_ACTION_IDS.has(actionId)
+}
+
+/** Pick the instruction body: step-based flow when the skill has steps,
+ *  otherwise fall back to the legacy custom instruction or built-in template. */
+function resolveSkillInstruction(
+  actionId: AssistantActionId,
+  actionSettings: AssistantActionSettings,
+  customSkill?: AssistantCustomSkill,
+  skill?: AssistantAction,
+): string {
+  const steps = getEffectiveSteps(actionId, skill, customSkill)
+  if (steps.length) {
+    const name = skill?.name ?? customSkill?.name ?? ACTION_TITLES[actionId] ?? '自定义技能'
+    const stepInstruction = buildSkillInstruction(name, steps)
+    if (stepInstruction) return stepInstruction
+  }
+  if (customSkill?.instruction) return customSkill.instruction
+  return getActionInstruction(actionId, actionSettings)
 }
 
 function formatSkillContract(contract: AssistantSkillContract) {
@@ -459,9 +529,10 @@ function formatSkillContract(contract: AssistantSkillContract) {
     `仅允许改变：${contract.editable.length ? contract.editable.join('、') : '无。'}`,
     `禁止改变：${contract.forbidden.length ? contract.forbidden.join('、') : '无。'}`,
   ]
-  if (contract.singleVariablePerCandidate) lines.push('每条候选只允许一个主要变化维度，其他内容必须保持基准不变。')
+  if (contract.singleVariablePerCandidate) lines.push('最终提示词只允许一个主要变化维度，其他内容必须保持基准不变。')
   if (!contract.output.finalPrompt) lines.push('本技能以分析为主，finalPrompt 必须为空字符串。')
   if (!contract.output.candidates) lines.push('本技能不输出 prompts，prompts 必须为空数组。')
+  if (!contract.output.analysis) lines.push('本技能不输出拆解报告，sections 必须为空数组。')
   if (!contract.output.wordEntries) lines.push('本技能不输出变量词条，variablePrompt 必须为空字符串且 wordEntries 必须为空数组。')
   return lines.join('\n')
 }
@@ -522,10 +593,11 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
       ].join('\n')
     case 'image-describe':
       return [
-        '这是“素材拆解”技能。忠实分析参考图片，不生成衍生、复刻或新素材提示词。',
-        'sections 必须包含：画幅和构图、视觉主体、背景与色板、文字层级、光影与风格、广告信息结构、可观察事实、推断项和风险。',
+        '这是“素材拆解”技能。先忠实分析参考图片，再把可观察视觉结构整理成一个最终生图提示词。',
+        'finalPrompt 只输出一个可直接复用的素材风格提示词，必须保留画幅和构图、视觉主体、背景与色板、文字层级、光影与风格等可观察事实。',
+        'sections 只放分析说明，包含：画幅和构图、视觉主体、背景与色板、文字层级、光影与风格、广告信息结构、可观察事实、推断项和风险。',
         '图片中无法直接观察到的卖点、受众或效果必须标记为“推断”，不得当作事实。',
-        'finalPrompt 为空字符串，prompts 为空数组，variablePrompt 为空字符串，wordEntries 为空数组。',
+        'prompts 为空数组，variablePrompt 为空字符串，wordEntries 为空数组。',
       ].join('\n')
     case 'super-derive':
       const settings = actionSettings.wordDerive
@@ -536,8 +608,8 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         '3. finalPrompt 必须从参考图与原始文字继续生长：先逐项写明保留的主体、结构、色板、排版、文案语义、场景和视觉风格，再写允许衍生的部分；不能套用通用竖版广告模板覆盖原素材。',
         `3. variablePrompt 必须把 finalPrompt 中可变的核心语义换成占位符，占位符只能从这些分类中选择：${settings.categories.map((item) => `{{${item}}}`).join('、')}。`,
         `4. wordEntries 必须只按这些分类输出：${settings.categories.join('、')}。每个 category 必须给 ${settings.variableCount} 个可替换短变量，必须能直接替换进 variablePrompt。`,
-        '5. prompts 给 8 条不同素材方向，但每条必须继承同一组参考锚点，只改变一个有参考依据的测试维度；不要求机械覆盖固定行业角度。',
-        '6. sections 必须包含：素材角度、首屏钩子、画面构图、标题文案、字幕文案、CTA、适合平台、测试命名、风险提醒。',
+        '5. 最终只输出一个主提示词；不要输出候选方向。需要说明的测试逻辑放到 sections。',
+        '6. sections 可包含：素材角度、首屏钩子、画面构图、标题文案、字幕文案、CTA、适合平台、测试命名、风险提醒。',
         getSellingPointWordEntryRule(actionSettings.sellingPointPolicy),
         '7. 避免绝对化承诺、医疗/金融夸大、虚假前后对比、平台禁词、侵犯第三方品牌或肖像。',
       ].join('\n')
@@ -547,17 +619,17 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         '“原始提示词诊断”：只指出画面表达、主体关系、场景、风格、约束或合规上的不足；用户未要求时，不要主动补充钩子、版式、CTA、渠道要求或变量词条。',
         '“锁定内容”：不得改变核心卖点、产品事实、品牌、价格、承诺、适用人群、画幅和用户明确指定的风格或场景。',
         'finalPrompt 只放最终可直接使用的完整生图提示词，不要套用信息流广告模板。',
-        `prompts 输出 ${actionSettings.outputCount} 条轻微不同的优化版本，只允许改变表达清晰度和细节组织，不得发散成新创意方向，不要默认改成竖版信息流广告。`,
-        'sections 必须包含：原始提示词诊断、锁定内容、优化后主提示词、候选优化版本、合规风险。',
+        '不要输出候选版本；如有诊断、锁定内容、合规风险，只放到 sections 供“查看更多”查看。',
+        'sections 可包含：原始提示词诊断、锁定内容、优化后主提示词、合规风险。',
         '不要做变量拆解，不要输出变量词条，不要把画幅比例、风格、构图、光影、材质等做成 {{变量}}。',
         'variablePrompt 必须为空字符串，wordEntries 必须为空数组。',
       ].join('\n')
     case 'style-expand':
       return [
         '这是“版式扩展”技能。保持当前主体、内容、场景、品牌、卖点、色板和视觉风格不变，只探索布局。',
-        `prompts 输出 ${actionSettings.outputCount} 条版式候选，每条只改变主体位置、标题位置、图文比例、留白、信息层级或 CTA 区域位置。`,
+        'finalPrompt 只输出一个最终版式提示词，只改变主体位置、标题位置、图文比例、留白、信息层级或 CTA 区域位置。',
         '不得改成真人口播、UGC 测评、不同场景或不同视觉风格；这些属于创意衍生，不属于版式扩展。',
-        'sections 列出每条的布局变化、锁定内容和测试假设。',
+        'sections 可列出布局变化、锁定内容和测试假设。',
       ].join('\n')
     case 'word-extract':
       return [
@@ -565,34 +637,34 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         `wordEntries 必须只按这些分类输出：${actionSettings.wordDerive.categories.join('、')}。`,
         '只输出输入中有明确依据的分类；没有依据的分类不要输出。不要为了凑数量凭空扩写词条。',
         'entries 必须是短词条，不要长句，适合直接复用。',
-        'finalPrompt 可为空。',
+        'finalPrompt 和 variablePrompt 都应表达同一个可替换的变量主提示词；不要只输出词条列表。',
       ].join('\n')
     case 'prompt-examples':
       return [
         '这是“爆款案例”技能。提供高潜信息流广告结构案例，不得在没有投放数据时声称一定是爆款。',
-        `prompts 输出 ${actionSettings.outputCount} 条案例；存在参考图或原始文字时，每条必须继承其中的产品事实、主体关系和视觉锚点，只改变案例结构，不得换成无关行业模板。`,
-        '每条都要完整可直接用于生图，并包含标题/字幕位置和 CTA。',
-        'sections 列出每个案例的测试假设和适合平台。',
+        'finalPrompt 只输出一个高潜案例结构提示词；存在参考图或原始文字时，必须继承其中的产品事实、主体关系和视觉锚点，只改变案例结构，不得换成无关行业模板。',
+        '最终提示词要完整可直接用于生图，并包含标题/字幕位置和 CTA。',
+        'sections 可列出案例结构、测试假设和适合平台。',
       ].join('\n')
     case 'market-breakdown':
       return [
-        '这是“大盘拆解”技能。分析输入素材中的共性结构、机会和风险；只有一张素材时必须称为“单素材分析”，不得称为市场大盘。',
-        'sections 必须输出：样本范围、可观察共性、画面结构、信息层级、可能的人群和卖点、差异化机会、风险。',
-        'finalPrompt 为空字符串，prompts 为空数组。',
-        `wordEntries 只允许使用设置中的变量分类，每个输出分类至少给 ${actionSettings.wordDerive.variableCount} 个市场变量。`,
+        '这是“大盘拆解”技能。用户需要的不是拆解报告，而是从多张参考素材中提炼一个可直接用于下一轮测试的最终生图提示词。',
+        'finalPrompt 只输出一个自然段，概括这组素材适合测试的品类、功能语义、视觉一致性和可差异化方向。',
+        '必须保留参考图中的可观察共性，例如背景、主体类型、构图、色彩、材质、光影、文字有无；不能输出“样本范围、可观察共性、画面结构、风险”等分段标题。',
+        '不要输出 prompts、variablePrompt 或 wordEntries；分析过程只允许放进 sections，不要写进 finalPrompt。',
       ].join('\n')
     case 'viral-remix':
       return [
         '这是“爆款复刻”技能。复刻信息层级、视觉节奏、主体占比和钩子到 CTA 的结构，不复制具体内容。',
         '先拆解输入素材的结构：钩子、冲突或痛点、卖点证明、主体占比、场景、版式和 CTA。',
-        `prompts 输出 ${actionSettings.outputCount} 条结构复刻但内容替换后的素材提示词，每条都要有测试命名。`,
-        'sections 输出每条的复刻逻辑、变化点、风险提醒。',
+        'finalPrompt 只输出一个结构复刻但内容替换后的素材提示词，并保留测试命名。',
+        'sections 可输出复刻逻辑、变化点、风险提醒。',
       ].join('\n')
     case 'angle-matrix':
       return [
         '这是“角度矩阵”技能。围绕当前产品/素材信息生成可投放测试的素材角度矩阵。',
-        'prompts 输出 10 条素材提示词；每条先继承参考输入的主体、产品事实、核心卖点和视觉身份，再仅改变营销切入角度。角度没有参考依据时不得强行套入固定行业模板。',
-        'sections 每条包含：角度、首屏钩子、画面、标题、字幕、CTA、适合平台、测试命名。',
+        'finalPrompt 只输出一个角度明确的素材提示词；先继承参考输入的主体、产品事实、核心卖点和视觉身份，再仅改变一个营销切入角度。角度没有参考依据时不得强行套入固定行业模板。',
+        'sections 可包含：角度、首屏钩子、画面、标题、字幕、CTA、适合平台、测试命名。',
         `wordEntries 只允许使用设置中的变量分类，每个输出分类至少给 ${actionSettings.wordDerive.variableCount} 个可测试短变量。`,
       ].join('\n')
     case 'batch-variants': {
@@ -600,11 +672,11 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
       return [
         '这是“批量变体”技能。围绕当前素材信息生成一组可 A/B 测试的素材提示词。',
         allowSellingPointChange
-          ? `prompts 输出 ${actionSettings.outputCount} 条短而完整的生图提示词。每条只改变一个测试维度：钩子、场景、人物、新卖点假设或版式；新增卖点必须标注为“新假设”。`
-          : `prompts 输出 ${actionSettings.outputCount} 条短而完整的生图提示词。每条只改变一个测试维度：钩子、场景、人物、卖点呈现方式或版式；不得改变核心卖点本身。`,
+          ? 'finalPrompt 只输出一个短而完整的生图提示词，只改变一个测试维度：钩子、场景、人物、新卖点假设或版式；新增卖点必须标注为“新假设”。'
+          : 'finalPrompt 只输出一个短而完整的生图提示词，只改变一个测试维度：钩子、场景、人物、卖点呈现方式或版式；不得改变核心卖点本身。',
         allowSellingPointChange
-          ? 'sections 按测试组分组：钩子组、场景组、人群组、新卖点假设组、版式组，并给每组测试假设。'
-          : 'sections 按测试组分组：钩子组、场景组、人群组、卖点呈现方式组、版式组，并给每组测试假设。',
+          ? 'sections 可说明所属测试组：钩子组、场景组、人群组、新卖点假设组或版式组，并给出测试假设。'
+          : 'sections 可说明所属测试组：钩子组、场景组、人群组、卖点呈现方式组或版式组，并给出测试假设。',
         '每条必须包含测试命名，格式示例：hook_pain_scene_home_v01。',
       ].join('\n')
     }
@@ -613,8 +685,8 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         '这是“投放复盘”技能。根据用户输入的投放数据或素材表现判断哪些变量值得继续衍生。',
         '如果输入包含 CTR、CVR、CPA、消耗、转化、留存、评论反馈，请分析胜出变量和失败变量。',
         '数据不足时必须明确说明，不得虚构表现结论；请区分“数据事实”和“分析推断”。',
-        'sections 必须包含：表现判断、数据事实、可能原因、保留变量、淘汰变量、下一轮衍生方向、建议测试组、风险提醒。',
-        `prompts 最多输出 ${actionSettings.outputCount} 条下一轮素材提示词；数据不足时 prompts 可以为空数组。`,
+        'finalPrompt 只输出一个下一轮素材提示词；数据不足时 finalPrompt 可以为空，并在 sections 说明原因。',
+        'sections 可包含：表现判断、数据事实、可能原因、保留变量、淘汰变量、下一轮衍生方向、建议测试组、风险提醒。',
       ].join('\n')
     case 'channel-rewrite':
       return [
@@ -622,9 +694,9 @@ function getActionInstruction(actionId: AssistantActionId, actionSettings: Assis
         '必须保留原提示词中的核心卖点、产品信息、价格、承诺、适用人群和活动机制。',
         '不得重新发散新卖点，不得把素材改成无关方向。',
         '根据目标渠道调整：画面比例、构图、字幕密度、平台原生感、CTA 表达、审核风险。',
-        'finalPrompt 输出目标渠道版完整提示词。',
-        'prompts 输出 3 条轻微不同的渠道适配版本。',
-        'sections 必须包含：保留内容、渠道改写点、目标渠道版提示词、审核风险。',
+        'finalPrompt 只输出一个目标渠道版完整提示词。',
+        '不要输出候选版本；prompts 必须为空数组。',
+        'sections 可包含：保留内容、渠道改写点、审核风险；不要重复写目标渠道版提示词。',
       ].join('\n')
     default:
       return '严格以参考图片和用户原始文字为基准执行自定义技能；最终结果必须保留可观察事实和原始意图，只在技能明确允许的范围内处理，不得替换成通用行业方案。'
@@ -655,11 +727,11 @@ function normalizeConceptExtractionPrompt(value: string) {
   return prompt
 }
 
-function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS): AssistantActionResult {
-  const contract = getActionContract(actionId, customSkill)
-  const candidates = contract?.output.candidates === false ? [] : normalizeStringArray(payload.prompts)
+function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJsonPayload, title?: string, customSkill?: AssistantCustomSkill, actionSettings: AssistantActionSettings = DEFAULT_ASSISTANT_ACTION_SETTINGS, skill?: AssistantAction): AssistantActionResult {
+  const contract = getActionContract(actionId, customSkill, skill)
+  const candidates = contract?.output.candidates === false ? [] : normalizeStringArray(payload.prompts).slice(0, 1)
   const sections = contract?.output.analysis === false ? [] : normalizeSections(payload.sections)
-  const allowVariableOutput = canActionOutputVariables(actionId, customSkill)
+  const allowVariableOutput = canActionOutputVariables(actionId, customSkill, skill)
   const rawWordEntries = allowVariableOutput ? normalizeWordEntries(payload.wordEntries) : []
   const rawFinalPrompt = contract?.output.finalPrompt === false ? '' : typeof payload.finalPrompt === 'string' ? payload.finalPrompt.trim() : ''
   const finalPrompt = actionId === 'image-derive' ? normalizeConceptExtractionPrompt(rawFinalPrompt) : rawFinalPrompt
@@ -674,7 +746,7 @@ function normalizeParsedPayload(actionId: AssistantActionId, payload: AssistantJ
     actionId,
     title: title ?? ACTION_TITLES[actionId] ?? '自定义技能',
     content,
-    candidates: candidates.length ? candidates : finalPrompt ? [finalPrompt] : [],
+    candidates,
     sections: sections.length ? sections : undefined,
     wordEntries: wordEntries.length ? wordEntries : allowVariableOutput ? [] : undefined,
     primaryText,
@@ -695,8 +767,6 @@ function getPrimaryText(
   switch (primaryOutput) {
     case 'finalPrompt': return value.finalPrompt || value.candidates[0] || ''
     case 'variablePrompt': return value.variablePrompt || value.finalPrompt || value.candidates[0] || ''
-    case 'analysis': return value.content || value.sections[0]?.items.join('\n') || ''
-    case 'candidate': return value.candidates[0] || value.finalPrompt || ''
     default: return value.variablePrompt || value.finalPrompt || value.candidates[0] || ''
   }
 }
