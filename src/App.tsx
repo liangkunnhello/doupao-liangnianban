@@ -14,6 +14,7 @@ import ConfirmDialog from './components/ConfirmDialog'
 import PromptInputDialog from './components/PromptInputDialog'
 import Toast from './components/Toast'
 import ImageContextMenu from './components/ImageContextMenu'
+import WordLibraryManagerModal from './components/WordLibraryManagerModal'
 import WordLibrarySidebar from './components/WordLibrarySidebar'
 import ErrorBoundary from './components/ErrorBoundary'
 import VarEntryEditor from './components/VarEntryEditor'
@@ -154,7 +155,11 @@ export default function App() {
               const bkFileName = `doupao_backup_${ts}.zip`
               const filePath = desktop.replace(/\\/g, '/') + '/' + bkFileName
               useStore.getState().showToast('正在生成备份...', 'info')
-              const success = await exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true })
+              const success = await exportDataToPath(
+                filePath,
+                { exportConfig: true, exportTasks: true, exportImages: true },
+                { showErrorToast: false },
+              )
               if (success) {
                 useStore.getState().showToast(`备份已保存到桌面：${bkFileName}`, 'success')
               } else {
@@ -176,11 +181,17 @@ export default function App() {
           const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
           const fileName = `doupao_backup_${ts}.zip`
           const filePath = desktop.replace(/\\/g, '/') + '/' + fileName
-          exportDataToPath(filePath, { exportConfig: true, exportTasks: true, exportImages: true }).then((success) => {
+          useStore.getState().setLastAutoBackupAt(Date.now())
+          exportDataToPath(
+            filePath,
+            { exportConfig: true, exportTasks: true, exportImages: true },
+            { showErrorToast: false },
+          ).then((success) => {
             if (success) {
-              useStore.getState().setLastAutoBackupAt(Date.now())
               useStore.getState().showToast('每周自动备份已保存到桌面', 'success')
             }
+          }).catch((error) => {
+            console.warn('每周自动备份失败:', error)
           })
         })
       }
@@ -240,6 +251,7 @@ export default function App() {
       <MaskEditorModal />
       <ImageContextMenu />
       {appMode !== 'postprocess' && <WordLibrarySidebar />}
+      {appMode !== 'postprocess' && <WordLibraryManagerModal />}
       <VarEntryEditor />
       <RandomPromptModal />
       <ScheduleModal />

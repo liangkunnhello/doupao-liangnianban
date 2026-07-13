@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { VAR_END, VAR_START } from './promptImageMentions'
-import { replaceVariableNameInPrompt } from './promptVariableEditor'
+import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from './promptVariableEditor'
 
 const variable = (name: string) => `${VAR_START}${name}${VAR_END}`
 
@@ -17,5 +17,17 @@ describe('prompt variable editor helpers', () => {
     const prompt = `A ${variable('style')} portrait`
 
     expect(replaceVariableNameInPrompt(prompt, 'style', 'style')).toBe(prompt)
+  })
+
+  it('converts deleted variable markers back to plain text', () => {
+    const prompt = `A ${variable('style')} portrait with ${variable('lighting')}`
+
+    expect(normalizePromptVariableMarkers(prompt, ['style'])).toBe(`A ${variable('style')} portrait with lighting`)
+  })
+
+  it('trims variable names before checking active entries', () => {
+    const prompt = `A ${variable(' style ')} portrait`
+
+    expect(normalizePromptVariableMarkers(prompt, ['style'])).toBe(prompt)
   })
 })

@@ -4,7 +4,7 @@ import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteC
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { convertVariableMentionAtVisibleOffsetToText, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -19,6 +19,10 @@ import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon, FolderOpenIcon } from './icons'
+import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
+import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
+import type { AssistantActionPreferences, AssistantWordEntryGroup } from '../features/assistantActions/types'
+import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
 
 
 function getMentionTagTextLength(el: Element) {
@@ -195,7 +199,7 @@ function getContentEditablePlainText(el: HTMLElement): string {
       return
     }
     if (node instanceof HTMLElement && node.classList.contains('wildcard-var')) {
-      text += VAR_START + (node.dataset.varName ?? node.textContent ?? '') + VAR_END
+      text += createVariableMention(node.dataset.varName ?? node.textContent ?? '', node.dataset.entryId)
       return
     }
     node.childNodes.forEach(appendNodeText)
@@ -483,6 +487,7 @@ export default function InputBar() {
   const clearFavoriteCollectionSelection = useStore((s) => s.clearFavoriteCollectionSelection)
   const tasks = useStore((s) => s.tasks)
   const workspaceTabs = useStore((s) => s.workspaceTabs)
+  const activeWorkspaceTabId = useStore((s) => s.activeWorkspaceTabId)
   const favoriteCollections = useStore((s) => s.favoriteCollections)
   const agentConversations = useStore((s) => s.agentConversations)
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
@@ -493,10 +498,27 @@ export default function InputBar() {
   const searchQuery = useStore((s) => s.searchQuery)
 
   const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
+  const wordLibraryGroups = useStore((s) => s.wordLibraryGroups)
+  const createWordLibraryGroup = useStore((s) => s.createWordLibraryGroup)
+  const createWordLibraryEntry = useStore((s) => s.createWordLibraryEntry)
+  const updateWordLibraryEntry = useStore((s) => s.updateWordLibraryEntry)
+  const createWordGenerationBatch = useStore((s) => s.createWordGenerationBatch)
+  const setWordLibraryEditEntryId = useStore((s) => s.setWordLibraryEditEntryId)
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
+  const assistantVariableEntryIdsRef = useRef<Record<string, string>>({})
+  const assistantFeedbackScopeId = activeWorkspaceTabId ?? '__default__'
+  const [assistantFeedbackByScope, setAssistantFeedbackByScope] = useState<Record<string, AssistantActionFeedbackState>>({})
+  const assistantFeedback = assistantFeedbackByScope[assistantFeedbackScopeId] ?? { type: 'idle' }
+  const setAssistantFeedbackForScope = useCallback((next: AssistantActionFeedbackState) => {
+    const scopeId = assistantFeedbackScopeId
+    setAssistantFeedbackByScope((prev) => ({
+      ...prev,
+      [scopeId]: next,
+    }))
+  }, [assistantFeedbackScopeId])
 
   const VAR_COLOR_MAP = useMemo(() => {
-    const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
+    const sorted = [...wordLibraryEntries].filter((e) => e.deletedAt == null).sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
     const map: Record<string, string> = {}
     const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
     sorted.forEach((entry, i) => {
@@ -504,6 +526,10 @@ export default function InputBar() {
     })
     return map
   }, [wordLibraryEntries])
+  const activeWordLibraryKeys = useMemo(
+    () => wordLibraryEntries.filter((e) => e.deletedAt == null).map((entry) => entry.key),
+    [wordLibraryEntries],
+  )
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -834,6 +860,12 @@ export default function InputBar() {
     syncMentionTagSelection(el)
     setPrompt(getContentEditablePlainText(el))
   }, [setPrompt])
+  useEffect(() => {
+    const normalized = normalizePromptVariableMarkers(prompt, activeWordLibraryKeys)
+    if (normalized === prompt) return
+    isUserInputRef.current = false
+    setPrompt(normalized)
+  }, [activeWordLibraryKeys, prompt, setPrompt])
   const handleConvertToVariable = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -1065,6 +1097,125 @@ export default function InputBar() {
       }
     }, 0)
   }, [prompt, setPrompt, syncPromptFromContentEditable])
+
+  const handleAssistantInsert = useCallback((text: string, mode: 'replace' | 'append') => {
+    const nextPrompt = mode === 'replace'
+      ? text
+      : prompt.trim()
+      ? `${prompt.trimEnd()}\n${text}`
+      : text
+    isUserInputRef.current = false
+    setPrompt(nextPrompt)
+    window.setTimeout(() => {
+      if (!textareaRef.current) return
+      textareaRef.current.focus()
+      setContentEditableCursor(textareaRef.current, stripImageMentionMarkers(nextPrompt).length)
+    }, 0)
+  }, [prompt, setPrompt])
+
+  const handleAssistantPreferencesChange = useCallback((assistantActions: AssistantActionPreferences) => {
+    setSettings({ ...settings, assistantActions })
+  }, [setSettings, settings])
+
+  const getAssistantWordGroupId = useCallback((options: AssistantWordEntryApplyOptions) => {
+    if (options.targetGroupMode === 'selected' && options.targetGroupId) return options.targetGroupId
+
+    const baseName = options.actionName.trim() || '词条衍生'
+    if (options.targetGroupMode === 'skill-name') {
+      const existing = useStore.getState().wordLibraryGroups.find((group) => group.name === baseName)
+      return existing?.id ?? createWordLibraryGroup(baseName).id
+    }
+
+    const groups = useStore.getState().wordLibraryGroups
+    const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const usedNumbers = groups.flatMap((group) => {
+      const match = group.name.match(new RegExp(`^${escaped}\\s+(\\d{3})$`))
+      return match ? [Number(match[1])] : []
+    })
+    const nextNumber = usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1
+    return createWordLibraryGroup(`${baseName} ${String(nextNumber).padStart(3, '0')}`).id
+  }, [createWordLibraryGroup])
+
+  const saveAssistantWordEntryGroups = useCallback((groups: AssistantWordEntryGroup[], options: AssistantWordEntryApplyOptions) => {
+    const targetGroupId = getAssistantWordGroupId(options)
+    let savedCount = 0
+    const entryIdsByKey: Record<string, string> = {}
+
+    groups.forEach((group) => {
+      const key = group.category.trim()
+      const entries = [...new Set(group.entries.map((entry) => entry.trim()).filter(Boolean))]
+      if (!key || entries.length === 0) return
+
+      const existing = useStore.getState().wordLibraryEntries.find((entry) => entry.groupId === targetGroupId && entry.key === key && entry.deletedAt == null)
+      if (existing) {
+        const merged = [...new Set([...existing.entries, ...entries])]
+        updateWordLibraryEntry(existing.id, {
+          entries: merged,
+          label: existing.label || key,
+          sourceSkillName: options.actionName,
+        })
+        entryIdsByKey[key] = existing.id
+      } else {
+        const created = createWordLibraryEntry(targetGroupId, key)
+        updateWordLibraryEntry(created.id, {
+          label: key,
+          entries,
+          sourceSkillName: options.actionName,
+        })
+        entryIdsByKey[key] = created.id
+      }
+      savedCount += entries.length
+    })
+    const entryIds = Object.values(entryIdsByKey)
+    const batch = entryIds.length > 0
+      ? createWordGenerationBatch({
+          skillName: options.actionName,
+          sourcePrompt: prompt,
+          referenceImageIds: inputImages.map((image) => image.id),
+          entryIds,
+        })
+      : null
+    if (batch) {
+      entryIds.forEach((id) => updateWordLibraryEntry(id, { generationBatchId: batch.id, sourceSkillName: options.actionName }))
+    }
+    return { savedCount, entryIdsByKey, batchId: batch?.id }
+  }, [createWordGenerationBatch, createWordLibraryEntry, getAssistantWordGroupId, inputImages, prompt, updateWordLibraryEntry])
+
+  const handleAssistantSaveWordEntries = useCallback((groups: AssistantWordEntryGroup[], options: AssistantWordEntryApplyOptions) => {
+    const { savedCount, entryIdsByKey } = saveAssistantWordEntryGroups(groups, options)
+    assistantVariableEntryIdsRef.current = { ...assistantVariableEntryIdsRef.current, ...entryIdsByKey }
+    showToast(savedCount > 0 ? `已保存 ${savedCount} 个词条` : '没有可保存的词条', savedCount > 0 ? 'success' : 'info')
+  }, [saveAssistantWordEntryGroups, showToast])
+
+  const handleAssistantApplyWordPrompt = useCallback((groups: AssistantWordEntryGroup[], variablePrompt: string, options: AssistantWordEntryApplyOptions) => {
+    const saveResult: { savedCount: number; entryIdsByKey: Record<string, string>; batchId?: string } = options.autoSaveWordEntries
+      ? saveAssistantWordEntryGroups(groups, options)
+      : { savedCount: 0, entryIdsByKey: {} }
+    assistantVariableEntryIdsRef.current = { ...assistantVariableEntryIdsRef.current, ...saveResult.entryIdsByKey }
+    const validVariableNames = new Set(
+      groups
+        .filter((group) => group.entries.length > 0)
+        .map((group) => group.category.trim())
+        .filter(Boolean),
+    )
+    const promptWithVariables = variablePrompt
+      .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, name: string) => {
+        const variableName = String(name).trim()
+        return validVariableNames.has(variableName) ? createVariableMention(variableName, saveResult.entryIdsByKey[variableName]) : variableName
+      })
+
+    handleAssistantInsert(promptWithVariables, options.promptMode)
+    showToast(
+      options.autoSaveWordEntries && saveResult.savedCount > 0
+        ? `已添加提示词并保存 ${saveResult.savedCount} 个词条`
+        : '已添加提示词',
+      'success',
+    )
+  }, [handleAssistantInsert, saveAssistantWordEntryGroups, showToast])
+
+  const handleAssistantCreateWordGroup = useCallback((name: string) => {
+    return createWordLibraryGroup(name).id
+  }, [createWordLibraryGroup])
 
   const handleClearPrompt = useCallback(() => {
     isUserInputRef.current = false
@@ -1685,10 +1836,11 @@ export default function InputBar() {
           }
           if (part.type === 'variable') {
             const color = currentColorMap[part.varName] ?? ''
+            if (!color) return escapePromptHtmlText(part.text)
             const style = color
               ? `style="background:${color}18;color:${color};border-color:${color};--var-bg:${color}18;--var-text:${color};--var-border:${color};--var-bg-hover:${color}28;--var-bg-selected:${color};--var-text-selected:#fff;--var-border-selected:${color}"`
               : ''
-            return `<span contenteditable="false" draggable="true" class="wildcard-var" data-var-name="${escapePromptHtmlAttribute(part.varName)}" ${style}>${escapePromptHtmlText(part.text)}</span>`
+            return `<span contenteditable="false" draggable="true" class="wildcard-var" data-var-name="${escapePromptHtmlAttribute(part.varName)}"${part.entryId ? ` data-entry-id="${escapePromptHtmlAttribute(part.entryId)}"` : ''} ${style}>${escapePromptHtmlText(part.text)}</span>`
           }
           return escapePromptHtmlText(part.text)
         }).join('')
@@ -2535,6 +2687,22 @@ export default function InputBar() {
             </div>
           </div>
         )}
+        <AssistantActionBar
+          prompt={prompt}
+          inputImages={inputImages}
+          settings={settings}
+          profile={agentActiveProfile}
+          params={params}
+          wordLibraryGroups={wordLibraryGroups}
+          preferences={settings.assistantActions}
+          feedback={assistantFeedback}
+          onInsert={handleAssistantInsert}
+          onSaveWordEntries={handleAssistantSaveWordEntries}
+          onApplyWordPrompt={handleAssistantApplyWordPrompt}
+          onCreateWordGroup={handleAssistantCreateWordGroup}
+          onUpdatePreferences={handleAssistantPreferencesChange}
+          onFeedbackChange={setAssistantFeedbackForScope}
+        />
         <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
           {/* 移动端拖动条 */}
           <div
@@ -2670,9 +2838,15 @@ export default function InputBar() {
                 const target = e.target as HTMLElement
                 if (target.classList.contains('wildcard-var')) {
                   const varName = target.dataset.varName ?? target.textContent ?? ''
+                  const entryId = target.dataset.entryId ?? assistantVariableEntryIdsRef.current[varName]
                   setWordLibraryPromptSelectedVarName(varName)
+                  setWordLibraryEditEntryId(entryId ?? null)
                   const store = useStore.getState()
-                  const entry = store.wordLibraryEntries.find((e) => e.key === varName)
+                  const entry = entryId
+                    ? store.wordLibraryEntries.find((e) => e.id === entryId && e.deletedAt == null)
+                    : store.wordLibraryEntries.filter((e) => e.key === varName && e.deletedAt == null).length === 1
+                      ? store.wordLibraryEntries.find((e) => e.key === varName && e.deletedAt == null)
+                      : undefined
                   store.setVarEntryEditor({
                     entryId: entry?.id,
                     varName,
@@ -2682,10 +2856,8 @@ export default function InputBar() {
                       // 更新 prompt 中的变量名（如果改名）
                       const currentStore = useStore.getState()
                       const currentPrompt = currentStore.prompt
-                      const oldMarker = '\u2060' + varName + '\u2061'
-                      const newMarker = newName !== varName ? '\u2060' + newName + '\u2061' : oldMarker
                       if (newName !== varName) {
-                        currentStore.setPrompt(currentPrompt.split(oldMarker).join(newMarker))
+                        currentStore.setPrompt(replaceVariableNameInPrompt(currentPrompt, varName, newName))
                       }
                       // 更新或创建词条库条目
                       const existingId = entry?.id
@@ -2715,7 +2887,9 @@ export default function InputBar() {
                 if (target.classList.contains('mention-tag') || target.classList.contains('wildcard-var')) {
                   if (target.classList.contains('wildcard-var')) {
                     const varName = target.dataset.varName ?? target.textContent ?? ''
+                    const entryId = target.dataset.entryId ?? assistantVariableEntryIdsRef.current[varName]
                     setWordLibraryPromptSelectedVarName(varName)
+                    setWordLibraryEditEntryId(entryId ?? null)
                   }
                   const sel = window.getSelection()
                   if (sel) {

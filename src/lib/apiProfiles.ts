@@ -14,8 +14,10 @@ import type {
   ReferenceImageEditAction,
   WordLibraryDerivativeRule,
 } from '../types'
+import type { AssistantActionPreferences } from '../features/assistantActions/types'
 import { normalizeThemeMode } from './theme'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
+import { normalizeAssistantActionPreferences } from '../features/assistantActions/matcher'
 import { shouldUseApiProxy } from './devProxy'
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './customProviderConfigUrl'
@@ -620,6 +622,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
+    assistantActions: normalizeAssistantActionPreferences(record.assistantActions as Partial<AssistantActionPreferences> | undefined),
     wordLibraryDerivativeRule: typeof record.wordLibraryDerivativeRule === 'string' ? record.wordLibraryDerivativeRule : undefined,
     wordLibraryDerivativeRuleMode,
     wordLibraryDerivativeRules,
@@ -942,6 +945,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
+  assistantActions: normalizeAssistantActionPreferences(undefined),
   agentProfileId: null,
   agentUseCustomProfile: false,
   agentProfile: createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),

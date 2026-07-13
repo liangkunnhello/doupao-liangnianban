@@ -1,6 +1,7 @@
 // ===== 设置 =====
 
 import type { CompositeV2PersistedSnapshot } from './features/composite/lib/compositeV2Types'
+import type { AssistantActionPreferences } from './features/assistantActions/types'
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent' | 'postprocess'
@@ -116,6 +117,7 @@ export interface AppSettings {
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
+  assistantActions: AssistantActionPreferences
   wordLibraryDerivativeRule?: string
   wordLibraryDerivativeRuleMode: 'single' | 'multiple'
   wordLibraryDerivativeRules: WordLibraryDerivativeRule[]
@@ -547,6 +549,12 @@ export interface FalApiResponse {
 export interface WordLibraryGroup {
   id: string
   name: string
+  sortOrder: number
+  /** Only one nesting level is supported to keep large libraries navigable. */
+  parentId?: string | null
+  description?: string
+  color?: string
+  archivedAt?: number | null
 }
 
 export interface WordLibraryEntry {
@@ -556,6 +564,50 @@ export interface WordLibraryEntry {
   label: string
   entries: string[]
   draw_count: number
+  /** 分组内排序权重，越小越靠前（置顶词条优先） */
+  sortOrder: number
+  isPinned: boolean
+  isFavorite: boolean
+  tags: string[]
+  /** 删除时间（ms）；非空表示已进入回收站（软删除），列表默认不展示 */
+  deletedAt: number | null
+  createdAt: number
+  updatedAt: number
+  /** 被引用/抽取的使用次数，用于「使用频率」排序 */
+  usageCount: number
+  /** Skill-generated entries keep their origin so they can be reviewed as a batch. */
+  sourceSkillName?: string
+  generationBatchId?: string
+}
+
+export interface WordGenerationBatch {
+  id: string
+  skillName: string
+  sourcePrompt: string
+  referenceImageIds: string[]
+  entryIds: string[]
+  createdAt: number
+  archivedAt: number | null
+}
+
+/** 词条库视图：列表视图 / 回收站视图 */
+export type WordLibraryView = 'list' | 'trash'
+
+/** 词条排序方式 */
+export type WordLibrarySortType =
+  | 'manual'
+  | 'updatedAt'
+  | 'createdAt'
+  | 'usage'
+  | 'title'
+
+/** 词条库导入/导出数据结构（用于备份与迁移） */
+export interface WordLibraryExportData {
+  version: number
+  exportedAt: number
+  groups: WordLibraryGroup[]
+  entries: WordLibraryEntry[]
+  batches?: WordGenerationBatch[]
 }
 
 // ===== 导出数据 =====
@@ -572,6 +624,7 @@ export interface ExportData {
   agentConversations?: AgentConversation[]
   wordLibraryGroups?: WordLibraryGroup[]
   wordLibraryEntries?: WordLibraryEntry[]
+  wordGenerationBatches?: WordGenerationBatch[]
   /** imageId → 图片信息 */
   imageFiles?: Record<string, {
     path: string

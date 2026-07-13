@@ -6,10 +6,11 @@ import {
   escapePromptHtmlText,
   getPromptMentionParts,
   getSelectedImageMentionLabel,
+  createVariableMention,
   VAR_END,
   VAR_START,
 } from '../lib/promptImageMentions'
-import { replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
+import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
 
 type PromptVariableEditorProps = {
   value: string
@@ -36,7 +37,7 @@ function getContentEditablePlainText(el: HTMLElement): string {
       return
     }
     if (node instanceof HTMLElement && node.classList.contains('wildcard-var')) {
-      text += `${VAR_START}${node.dataset.varName ?? node.textContent ?? ''}${VAR_END}`
+      text += createVariableMention(node.dataset.varName ?? node.textContent ?? '', node.dataset.entryId)
       return
     }
     node.childNodes.forEach(appendNodeText)
@@ -49,6 +50,7 @@ function renderPromptHtml(value: string, wordLibraryEntries: WordLibraryEntry[])
   const colorMap: Record<string, string> = {}
   const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
   ;[...wordLibraryEntries]
+    .filter((e) => e.deletedAt == null)
     .sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
     .forEach((entry, index) => {
       colorMap[entry.key] = colors[index % colors.length]
@@ -61,10 +63,11 @@ function renderPromptHtml(value: string, wordLibraryEntries: WordLibraryEntry[])
     }
     if (part.type === 'variable') {
       const color = colorMap[part.varName] ?? ''
+      if (!color) return escapePromptHtmlText(part.text)
       const style = color
         ? `style="background:${color}18;color:${color};border-color:${color};--var-bg:${color}18;--var-text:${color};--var-border:${color};--var-bg-hover:${color}28;--var-bg-selected:${color};--var-text-selected:#fff;--var-border-selected:${color}"`
         : ''
-      return `<span contenteditable="false" draggable="false" class="wildcard-var" data-var-name="${escapePromptHtmlAttribute(part.varName)}" ${style}>${escapePromptHtmlText(part.text)}</span>`
+      return `<span contenteditable="false" draggable="false" class="wildcard-var" data-var-name="${escapePromptHtmlAttribute(part.varName)}"${part.entryId ? ` data-entry-id="${escapePromptHtmlAttribute(part.entryId)}"` : ''} ${style}>${escapePromptHtmlText(part.text)}</span>`
     }
     return escapePromptHtmlText(part.text)
   }).join('')
@@ -89,11 +92,20 @@ export default function PromptVariableEditor({
   const wordLibraryGroups = useStore((s) => s.wordLibraryGroups)
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
   const setVarEntryEditor = useStore((s) => s.setVarEntryEditor)
-  const renderedHtml = useMemo(() => renderPromptHtml(value, wordLibraryEntries), [value, wordLibraryEntries])
+  const activeWordLibraryEntries = useMemo(() => wordLibraryEntries.filter((e) => e.deletedAt == null), [wordLibraryEntries])
+  const renderedHtml = useMemo(() => renderPromptHtml(value, activeWordLibraryEntries), [value, activeWordLibraryEntries])
 
   useEffect(() => {
     valueRef.current = value
   }, [value])
+
+  useEffect(() => {
+    const normalized = normalizePromptVariableMarkers(value, activeWordLibraryEntries.map((entry) => entry.key))
+    if (normalized === value) return
+    valueRef.current = normalized
+    onChange(normalized)
+    onVariablePromptChange?.(normalized)
+  }, [activeWordLibraryEntries, onChange, onVariablePromptChange, value])
 
   useEffect(() => {
     const el = editorRef.current
@@ -120,9 +132,12 @@ export default function PromptVariableEditor({
     })
   }, [autoFocus, selectOnFocus])
 
-  const openVariableEditor = (varName: string) => {
+  const openVariableEditor = (varName: string, boundEntryId?: string) => {
     const currentStore = useStore.getState()
-    const entry = currentStore.wordLibraryEntries.find((item) => item.key === varName)
+    const matchingEntries = currentStore.wordLibraryEntries.filter((item) => item.key === varName && item.deletedAt == null)
+    const entry = boundEntryId
+      ? currentStore.wordLibraryEntries.find((item) => item.id === boundEntryId && item.deletedAt == null)
+      : matchingEntries.length === 1 ? matchingEntries[0] : undefined
     const groupId = entry?.groupId ?? currentStore.wordLibraryGroups[0]?.id ?? wordLibraryGroups[0]?.id ?? 'default'
     setWordLibraryPromptSelectedVarName(varName)
     setVarEntryEditor({
@@ -184,7 +199,7 @@ export default function PromptVariableEditor({
         if (!target) return
         event.preventDefault()
         event.stopPropagation()
-        openVariableEditor(target.dataset.varName ?? target.textContent ?? '')
+        openVariableEditor(target.dataset.varName ?? target.textContent ?? '', target.dataset.entryId)
       }}
       onKeyDown={onKeyDown}
     />

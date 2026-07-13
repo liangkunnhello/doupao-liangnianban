@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '../store'
 import { render_prompt } from '../lib/promptGenerator'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -30,21 +30,23 @@ export default function WordLibraryManager() {
   const setOpen = useStore((s) => s.setRandomPromptModalOpen)
   const setPrompt = useStore((s) => s.setPrompt)
   const showToast = useStore((s) => s.showToast)
-  const entries = useStore((s) => s.wordLibraryEntries)
+  const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
+  const entries = useMemo(
+    () => wordLibraryEntries.filter((e) => e.deletedAt == null),
+    [wordLibraryEntries],
+  )
 
   const [segments, setSegments] = useState<Segment[]>(() => createDefaultSegments())
   const [result, setResult] = useState<[string, DrawReport[]] | null>(null)
   const [showTemplate, setShowTemplate] = useState(true)
   const [seed, setSeed] = useState(0)
 
-  // 打开时重置
-  const [prevOpen, setPrevOpen] = useState(open)
-  if (open && !prevOpen) {
+  useEffect(() => {
+    if (!open) return
     setSegments(createDefaultSegments())
     setResult(null)
     setSeed(0)
-  }
-  if (prevOpen !== open) setPrevOpen(open)
+  }, [open])
 
   const close = useCallback(() => {
     setOpen(false)

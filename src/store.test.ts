@@ -126,6 +126,7 @@ vi.mock('./lib/db', () => {
     },
   }
 })
+
 vi.mock('./lib/api', () => ({
   callImageApi: vi.fn(async () => ({
     images: [],
@@ -161,6 +162,40 @@ import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINE
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
+
+describe('word library group deletion', () => {
+  it('moves entries to a remaining group and promotes child groups', () => {
+    const now = Date.now()
+    useStore.setState({
+      wordLibraryGroups: [
+        { id: 'default', name: '默认分组', sortOrder: 0, parentId: null, description: '', color: '', archivedAt: null },
+        { id: 'source', name: '待删除分组', sortOrder: 1, parentId: null, description: '', color: '', archivedAt: null },
+        { id: 'child', name: '子分组', sortOrder: 2, parentId: 'source', description: '', color: '', archivedAt: null },
+      ],
+      wordLibraryEntries: [{
+        id: 'entry', groupId: 'source', key: '测试词条', label: '测试词条', entries: ['候选值'], draw_count: 1,
+        sortOrder: 0, isPinned: false, isFavorite: false, tags: [], deletedAt: null, createdAt: now, updatedAt: now, usageCount: 0,
+      }],
+    })
+
+    useStore.getState().deleteWordLibraryGroup('source')
+
+    const state = useStore.getState()
+    expect(state.wordLibraryGroups.map((group) => group.id)).toEqual(['default', 'child'])
+    expect(state.wordLibraryGroups.find((group) => group.id === 'child')?.parentId).toBeNull()
+    expect(state.wordLibraryEntries.find((entry) => entry.id === 'entry')?.groupId).toBe('default')
+  })
+
+  it('keeps the final group so entries cannot become orphaned', () => {
+    useStore.setState({
+      wordLibraryGroups: [{ id: 'only', name: '默认分组', sortOrder: 0, parentId: null, description: '', color: '', archivedAt: null }],
+    })
+
+    useStore.getState().deleteWordLibraryGroup('only')
+
+    expect(useStore.getState().wordLibraryGroups).toHaveLength(1)
+  })
+})
 
 describe('error toast messages', () => {
   it('drops long error detail after the failure title', () => {
@@ -1938,8 +1973,8 @@ describe('data import', () => {
   it('keeps imported word entries in the matching existing group by name', async () => {
     useStore.setState({
       wordLibraryGroups: [
-        { id: 'default', name: 'Default' },
-        { id: 'local-group', name: 'Shared' },
+        { id: 'default', name: 'Default', sortOrder: 0 },
+        { id: 'local-group', name: 'Shared', sortOrder: 1 },
       ],
       wordLibraryEntries: [],
       showToast: vi.fn(),
@@ -1948,7 +1983,7 @@ describe('data import', () => {
     const imported = await importData(importFile({
       version: 3,
       exportedAt: new Date(0).toISOString(),
-      wordLibraryGroups: [{ id: 'imported-group', name: 'Shared' }],
+      wordLibraryGroups: [{ id: 'imported-group', name: 'Shared', sortOrder: 0 }],
       wordLibraryEntries: [{
         id: 'imported-entry',
         groupId: 'imported-group',
@@ -1956,6 +1991,14 @@ describe('data import', () => {
         label: 'animal',
         entries: ['cat'],
         draw_count: 1,
+        sortOrder: 0,
+        isPinned: false,
+        isFavorite: false,
+        tags: [],
+        deletedAt: null,
+        createdAt: 0,
+        updatedAt: 0,
+        usageCount: 0,
       }],
     }), { importConfig: true, importTasks: false })
 
@@ -1970,7 +2013,7 @@ describe('data import', () => {
 
   it('normalizes malformed imported word entries before storing them', async () => {
     useStore.setState({
-      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryGroups: [{ id: 'default', name: 'Default', sortOrder: 0 }],
       wordLibraryEntries: [],
       showToast: vi.fn(),
     })
@@ -1978,30 +2021,39 @@ describe('data import', () => {
     const imported = await importData(importFile({
       version: 3,
       exportedAt: new Date(0).toISOString(),
-      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryGroups: [{ id: 'default', name: 'Default', sortOrder: 0 }],
       wordLibraryEntries: [{
         id: 'bad-entry',
         groupId: 'default',
         key: 'bad',
+        label: 'bad',
         entries: 'cat',
         draw_count: '2',
+        sortOrder: 0,
+        isPinned: false,
+        isFavorite: false,
+        tags: [],
+        deletedAt: null,
+        createdAt: 0,
+        updatedAt: 0,
+        usageCount: 0,
       } as unknown as NonNullable<ExportData['wordLibraryEntries']>[number]],
     }), { importConfig: true, importTasks: false })
 
     expect(imported).toBe(true)
-    expect(useStore.getState().wordLibraryEntries).toEqual([{
+    expect(useStore.getState().wordLibraryEntries).toEqual([expect.objectContaining({
       id: 'bad-entry',
       groupId: 'default',
       key: 'bad',
       label: 'bad',
       entries: [],
       draw_count: 1,
-    }])
+    })])
   })
 
   it('omits word library data from localStorage state after IndexedDB migration', async () => {
     useStore.setState({
-      wordLibraryGroups: [{ id: 'default', name: 'Default' }],
+      wordLibraryGroups: [{ id: 'default', name: 'Default', sortOrder: 0 }],
       wordLibraryEntries: [{
         id: 'entry-a',
         groupId: 'default',
@@ -2009,6 +2061,14 @@ describe('data import', () => {
         label: 'large',
         entries: ['cat', 'dog'],
         draw_count: 1,
+        sortOrder: 0,
+        isPinned: false,
+        isFavorite: false,
+        tags: [],
+        deletedAt: null,
+        createdAt: 0,
+        updatedAt: 0,
+        usageCount: 0,
       }],
       tasks: [],
       agentConversations: [],

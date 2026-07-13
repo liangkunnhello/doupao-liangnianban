@@ -8,6 +8,7 @@ const MENTION_START = '\u2063'
 const MENTION_END = '\u2064'
 export const VAR_START = '\u2060'
 export const VAR_END = '\u2061'
+const VAR_ENTRY_ID_SEPARATOR = '\u2062'
 export const VAR_MENTION_RE = /\u2060([^\u2061]+)\u2061/g
 const SELECTED_IMAGE_MENTION_RE = /\u2063@图(\d+)\u2064/g
 const SELECTED_MENTION_RE = /\u2063(@图(\d+)|@(?:第)?\d+轮图\d+)\u2064/g
@@ -15,6 +16,17 @@ const SELECTED_MENTION_RE = /\u2063(@图(\d+)|@(?:第)?\d+轮图\d+)\u2064/g
 export interface AtImageQuery {
   start: number
   query: string
+}
+
+export function createVariableMention(varName: string, entryId?: string): string {
+  const name = varName.trim()
+  const id = entryId?.trim()
+  return `${VAR_START}${name}${id ? `${VAR_ENTRY_ID_SEPARATOR}${id}` : ''}${VAR_END}`
+}
+
+export function parseVariableMention(rawValue: string) {
+  const [rawName, rawEntryId] = rawValue.split(VAR_ENTRY_ID_SEPARATOR, 2)
+  return { varName: rawName.trim(), entryId: rawEntryId?.trim() || undefined }
 }
 
 export function getImageMentionLabel(index: number) {
@@ -30,7 +42,7 @@ export function getSelectedTextMentionLabel(text: string) {
 }
 
 export function stripImageMentionMarkers(prompt: string): string {
-  return prompt.replace(/[\u2060\u2061\u2063\u2064]/g, '')
+  return prompt.replace(/[\u2060\u2061\u2062\u2063\u2064]/g, '')
 }
 
 export function escapePromptHtmlText(value: string): string {
@@ -59,7 +71,7 @@ export function getPromptIndexFromVisibleIndex(prompt: string, visibleIndex: num
 function findVariableMentionAtVisibleOffset(prompt: string, visibleOffset: number) {
   for (const match of prompt.matchAll(VAR_MENTION_RE)) {
     if (match.index == null) continue
-    const varName = match[1]
+    const { varName } = parseVariableMention(match[1])
     const visibleStart = stripImageMentionMarkers(prompt.slice(0, match.index)).length
     const visibleEnd = visibleStart + varName.length
     if (visibleOffset >= visibleStart && visibleOffset <= visibleEnd) {
@@ -173,7 +185,7 @@ export type PromptMentionPart =
   | { type: 'text'; text: string }
   | { type: 'mention'; text: string; imageIndex: number; mentionText?: string }
   | { type: 'mention'; text: string; mentionText: string; imageIndex?: never }
-  | { type: 'variable'; text: string; varName: string }
+  | { type: 'variable'; text: string; varName: string; entryId?: string }
 
 export function getPromptMentionParts(prompt: string, inputImages: InputImage[]): PromptMentionPart[] {
   const parts: PromptMentionPart[] = []
@@ -188,7 +200,7 @@ export function getPromptMentionParts(prompt: string, inputImages: InputImage[])
   }
   for (const match of prompt.matchAll(VAR_MENTION_RE)) {
     if (match.index == null) continue
-    const varName = match[1]
+    const { varName } = parseVariableMention(match[1])
     if (!varName.trim()) continue
     matches.push({ index: match.index, length: match[0].length, type: 'variable', match })
   }
@@ -209,8 +221,8 @@ export function getPromptMentionParts(prompt: string, inputImages: InputImage[])
         : { type: 'mention', text, imageIndex: index })
     } else {
       // variable
-      const varName = m.match[1]
-      parts.push({ type: 'variable', text: varName, varName })
+      const { varName, entryId } = parseVariableMention(m.match[1])
+      parts.push({ type: 'variable', text: varName, varName, entryId })
     }
 
     lastIndex = m.index + m.length
@@ -231,11 +243,14 @@ export function replaceImageMentionsForApi(prompt: string, imageCount?: number, 
   })
   // 替换变量词条标记为实际词条内容（随机选择一条）
   if (variableResolver) {
-    result = result.replace(VAR_MENTION_RE, (_text, varName) => {
-      const trimmedVarName = varName.trim()
+    result = result.replace(VAR_MENTION_RE, (_text, rawValue) => {
+      const { varName: trimmedVarName, entryId } = parseVariableMention(rawValue)
       if (!trimmedVarName) return ''
-      const entry = variableResolver.wordLibraryEntries.find((e) => e.key === trimmedVarName)
-      if (!entry || entry.entries.length === 0) return ''
+      const sameName = variableResolver.wordLibraryEntries.filter((e) => e.key === trimmedVarName)
+      const entry = entryId
+        ? variableResolver.wordLibraryEntries.find((e) => e.id === entryId)
+        : sameName.length === 1 ? sameName[0] : undefined
+      if (!entry || entry.entries.length === 0) return trimmedVarName
       const idx = Math.floor(Math.random() * entry.entries.length)
       return entry.entries[idx]
     })

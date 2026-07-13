@@ -134,6 +134,10 @@ describe('prompt image mentions', () => {
     it('does not replace mentions outside the current image range', () => {
       expect(replaceImageMentionsForApi(`把 ${getSelectedImageMentionLabel(2)} 变蓝`, 2)).toBe('把 @图3 变蓝')
     })
+
+    it('keeps deleted variable mentions as plain text when resolving for api', () => {
+      expect(replaceImageMentionsForApi(`生成${variableMention('背景')}`, undefined, undefined, { wordLibraryEntries: [] })).toBe('生成背景')
+    })
   })
 
   describe('prompt variable mention editing', () => {

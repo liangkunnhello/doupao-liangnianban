@@ -83,7 +83,7 @@ export default function DetailModal() {
   const wordLibraryEntries = useStore((s) => s.wordLibraryEntries)
   
   const VAR_COLOR_MAP = useMemo(() => {
-    const sorted = [...wordLibraryEntries].sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
+    const sorted = [...wordLibraryEntries].filter((e) => e.deletedAt == null).sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
     const map: Record<string, string> = {}
     const colors = ['#10b981', '#f97316', '#3b82f6', '#a855f7', '#ec4899', '#06b6d4']
     sorted.forEach((entry, i) => {

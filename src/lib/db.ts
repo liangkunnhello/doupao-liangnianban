@@ -1,4 +1,4 @@
-import type { AgentConversation, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordLibraryEntry, WordLibraryGroup } from '../types'
+import type { AgentConversation, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordGenerationBatch, WordLibraryEntry, WordLibraryGroup } from '../types'
 import { deleteRawCacheImages, isElectron, saveRawCacheImageToLocal } from './localSave'
 import type { MigrationJournal } from './migrations/registry'
 
@@ -166,6 +166,7 @@ export type StoredWordLibraryState = {
   id: 'word-library'
   groups: WordLibraryGroup[]
   entries: WordLibraryEntry[]
+  batches?: WordGenerationBatch[]
   updatedAt: number
 }
 
@@ -178,6 +179,7 @@ export function putWordLibraryState(state: Omit<StoredWordLibraryState, 'id' | '
     id: 'word-library',
     groups: state.groups,
     entries: state.entries,
+    batches: state.batches ?? [],
     updatedAt: Date.now(),
   }))
 }
