@@ -1049,6 +1049,7 @@ describe('mask draft lifecycle in store actions', () => {
       expect(electronAPI.saveJson).toHaveBeenCalled()
     })
     expect(electronAPI.saveImage).toHaveBeenCalledTimes(3)
+    expect(Object.keys(useStore.getState().tasks[0].localSavedOutputImagePaths ?? {})).toHaveLength(3)
   })
 
   it('continues generated image names from the largest matching directory sequence', async () => {

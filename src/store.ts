@@ -275,6 +275,24 @@ async function saveTaskImagesToLocalFS(taskId: string, imageIds: string[], image
   })
 }
 
+function getLocalSavedOutputImageKey(imageId: string, imageIndex: number): string {
+  return `${imageIndex}:${imageId}`
+}
+
+function markTaskOutputImagesSavedToLocal(taskId: string, saved: Record<string, string>) {
+  if (Object.keys(saved).length === 0) return
+
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task) return
+
+  updateTaskInStore(taskId, {
+    localSavedOutputImagePaths: {
+      ...(task.localSavedOutputImagePaths ?? {}),
+      ...saved,
+    },
+  })
+}
+
 async function saveTaskImagesToLocalFSNow(taskId: string, imageIds: string[], imageIndexOffset: number) {
   if (!isElectronEnv()) return
   const localSavePath = await getLocalSavePath()
@@ -285,17 +303,24 @@ async function saveTaskImagesToLocalFSNow(taskId: string, imageIds: string[], im
   const { task, context, settings, startSequence, imagesDir } = filenameState
 
   let sequenceOffset = 0
+  const savedPaths: Record<string, string> = {}
   for (let i = 0; i < imageIds.length; i++) {
     const imageId = imageIds[i]
+    const imageIndex = imageIndexOffset + i
+    const savedKey = getLocalSavedOutputImageKey(imageId, imageIndex)
+    if (task.localSavedOutputImagePaths?.[savedKey]) continue
+
     const dataUrl = await ensureImageCached(imageId)
     if (dataUrl) {
       const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
-      const saved = await saveImageToLocal(taskId, imageIndexOffset + i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), undefined, imagesDir, fileNameBase)
+      const saved = await saveImageToLocal(taskId, imageIndex, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), undefined, imagesDir, fileNameBase)
       if (saved) {
+        savedPaths[savedKey] = saved
         sequenceOffset++
       }
     }
   }
+  markTaskOutputImagesSavedToLocal(taskId, savedPaths)
 }
 
 async function saveTaskMetaToLocalFS(taskId: string) {
@@ -332,14 +357,19 @@ async function saveTaskToLocalFSNow(taskId: string) {
 
   let imageFailCount = 0
   let sequenceOffset = 0
+  const savedPaths: Record<string, string> = {}
   try {
     for (let i = 0; i < (task.outputImages?.length ?? 0); i++) {
       const imageId = task.outputImages[i]
+      const savedKey = getLocalSavedOutputImageKey(imageId, i)
+      if (task.localSavedOutputImagePaths?.[savedKey]) continue
+
       const dataUrl = await ensureImageCached(imageId)
       if (dataUrl) {
         const fileNameBase = buildGeneratedImageFileNameBase(context, settings, startSequence + sequenceOffset)
         const saved = await saveImageToLocal(taskId, i, dataUrl, getImageExtensionFromDataUrl(dataUrl, task.params.output_format), undefined, imagesDir, fileNameBase)
         if (saved) {
+          savedPaths[savedKey] = saved
           sequenceOffset++
         } else {
           imageFailCount++
@@ -351,6 +381,7 @@ async function saveTaskToLocalFSNow(taskId: string) {
 
     await saveTaskMetaToLocal(taskId, task)
     await savePromptToLocal(taskId, task.prompt)
+    markTaskOutputImagesSavedToLocal(taskId, savedPaths)
 
     if (imageFailCount > 0) {
       useStore.getState().showToast(`本地保存：${imageFailCount} 张图片保存失败`, 'error')

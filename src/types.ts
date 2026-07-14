@@ -294,6 +294,7 @@ export interface TaskRecord {
   /** 日程运行任务的输出子目录 */
   scheduledOutputSubFolder?: string
   localSaveBatchFolder?: string
+  localSavedOutputImagePaths?: Record<string, string>
   /** 来源模式：画廊 / Agent */
   sourceMode?: AppMode
   /** Agent 对话 ID */
