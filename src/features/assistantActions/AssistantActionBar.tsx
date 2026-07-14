@@ -171,6 +171,17 @@ function applyAssistantProgress(
   }
 }
 
+function formatAssistantElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}:${String(seconds).padStart(2, '0')}` : `${seconds}s`
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 function emptyFormValue(): VisualSkillFormValue {
   return {
     name: '',
@@ -218,10 +229,24 @@ export default function AssistantActionBar({
   const [settingsAction, setSettingsAction] = useState<AssistantAction | null>(null)
   const [editorState, setEditorState] = useState<{ mode: 'create' | 'edit'; skill: AssistantCustomSkill | null } | null>(null)
   const [hoveredSkill, setHoveredSkill] = useState<{ action: AssistantAction; rect: DOMRect } | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const runningControllerRef = useRef<AbortController | null>(null)
 
   const runningActionId = feedback.type === 'loading' ? feedback.action.id : null
   const isBusy = runningActionId != null
+  const elapsedLabel = feedback.type === 'loading' ? formatAssistantElapsed(now - feedback.startedAt) : null
   const updatePreferences = (next: AssistantActionPreferences) => onUpdatePreferences?.(next)
+
+  useEffect(() => {
+    if (feedback.type !== 'loading') return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [feedback.type, feedback.type === 'loading' ? feedback.startedAt : null])
+
+  useEffect(() => () => {
+    runningControllerRef.current?.abort(new DOMException('技能运行已取消', 'AbortError'))
+  }, [])
 
   if (!normalizedPreferences.enabled) return null
 
@@ -229,6 +254,8 @@ export default function AssistantActionBar({
     if (isBusy || !isAssistantActionRunnable(action, context)) return
     setContextAction(null)
     setHoveredSkill(null)
+    const controller = new AbortController()
+    runningControllerRef.current = controller
     let loadingFeedback = createAssistantLoadingFeedback(action)
     onFeedbackChange(loadingFeedback)
     try {
@@ -239,22 +266,35 @@ export default function AssistantActionBar({
         customSkill: isCustomAssistantSkill(action) ? action : undefined,
         skill: action,
         preferences: normalizedPreferences,
+        signal: controller.signal,
         onProgress: (update) => {
+          if (controller.signal.aborted) return
           loadingFeedback = applyAssistantProgress(loadingFeedback, update)
           onFeedbackChange(loadingFeedback)
         },
       })
+      if (controller.signal.aborted) return
       if (!result.prompt.trim()) {
         onFeedbackChange({ type: 'error', action, message: '没有生成可用内容，请稍后重试。' })
         return
       }
       onFeedbackChange({ type: 'success', action, result })
     } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) {
+        onFeedbackChange({ type: 'idle' })
+        return
+      }
       onFeedbackChange({ type: 'error', action, message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      if (runningControllerRef.current === controller) runningControllerRef.current = null
     }
   }
 
   const runAction = (action: AssistantAction) => void runActionWithSettings(action)
+  const cancelRunningAction = () => {
+    runningControllerRef.current?.abort(new DOMException('技能运行已取消', 'AbortError'))
+    onFeedbackChange({ type: 'idle' })
+  }
 
   const openSettings = (action: AssistantAction) => setSettingsAction(action)
   const closeSettings = () => setSettingsAction(null)
@@ -301,17 +341,19 @@ export default function AssistantActionBar({
             >
               <button
                 type="button"
-                disabled={isBusy || !isAssistantActionRunnable(action, context)}
-                onClick={() => runAction(action)}
+                disabled={(!isRunning && isBusy) || !isAssistantActionRunnable(action, context)}
+                onClick={() => isRunning ? cancelRunningAction() : runAction(action)}
                 className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-sm font-medium transition ${
                   isRunning
-                    ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300'
-                    : 'border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-200 dark:hover:bg-white/[0.06]'
+                    ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-950 dark:text-blue-200'
+                    : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
                 }`}
                 title={!isAssistantActionRunnable(action, context) ? '当前输入不满足该技能要求' : (action.instruction || action.name)}
               >
-                <Icon className="h-4 w-4" />
+                {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
                 {action.name}
+                {isRunning && elapsedLabel && <span className="ml-1 rounded-full bg-white px-1.5 py-0.5 text-[11px] font-mono text-blue-600 dark:bg-blue-900 dark:text-blue-100">{elapsedLabel}</span>}
+                {isRunning && <X className="ml-0.5 h-3.5 w-3.5" />}
               </button>
               {hoveredSkill?.action.id === action.id && !isBusy && (
                 <div
@@ -359,7 +401,7 @@ export default function AssistantActionBar({
           type="button"
           disabled={isBusy}
           onClick={() => setEditorState({ mode: 'create', skill: null })}
-          className="flex shrink-0 items-center gap-1 rounded-xl border border-dashed border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-50 dark:border-white/[0.12] dark:text-gray-400 dark:hover:bg-white/[0.06]"
+          className="flex shrink-0 items-center gap-1 rounded-xl border border-dashed border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-50 dark:border-white/[0.12] dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800"
           title="添加自定义技能"
         >
           <Plus className="h-4 w-4" />
@@ -395,7 +437,7 @@ export default function AssistantActionBar({
         />
       )}
 
-      {feedback.type === 'loading' && <AssistantLoadingPanel feedback={feedback} />}
+      {feedback.type === 'loading' && <AssistantLoadingPanel feedback={feedback} elapsedLabel={elapsedLabel ?? '0s'} onCancel={cancelRunningAction} />}
       {feedback.type === 'error' && (
         <div className="mt-2 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -995,14 +1037,32 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
 // Loading + result panels (spec §六)
 // ---------------------------------------------------------------------------
 
-function AssistantLoadingPanel({ feedback }: { feedback: Extract<AssistantActionFeedbackState, { type: 'loading' }> }) {
+function AssistantLoadingPanel({
+  feedback,
+  elapsedLabel,
+  onCancel,
+}: {
+  feedback: Extract<AssistantActionFeedbackState, { type: 'loading' }>
+  elapsedLabel: string
+  onCancel: () => void
+}) {
   const phase = feedback.phases[feedback.phaseIndex] ?? feedback.phases[feedback.phases.length - 1]
   return (
     <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm dark:border-white/[0.08] dark:bg-gray-900">
-      <div className="mb-2 flex items-center gap-2 text-gray-600 dark:text-gray-300">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        <span className="font-medium">{feedback.action.name}</span>
-        <span className="text-xs text-gray-400">{phase?.label}</span>
+      <div className="mb-2 flex items-center justify-between gap-3 text-gray-600 dark:text-gray-300">
+        <div className="flex min-w-0 items-center gap-2">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          <span className="truncate font-medium">{feedback.action.name}</span>
+          <span className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-300">{elapsedLabel}</span>
+          <span className="truncate text-xs text-gray-400">{phase?.label}</span>
+        </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+        >
+          取消
+        </button>
       </div>
       {feedback.detail && <p className="text-xs text-gray-400">{feedback.detail}</p>}
     </div>

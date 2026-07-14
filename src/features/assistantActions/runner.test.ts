@@ -241,6 +241,28 @@ describe('assistant runner', () => {
     expect(result.qualityState).toBe('repaired')
   })
 
+  it('fills missing word-entry categories for placeholders instead of flattening them', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompt: '{{缺失变量}}，突出卖点',
+          wordEntries: [],
+        }),
+      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompt: '{{缺失变量}}，突出卖点',
+          wordEntries: [],
+        }),
+      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+
+    expect(result.prompt).toBe('{{缺失变量}}，突出卖点')
+    expect(result.wordEntries).toEqual([{ category: '缺失变量', entries: ['缺失变量'] }])
+    expect(result.qualityState).toBe('repaired')
+  })
+
   it('keeps placeholder mapping intact after compliance cleaning', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({

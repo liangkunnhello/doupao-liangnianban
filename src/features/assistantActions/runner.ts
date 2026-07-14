@@ -103,6 +103,7 @@ export async function runAssistantAction(
     skill?: AssistantAction
     preferences?: AssistantActionPreferences
     onProgress?: (update: AssistantRunnerProgressUpdate) => void
+    signal?: AbortSignal
   },
 ): Promise<AssistantActionResult> {
   if (!opts.profile.apiKey.trim()) {
@@ -132,6 +133,7 @@ export async function runAssistantAction(
     profile: opts.profile,
     params: opts.params,
     input: buildInput(),
+    signal: opts.signal,
   })).text.trim()
 
   // Retry once on an empty response before giving up.
@@ -142,6 +144,7 @@ export async function runAssistantAction(
       profile: opts.profile,
       params: opts.params,
       input: buildInput(),
+      signal: opts.signal,
     })).text.trim()
     if (!rawText) {
       throw new Error('模型未返回可用内容，已自动重试一次仍失败。请检查输入或稍后重试。')
@@ -232,7 +235,7 @@ function variableRepairIssue(effective: EffectiveVisualSkill, payload: Assistant
 }
 
 async function repairJsonStructure(
-  opts: { settings: AppSettings; profile: ApiProfile; params: TaskParams },
+  opts: { settings: AppSettings; profile: ApiProfile; params: TaskParams; signal?: AbortSignal },
   brokenText: string,
   issue: 'structure' | 'variable',
 ): Promise<string | null> {
@@ -255,6 +258,7 @@ async function repairJsonStructure(
       settings: opts.settings,
       profile: opts.profile,
       params: opts.params,
+      signal: opts.signal,
       input: [{
         role: 'user',
         content: [{
@@ -265,6 +269,9 @@ async function repairJsonStructure(
     })
     return repaired.text.trim() || null
   } catch {
+    if (opts.signal?.aborted) {
+      throw opts.signal.reason instanceof Error ? opts.signal.reason : new DOMException('技能运行已取消', 'AbortError')
+    }
     return null
   }
 }
@@ -385,22 +392,13 @@ function normalizeVisualSkillResult(
   const config = effective.wordEntries
   const rawEntries = config ? normalizeWordEntries(payload.wordEntries, config) : []
   const placeholders = extractPlaceholders(prompt)
-  const mappedEntries = rawEntries.filter((group) => placeholders.includes(group.category))
-  const mappedNames = new Set(mappedEntries.map((group) => group.category))
-  const unmapped = placeholders.filter((name) => !mappedNames.has(name))
-
-  if (unmapped.length > 0) {
-    prompt = prompt.replace(
-      /\{\{\s*([^{}]+?)\s*\}\}/g,
-      (match, name: string) => (mappedNames.has(name.trim()) ? match : name.trim()),
-    )
-  }
+  const mappedEntries = config ? ensurePlaceholderWordEntries(placeholders, rawEntries) : []
 
   let qualityState: AssistantQualityState = prompt ? 'complete' : 'insufficient-data'
   let qualityNote: string | undefined
-  if (unmapped.length > 0) {
+  if (config && placeholders.some((name) => !rawEntries.some((group) => group.category === name))) {
     qualityState = 'repaired'
-    qualityNote = `已将 ${unmapped.length} 个无对应词条的占位符转为普通文字。`
+    qualityNote = '已为缺失映射的变量补齐同名词条。'
   }
 
   void grounding
@@ -429,7 +427,7 @@ function degradeToRepaired(
     ...reconciled,
     ...deriveAssistantResultFields(reconciled.prompt, reconciled.wordEntries),
     qualityState: 'repaired',
-    qualityNote: reconciled.qualityNote ?? '词条映射不完整，已降级为普通提示词。',
+    qualityNote: reconciled.qualityNote ?? '已为缺失映射的变量补齐同名词条。',
   }
 }
 
@@ -438,31 +436,51 @@ function degradeToRepaired(
  *  degrade to a plain prompt (spec §五.2). */
 function reconcileAfterSanitize(result: AssistantActionResult, effective: EffectiveVisualSkill): AssistantActionResult {
   const placeholders = extractPlaceholders(result.prompt)
-  const entries = result.wordEntries
-  if (!entries || entries.length === 0) {
+  if (!effective.wordEntries) {
     if (placeholders.length === 0) return result
     const cleaned = result.prompt.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, name: string) => name.trim())
-    return { ...result, prompt: cleaned, qualityState: 'repaired', qualityNote: result.qualityNote ?? '词条生成失败，已降级为普通提示词。' }
+    return { ...result, prompt: cleaned, qualityState: 'repaired', qualityNote: result.qualityNote ?? '已将变量占位符转为普通文字。' }
   }
-  const keptEntries = entries.filter((group) => placeholders.includes(group.category))
-  if (effective.wordEntries && keptEntries.length === 0) {
-    const plain = result.prompt.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, name: string) => name.trim())
+  if (placeholders.length === 0) return { ...result, wordEntries: undefined }
+
+  const entries = result.wordEntries
+  if (!entries || entries.length === 0) {
     return {
       ...result,
-      prompt: plain,
-      wordEntries: undefined,
+      wordEntries: ensurePlaceholderWordEntries(placeholders, []),
       qualityState: 'repaired',
-      qualityNote: '词条生成失败，已降级为普通提示词。',
+      qualityNote: result.qualityNote ?? '已为缺失映射的变量补齐同名词条。',
     }
   }
-  const categorySet = new Set(entries.map((group) => group.category))
-  const orphan = placeholders.filter((name) => !categorySet.has(name))
-  if (orphan.length === 0) return { ...result, wordEntries: keptEntries }
-  const cleanedPrompt = result.prompt.replace(
-    /\{\{\s*([^{}]+?)\s*\}\}/g,
-    (match, name: string) => (categorySet.has(name.trim()) ? match : name.trim()),
-  )
-  return { ...result, prompt: cleanedPrompt, wordEntries: keptEntries }
+  const keptEntries = ensurePlaceholderWordEntries(placeholders, entries)
+  if (effective.wordEntries && keptEntries.length === 0) {
+    return {
+      ...result,
+      wordEntries: ensurePlaceholderWordEntries(placeholders, []),
+      qualityState: 'repaired',
+      qualityNote: '已为缺失映射的变量补齐同名词条。',
+    }
+  }
+  const repairedMissing = placeholders.some((name) => !entries.some((group) => group.category === name))
+  return {
+    ...result,
+    wordEntries: keptEntries,
+    ...(repairedMissing
+      ? {
+        qualityState: 'repaired' as const,
+        qualityNote: result.qualityNote ?? '已为缺失映射的变量补齐同名词条。',
+      }
+      : {}),
+  }
+}
+
+function ensurePlaceholderWordEntries(placeholders: string[], entries: AssistantWordEntryGroup[]): AssistantWordEntryGroup[] {
+  const uniquePlaceholders = placeholders.filter((name, index, all) => all.indexOf(name) === index)
+  return uniquePlaceholders.map((category) => {
+    const existing = entries.find((group) => group.category === category)
+    if (existing?.entries.length) return existing
+    return { category, entries: [category] }
+  })
 }
 
 function stripExplanatoryPrefix(text: string): string {
