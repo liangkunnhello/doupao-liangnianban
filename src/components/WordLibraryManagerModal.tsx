@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { useStore } from '../store'
+import { getUniqueWordLibraryEntryKey, useStore } from '../store'
 import { createVariableMention, parseVariableMention, VAR_MENTION_RE } from '../lib/promptImageMentions'
 
 type View = 'library' | 'batches' | 'archived'
@@ -77,8 +77,6 @@ export default function WordLibraryManagerModal() {
     ))
   }, [activeEntries, query, visibleGroupIds])
 
-  if (!open) return null
-
   const countGroup = (id: string) => activeEntries.filter((entry) => entry.groupId === id).length
   const selectEntry = (id: string) => {
     const entry = activeEntries.find((item) => item.id === id)
@@ -94,7 +92,9 @@ export default function WordLibraryManagerModal() {
   }
   const saveEntry = () => {
     if (!activeEntry || !entryName.trim()) return
-    updateEntry(activeEntry.id, { key: entryName.trim(), label: entryName.trim(), entries: [...new Set(entryValues.split('\n').map((value) => value.trim()).filter(Boolean))] })
+    const uniqueKey = getUniqueWordLibraryEntryKey(entries, entryName.trim(), activeEntry.id)
+    updateEntry(activeEntry.id, { key: uniqueKey, label: uniqueKey, entries: [...new Set(entryValues.split('\n').map((value) => value.trim()).filter(Boolean))] })
+    setEntryName(uniqueKey)
     toast('词条已保存', 'success')
   }
   const newEntry = () => {
@@ -210,6 +210,11 @@ export default function WordLibraryManagerModal() {
     })
   }
 
+  const entryById = useMemo(() => new Map(activeEntries.map((entry) => [entry.id, entry])), [activeEntries])
+  const activeBatches = useMemo(() => batches.filter((batch) => !batch.archivedAt), [batches])
+
+  if (!open) return null
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
       <section className="flex h-[min(820px,92vh)] w-[min(1320px,96vw)] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
@@ -222,7 +227,10 @@ export default function WordLibraryManagerModal() {
         <nav className="flex shrink-0 gap-2 border-b border-border px-5 py-2 text-xs">
           {([['library', '词条库'], ['batches', `技能批次 ${batches.filter((batch) => !batch.archivedAt).length}`], ['archived', '已归档']] as const).map(([id, label]) => <button key={id} type="button" onClick={() => setView(id)} className={`rounded-md px-2.5 py-1.5 ${view === id ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300' : 'hover:bg-muted'}`}>{label}</button>)}
         </nav>
-        {view === 'batches' && <div className="min-h-0 flex-1 overflow-y-auto p-5">{batches.filter((batch) => !batch.archivedAt).map((batch) => <article key={batch.id} className="mb-2 rounded-md border border-border p-4"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><h3 className="text-sm font-medium">{batch.skillName}</h3><p className="mt-1 text-xs text-muted-foreground">{new Date(batch.createdAt).toLocaleString()} · {batch.entryIds.length} 个词条 · {batch.referenceImageIds.length} 张参考图</p><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{batch.sourcePrompt || '无原始提示词'}</p></div><button type="button" onClick={() => archiveBatch(batch.id)} className="text-xs text-muted-foreground hover:text-foreground">归档</button></div></article>)}{batches.every((batch) => batch.archivedAt) && <Empty text="暂无技能生成批次" />}</div>}
+        {view === 'batches' && <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {activeBatches.map((batch) => <article key={batch.id} className="mb-2 rounded-md border border-border p-4"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><h3 className="text-sm font-medium">{batch.skillName}</h3><p className="mt-1 text-xs text-muted-foreground">{new Date(batch.createdAt).toLocaleString()} · {batch.entryIds.length} 个词条 · {batch.referenceImageIds.length} 张参考图</p><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{batch.sourcePrompt || '无原始提示词'}</p></div><button type="button" onClick={() => archiveBatch(batch.id)} className="shrink-0 text-xs text-muted-foreground hover:text-foreground">归档</button></div></article>)}
+          {activeBatches.length === 0 && <Empty text="暂无技能生成批次" />}
+        </div>}
         {view === 'archived' && <div className="min-h-0 flex-1 overflow-y-auto p-5"><h3 className="mb-3 text-sm font-medium">已归档分组与批次</h3>{groups.filter((group) => group.archivedAt).map((group) => <div key={group.id} className="mb-2 flex items-center rounded-md border border-border p-3 text-sm"><span className="flex-1">{group.name}</span><button type="button" onClick={() => archiveGroup(group.id, false)} className="text-xs text-blue-600">恢复</button></div>)}{batches.filter((batch) => batch.archivedAt).map((batch) => <div key={batch.id} className="mb-2 flex items-center rounded-md border border-border p-3 text-sm"><span className="flex-1">{batch.skillName} · {new Date(batch.createdAt).toLocaleDateString()}</span><button type="button" onClick={() => archiveBatch(batch.id, false)} className="text-xs text-blue-600">恢复</button></div>)}{groups.every((group) => !group.archivedAt) && batches.every((batch) => !batch.archivedAt) && <Empty text="暂无已归档内容" />}</div>}
         {view === 'library' && <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(360px,1fr)_340px]">
           <aside className="overflow-y-auto border-r border-border p-3">

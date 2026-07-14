@@ -1,21 +1,86 @@
 import type { InputImage } from '../../types'
 
 export type BuiltInAssistantActionId =
-  | 'image-derive'
+  | 'prompt-optimize'
   | 'image-describe'
   | 'super-derive'
-  | 'prompt-optimize'
-  | 'style-expand'
-  | 'word-extract'
-  | 'prompt-examples'
-  | 'market-breakdown'
-  | 'viral-remix'
-  | 'angle-matrix'
-  | 'batch-variants'
-  | 'channel-rewrite'
-  | 'ad-review'
+  | 'wild-derive'
 
 export type AssistantActionId = BuiltInAssistantActionId | string
+
+/** Schema version of the assistant skill system. Bumped to 2 when the skill
+ *  set was collapsed to four default visual-semantic skills plus custom skills
+ *  that all inherit the shared AI visual-semantic conversion base. */
+export const ASSISTANT_SKILL_SCHEMA_VERSION = 2
+
+/** V2 change-intensity ladder shared by the four default skills and custom skills. */
+export type VisualSkillIntensity = 'faithful' | 'controlled' | 'high' | 'maximum'
+
+/** V2 input requirement model (replaces the old trigger/when pair). */
+export type VisualInputMode = 'text' | 'image' | 'either' | 'both'
+
+/** How multiple word entries are organized for a variable skill. */
+export type WordEntryStrategy = 'atomic' | 'direction-pack'
+
+/** Word-entry behavior for a skill that emits reusable variable chips. */
+export interface WordEntryConfig {
+  enabled: boolean
+  /** Entries generated per category (capped by the runner). */
+  count: number
+  categories: string[]
+  /** 'atomic' = independent replaceable chips; 'direction-pack' = each entry is a
+   *  self-contained creative direction that stays coherent when sampled. */
+  strategy: WordEntryStrategy
+}
+
+/** Canonical V2 skill definition. Built-in and custom skills both follow it so
+ *  the shared AI visual-semantic conversion base can be injected uniformly.
+ *  At runtime this is the single source of truth; legacy fields (trigger/when/
+ *  outputMode/contract/steps) are only read by the migration adapter. */
+export interface VisualSkill {
+  id: string
+  name: string
+  icon: AssistantActionIcon
+  source: 'builtin' | 'custom'
+  enabled: boolean
+  priority: number
+  /** Optional human description, surfaced in the editor / hover card. */
+  description?: string
+  inputMode: VisualInputMode
+  intensity: VisualSkillIntensity
+  /** Human instruction describing what the skill should do. Required for custom
+   *  skills; for built-ins it documents the boundary the base must respect. */
+  instruction: string
+  preserveRules: string[]
+  editableRules: string[]
+  forbiddenRules: string[]
+  wordEntries: WordEntryConfig
+  /** Legacy steps kept for backward compatibility; not executed by the V2 runner. */
+  steps?: AssistantSkillStep[]
+  /** Legacy schema marker kept for migration detection. */
+  version?: number
+}
+
+/** Effective, fully-resolved skill the runner consumes. Word entries are null
+ *  when the skill does not emit variables. */
+export interface EffectiveVisualSkill {
+  id: string
+  name: string
+  inputMode: VisualInputMode
+  intensity: VisualSkillIntensity
+  instruction: string
+  preserveRules: string[]
+  editableRules: string[]
+  forbiddenRules: string[]
+  wordEntries: WordEntryConfig | null
+}
+
+/** Unified V2 result: exactly one prompt, plus optional variable word entries
+ *  that are only a data source for the {{variables}} in the prompt. */
+export interface VisualSkillResult {
+  prompt: string
+  wordEntries?: Array<{ category: string; entries: string[] }>
+}
 
 export type AssistantActionIcon =
   | 'image'
@@ -141,19 +206,50 @@ export interface AssistantAction {
   version?: number
   /** Ordered, editable processing steps. When present, execution is step-based. */
   steps?: AssistantSkillStep[]
+  /** V2 fields. */
+  intensity?: VisualSkillIntensity
+  inputMode?: VisualInputMode
+  wordEntries?: WordEntryConfig
+  /** Free-form instruction for custom skills (also kept for built-ins as docs). */
+  instruction?: string
+  /** V2 boundary rules. The runner reads these (with contract as legacy fallback). */
+  preserveRules?: string[]
+  editableRules?: string[]
+  forbiddenRules?: string[]
 }
 
 export interface AssistantCustomSkill extends AssistantAction {
   id: string
-  instruction: string
-  steps: AssistantSkillStep[]
+  source: 'custom'
   isCustom: true
-  /** 是否广告投放技能：决定是否需要套用渠道/卖点/测试计划包装。 */
+  /** Free-form instruction for custom skills (also kept for built-ins as docs). */
+  instruction: string
+  inputMode: VisualInputMode
+  intensity: VisualSkillIntensity
+  preserveRules: string[]
+  editableRules: string[]
+  forbiddenRules: string[]
+  wordEntries: WordEntryConfig
+  /** Legacy / compatibility fields kept for migration and storage. The V2 runner
+   *  never reads these; creation and edit flows use the V2 fields above. */
+  trigger?: AssistantSkillTrigger
+  outputMode: AssistantAction['outputMode']
+  contract?: AssistantSkillContract
+  steps?: AssistantSkillStep[]
   requiresAdContext?: boolean
-  /** 是否允许生成变量词条。 */
   allowWordEntries?: boolean
-  /** 是否允许扩展（探索）新卖点；false 时强制锁定用户输入卖点。 */
   allowExploreSellingPoint?: boolean
+}
+
+/** The single editable form value shared by the custom-skill create and edit
+ *  flows (spec §四.1). There is exactly one form so the two never diverge. */
+export interface VisualSkillFormValue {
+  name: string
+  icon: AssistantActionIcon
+  instruction: string
+  inputMode: VisualInputMode
+  intensity: VisualSkillIntensity
+  wordEntries: WordEntryConfig
 }
 
 /** A user-saved override layer applied on top of a built-in skill.
@@ -181,6 +277,8 @@ export interface AssistantSkillOverride {
 }
 
 export interface AssistantActionPreferences {
+  /** Schema version of the skill system; 2 = Visual Semantic Skills V2. */
+  schemaVersion?: number
   enabled: boolean
   pinnedActionIds: AssistantActionId[]
   hiddenActionIds: AssistantActionId[]
@@ -189,6 +287,9 @@ export interface AssistantActionPreferences {
   customSkills: AssistantCustomSkill[]
   /** Override layers for built-in skills; empty means all built-ins use defaults. */
   skillOverrides: AssistantSkillOverride[]
+  /** Per-skill settings for built-in skills. Always present after normalization
+   *  (only the two variable skills carry meaningful settings). */
+  builtInSkillSettings: BuiltInSkillSettings
 }
 
 export type AdChannel = 'general' | 'toutiao' | 'gdt' | 'baidu' | 'multi'
@@ -231,7 +332,17 @@ export interface AssistantActionSettings {
   wordDerive: WordDeriveActionSettings
 }
 
-export type WordDeriveTargetGroupMode = 'selected' | 'skill-name'
+/** Where generated word entries land: a fresh standalone group per generation
+ *  ('new', recommended) or appended into an explicitly chosen group ('selected').
+ *  The old 'skill-name' auto-append mode was removed because it silently merged
+ *  unrelated generations into one bucket. */
+export type WordDeriveTargetGroupMode = 'new' | 'selected'
+
+/** A per-save decision taken at the moment the user clicks "保存词条". It can
+ *  override the persisted default {@link WordDeriveTargetGroupMode}:
+ *  - 'new'       每次新建独立分组（推荐，默认）
+ *  - 'selected'  追加到用户显式选择的固定分组 */
+export type WordDeriveSaveStrategy = 'new' | 'selected'
 
 export interface WordDeriveActionSettings {
   targetGroupMode: WordDeriveTargetGroupMode
@@ -244,10 +355,38 @@ export interface WordDeriveActionSettings {
 
 export type SuperDeriveActionSettings = WordDeriveActionSettings
 
+/** Per-skill settings for 超级衍生. The runner reads these before the skill's
+ *  own defaults and before any legacy global word-derive fallback. */
+export interface SuperDeriveSkillSettings {
+  wordEntries: WordEntryConfig
+  autoSave: boolean
+  applyMode: 'replace' | 'append'
+  targetGroupMode: WordDeriveTargetGroupMode
+  targetGroupId: string | null
+}
+
+/** Per-skill settings for 赌狗模式. */
+export interface WildDeriveSkillSettings {
+  wordEntries: WordEntryConfig
+  autoSave: boolean
+  applyMode: 'replace' | 'append'
+  targetGroupMode: WordDeriveTargetGroupMode
+  targetGroupId: string | null
+}
+
+/** Per-skill settings keyed by built-in skill id. Only the two variable skills
+ *  carry settings; the other two default skills have no run-time parameters. */
+export interface BuiltInSkillSettings {
+  'super-derive': SuperDeriveSkillSettings
+  'wild-derive': WildDeriveSkillSettings
+}
+
 export interface AssistantActionResult {
   actionId: AssistantActionId
   title: string
   content: string
+  /** V2 unified output: exactly one prompt. Variables (if any) appear as {{name}}. */
+  prompt: string
   candidates?: string[]
   sections?: AssistantResultSection[]
   wordEntries?: AssistantWordEntryGroup[]

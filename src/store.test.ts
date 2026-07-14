@@ -197,6 +197,33 @@ describe('word library group deletion', () => {
   })
 })
 
+describe('word library entry names', () => {
+  it('adds a sequence number when creating duplicate names', () => {
+    useStore.setState({ wordLibraryEntries: [] })
+
+    const first = useStore.getState().createWordLibraryEntry('default', '主体')
+    const second = useStore.getState().createWordLibraryEntry('default', '主体')
+    const third = useStore.getState().createWordLibraryEntry('default', '主体')
+
+    expect(first.key).toBe('主体')
+    expect(second.key).toBe('主体 (2)')
+    expect(third.key).toBe('主体 (3)')
+  })
+
+  it('adds a sequence number when renaming to an existing name', () => {
+    useStore.setState({ wordLibraryEntries: [] })
+    useStore.getState().createWordLibraryEntry('default', '背景')
+    const renamed = useStore.getState().createWordLibraryEntry('default', '待修改')
+
+    useStore.getState().updateWordLibraryEntry(renamed.id, { key: '背景', label: '背景' })
+
+    expect(useStore.getState().wordLibraryEntries.find((entry) => entry.id === renamed.id)).toMatchObject({
+      key: '背景 (2)',
+      label: '背景 (2)',
+    })
+  })
+})
+
 describe('error toast messages', () => {
   it('drops long error detail after the failure title', () => {
     expect(getErrorToastMessage('Agent 请求失败：接口拒绝了很长的提示词内容')).toBe('Agent 请求失败')

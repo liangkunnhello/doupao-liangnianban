@@ -1634,6 +1634,25 @@ function normalizeWordLibraryEntries(value: unknown, groups: WordLibraryGroup[])
     .filter((entry): entry is WordLibraryEntry => entry != null)
 }
 
+export function getUniqueWordLibraryEntryKey(
+  entries: Array<Pick<WordLibraryEntry, 'id' | 'key' | 'deletedAt'>>,
+  requestedKey: string,
+  excludeId?: string,
+): string {
+  const usedKeys = new Set(
+    entries
+      .filter((entry) => entry.deletedAt == null && entry.id !== excludeId)
+      .map((entry) => entry.key),
+  )
+  if (!requestedKey || !usedKeys.has(requestedKey)) return requestedKey
+
+  const suffixMatch = requestedKey.match(/^(.*?) \((\d+)\)$/)
+  const baseKey = suffixMatch?.[1] || requestedKey
+  let sequence = suffixMatch ? Number(suffixMatch[2]) + 1 : 2
+  while (usedKeys.has(`${baseKey} (${sequence})`)) sequence += 1
+  return `${baseKey} (${sequence})`
+}
+
 function mergeWordLibraryGroups(stored: WordLibraryGroup[], legacy: WordLibraryGroup[]): WordLibraryGroup[] {
   const merged = new Map<string, WordLibraryGroup>()
   for (const group of legacy) merged.set(group.id, group)
@@ -2786,10 +2805,11 @@ export const useStore = create<AppState>()(
       createWordLibraryEntry: (groupId, key) => {
         const id = Math.random().toString(36).slice(2, 9)
         const now = Date.now()
+        const uniqueKey = getUniqueWordLibraryEntryKey(get().wordLibraryEntries, key ?? '')
         const entry: WordLibraryEntry = {
           id,
           groupId,
-          key: key ?? '',
+          key: uniqueKey,
           label: '',
           entries: [],
           draw_count: 1,
@@ -2806,7 +2826,15 @@ export const useStore = create<AppState>()(
         return entry
       },
       updateWordLibraryEntry: (id, patch) =>
-        set((s) => ({ wordLibraryEntries: s.wordLibraryEntries.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: Date.now() } : e)) })),
+        set((s) => {
+          const uniqueKey = typeof patch.key === 'string'
+            ? getUniqueWordLibraryEntryKey(s.wordLibraryEntries, patch.key, id)
+            : undefined
+          const normalizedPatch = uniqueKey === undefined
+            ? patch
+            : { ...patch, key: uniqueKey, ...(patch.label === patch.key ? { label: uniqueKey } : {}) }
+          return { wordLibraryEntries: s.wordLibraryEntries.map((e) => (e.id === id ? { ...e, ...normalizedPatch, updatedAt: Date.now() } : e)) }
+        }),
       deleteWordLibraryEntry: (id) =>
         set((s) => ({ wordLibraryEntries: s.wordLibraryEntries.map((e) => (e.id === id ? { ...e, deletedAt: Date.now() } : e)) })),
       moveWordLibraryEntry: (entryId, targetGroupId) =>

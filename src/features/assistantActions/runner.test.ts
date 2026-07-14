@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiProfile, AppSettings, TaskParams } from '../../types'
 import { callAgentResponsesApi } from '../../lib/agentApi'
-import { DEFAULT_WORD_DERIVE_SETTINGS } from './matcher'
 import { runAssistantAction } from './runner'
-import { buildSkillInstruction } from './runner'
-import type { AssistantAction, AssistantInputContext } from './types'
+import { getDefaultBuiltInSkillSettings, normalizeAssistantActionPreferences } from './matcher'
+import type { AssistantCustomSkill, AssistantInputContext } from './types'
 
 vi.mock('../../lib/agentApi', () => ({
   callAgentResponsesApi: vi.fn(),
@@ -27,494 +26,299 @@ function context(patch: Partial<AssistantInputContext> = {}): AssistantInputCont
   }
 }
 
-describe('assistant action runner', () => {
+/** Helper that captures the model input JSON string for an action. */
+function lastInputText(): string {
+  const input = mockedCallAgentResponsesApi.mock.calls[0]?.[0].input as Array<{ content: Array<{ text: string }> }>
+  return input[0].content[0].text
+}
+
+function preferencesWithWordEntryCount(skillId: 'super-derive' | 'wild-derive', count = 1) {
+  const builtInSkillSettings = getDefaultBuiltInSkillSettings()
+  builtInSkillSettings[skillId] = {
+    ...builtInSkillSettings[skillId],
+    wordEntries: { ...builtInSkillSettings[skillId].wordEntries, count },
+  }
+  return normalizeAssistantActionPreferences({ builtInSkillSettings })
+}
+
+describe('assistant runner', () => {
   beforeEach(() => {
     mockedCallAgentResponsesApi.mockReset()
   })
 
-  it('adds the information-flow compliance guardrail to every skill request', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({ finalPrompt: '客观展示产品设计与使用场景', prompts: [] }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
+  it('injects the shared visual-semantic base into every request', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: '客观展示产品' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
-
-    const request = mockedCallAgentResponsesApi.mock.calls[0]?.[0]
-    expect(JSON.stringify(request?.input)).toContain('信息流广告合规负面约束')
-    expect(JSON.stringify(request?.input)).toContain('参考图片和用户原始文字是最高事实源')
-    expect(JSON.stringify(request?.input)).toContain('不能只在分析中提到参考图')
-    expect(JSON.stringify(request?.input)).toContain('严禁把 sourceAnchors 列表、原始文字全文、分析过程')
-    expect(JSON.stringify(request?.input)).toContain('不得承诺保本、保收益')
-    expect(JSON.stringify(request?.input)).toContain('不得生成烟草或电子烟推广')
+    expect(lastInputText()).toContain('共享 AI 视觉语义转换底座')
+    expect(lastInputText()).toContain('第一步 · 输入事实识别')
+    expect(lastInputText()).toContain('信息流广告合规')
   })
 
-  it('does not turn prompt optimization output into variable chips', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({
-        finalPrompt: '优化后的普通信息流广告提示词',
-        variablePrompt: '{{画幅比例}}，{{风格}}，突出产品卖点',
-        prompts: ['优化后的普通信息流广告提示词'],
-        wordEntries: [
-          { category: '画幅比例', entries: ['9:16'] },
-          { category: '风格', entries: ['写实'] },
-        ],
-      }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+  it('ships a JSON schema example that is itself valid JSON', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: 'x' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    const textLine = lastInputText()
+    const marker = 'JSON 结构'
+    const after = textLine.slice(textLine.indexOf(marker))
+    const braceStart = after.indexOf('{')
+    let depth = 0
+    let end = -1
+    for (let i = braceStart; i < after.length; i += 1) {
+      if (after[i] === '{') depth += 1
+      else if (after[i] === '}') {
+        depth -= 1
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    const schemaText = after.slice(braceStart, end + 1)
+    expect(() => JSON.parse(schemaText)).not.toThrow()
+  })
 
+  it('returns exactly one prompt and derives legacy fields from it', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: '一条完整提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
-
-    expect(result.variablePrompt).toBeUndefined()
+    expect(result.prompt).toBe('一条完整提示词')
+    expect(result.content).toBe(result.prompt)
+    expect(result.primaryText).toBe(result.prompt)
     expect(result.wordEntries).toBeUndefined()
-    expect(result.primaryText).toBe('优化后的普通信息流广告提示词')
-  })
-
-  it('uses the concise style-first concept extraction workflow for image derive', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({
-        finalPrompt: '思考过程：先分析配色和材质。最终提示词：生成一组功能图标；整体视觉风格和画面参数严格沿用参考图；每张图片只变化核心功能符号。',
-        variablePrompt: '{{产品主体}}，{{视觉钩子}}',
-        prompts: ['不应保留的候选提示词'],
-        sections: [{ title: '不应保留的分析', items: ['营销分析'] }],
-        wordEntries: [{ category: '产品主体', entries: ['钥匙图标'] }],
-      }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('image-derive', context({
-      images: [{ id: 'reference-1', dataUrl: 'data:image/png;base64,AAAA' }],
-      hasImage: true,
-      imageCount: 1,
-    }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.calls[0]?.[0].input)
-    expect(requestText).toContain('你是“概念抽取”提示词助手')
-    expect(requestText).toContain('只描述当前要生成的一张独立画面')
-    expect(requestText).toContain('不要把这些参数重新写死成颜色名')
-    expect(requestText).toContain('禁止把观察过程、思考过程')
-    expect(requestText).toContain('80–160 个汉字')
-    expect(requestText).not.toContain('信息流广告合规负面约束')
-    expect(requestText).not.toContain('跑量结构保留项')
-    expect(requestText).toContain('data:image/png;base64,AAAA')
-
-    expect(result.title).toBe('概念抽取')
-    expect(result.primaryText).toBe('生成一张独立画面，呈现功能图标；整体视觉风格和画面参数严格沿用参考图；当前画面只变化核心功能符号。')
-    expect(result.primaryText).not.toContain('思考过程')
-    expect(result.primaryText).not.toContain('一组')
-    expect(result.primaryText).not.toContain('每张')
-    expect(result.candidates).toEqual([])
     expect(result.variablePrompt).toBeUndefined()
-    expect(result.sections).toEqual([{ title: '不应保留的分析', items: ['营销分析'] }])
-    expect(result.wordEntries).toBeUndefined()
-    expect(result.testPlan).toBeUndefined()
   })
 
-  it('throws a generation failure instead of a template fallback when the model returns empty', async () => {
-    mockedCallAgentResponsesApi
-      .mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-      .mockResolvedValueOnce({ text: '' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    await expect(
-      runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), {
-        settings,
-        profile,
-        params,
-      }),
-    ).rejects.toThrow(/未返回可用内容/)
-
-    // One initial call plus exactly one automatic retry.
-    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
-  })
-
-  it('does not invent extra entries when extracting existing variables', async () => {
+  it('keeps only word entries whose category is referenced by a placeholder', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        wordEntries: [{ category: '产品主体', entries: ['钥匙图标'] }],
-      }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('word-extract', context(), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 20 } },
-    })
-
-    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(1)
-    expect(result.wordEntries).toEqual([{ category: '产品主体', entries: ['钥匙图标'] }])
-  })
-
-  it('keeps only variable placeholders that have matching word entries for variable-enabled skills', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({
-        finalPrompt: '图片衍生提示词',
-        variablePrompt: '{{产品主体}}，{{画幅比例}}，{{风格}}',
-        prompts: ['图片衍生提示词'],
+        prompt: '{{主视觉主体}}，突出卖点',
         wordEntries: [
-          { category: '产品主体', entries: ['产品特写'] },
-          { category: '无关分类', entries: ['不应保存'] },
+          { category: '主视觉主体', entries: ['产品特写'] },
+          { category: '无关分类', entries: ['丢弃'] },
         ],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    expect(result.variablePrompt).toBe('{{产品主体}}，画幅比例，风格')
-    expect(result.wordEntries).toEqual([{ category: '产品主体', entries: ['产品特写'] }])
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+    expect(result.prompt).toBe('{{主视觉主体}}，突出卖点')
   })
 
-  it('does not auto-fill variable word entries to a target count', async () => {
-    mockedCallAgentResponsesApi
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          finalPrompt: '图片衍生提示词',
-          variablePrompt: '{{产品主体}}',
-          prompts: ['图片衍生提示词'],
-          wordEntries: [{ category: '产品主体', entries: ['产品特写'] }],
-        }),
-      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 3 } },
-    })
-
-    // No second model call: entries are never auto-filled to a target count.
-    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(1)
-    expect(result.wordEntries).toEqual([
-      { category: '产品主体', entries: ['产品特写'] },
-    ])
-    expect(result.qualityState).toBe('complete')
-  })
-
-  it('does not assemble a variable main prompt locally when the model returns word entries but no variable prompt', async () => {
+  it('cleans only the illegal placeholder, keeping the mapped one', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        finalPrompt: '图片衍生提示词',
-        variablePrompt: '',
-        prompts: ['图片衍生提示词'],
-        wordEntries: [
-          { category: '产品主体', entries: ['产品特写'] },
-          { category: '目标人群', entries: ['年轻女性'] },
-        ],
+        prompt: '{{主视觉主体}}，搭配{{未知变量}}',
+        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    // P1: 宁可少生成，也不把分类裸拼成看起来“像完成”的变量皮肤。
-    expect(result.variablePrompt).toBeUndefined()
-    expect(result.qualityState).toBe('insufficient-data')
-    expect(result.qualityNote).toContain('没有返回可替换的变量主提示词')
-    expect(result.wordEntries).toEqual([
-      { category: '产品主体', entries: ['产品特写'] },
-      { category: '目标人群', entries: ['年轻女性'] },
-    ])
-  })
-
-  it('only patches missing placeholders when the model returns a variable prompt', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        finalPrompt: '图片衍生提示词',
-        variablePrompt: '{{产品主体}}，突出卖点',
-        prompts: ['图片衍生提示词'],
-        wordEntries: [
-          { category: '产品主体', entries: ['产品特写'] },
-          { category: '目标人群', entries: ['年轻女性'] },
-        ],
+        prompt: '{{主视觉主体}}，搭配未知变量',
+        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    // 模型已返回变量主提示词：只允许局部补缺少的占位符，不重建原文。
-    expect(result.variablePrompt).toBe('{{产品主体}}，突出卖点，{{目标人群}}')
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+    expect(result.prompt).toBe('{{主视觉主体}}，搭配未知变量')
+    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
     expect(result.qualityState).toBe('repaired')
   })
 
-  it('returns the input fact card so the result page can show grounding', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({ finalPrompt: '客观展示产品设计与使用场景', prompts: [] }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('prompt-optimize', context({ text: '一款玻璃水瓶；适合健身人群' }), { settings, profile, params })
-
-    expect(result.grounding?.observedFacts.length).toBe(2)
-    expect(result.grounding?.observedFacts[0]?.fact).toContain('玻璃水瓶')
-    expect(result.grounding?.observedFacts[1]?.fact).toContain('健身人群')
-  })
-
-  it('surfaces model-reported source anchors and assumptions separately', async () => {
+  it('caps word entries per category to the configured count and dedupes', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        finalPrompt: '生成画面',
-        sourceAnchors: ['图片中为哑光黑瓶身'],
-        assumptions: ['推断目标人群为男性健身用户'],
-        prompts: [],
+        prompt: '{{主视觉主体}}',
+        wordEntries: [{ category: '主视觉主体', entries: ['A', 'A', 'B', 'C', 'D', 'E'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    expect(result.sourceAnchors).toEqual(['图片中为哑光黑瓶身'])
-    expect(result.assumptions).toEqual(['推断目标人群为男性健身用户'])
-  })
-
-  it('backfills the structured visualIdentity into the input fact card', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({
-        finalPrompt: '生成画面',
-        visualIdentity: {
-          subject: '哑光黑瓶身',
-          composition: '居中、占画面 60%',
-          color: '黑、银灰',
-          scene: '健身工作室',
-          textLayout: '左下角小字标语',
-          style: '写实、硬光',
+    const prefs = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        'super-derive': {
+          wordEntries: { enabled: true, count: 3, categories: ['主视觉主体'], strategy: 'atomic' },
+          autoSave: true,
+          applyMode: 'replace',
+          targetGroupMode: 'new',
+          targetGroupId: null,
         },
-        prompts: [],
-      }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
-
-    expect(result.grounding?.visualIdentity.subject).toBe('哑光黑瓶身')
-    expect(result.grounding?.visualIdentity.style).toBe('写实、硬光')
-  })
-
-  it('keeps a custom skill contract conservative when the model is silent', async () => {
-    const { normalizeCustomSkills } = await import('./matcher')
-    const normalized = normalizeCustomSkills([
-      { id: 'c1', name: '安静技能', instruction: '只做素材拆解，不投放', trigger: 'always' },
-    ])
-
-    expect(normalized).toHaveLength(1)
-    const skill = normalized[0]!
-    expect(skill.requiresAdContext).toBe(false)
-    expect(skill.allowWordEntries).toBe(false)
-    expect(skill.allowExploreSellingPoint).toBe(false)
-    expect(skill.contract?.output.wordEntries).toBe(false)
-    expect(skill.contract?.requiresAdContext).toBe(false)
-  })
-
-  it('preserves a custom skill contract returned by the model and reflects the three toggles', async () => {
-    const { normalizeCustomSkills } = await import('./matcher')
-    const normalized = normalizeCustomSkills([
-      {
-        id: 'c2',
-        name: '跑量技能',
-        instruction: '做信息流跑量衍生',
-        trigger: 'image',
-        requiresAdContext: true,
-        allowWordEntries: true,
-        allowExploreSellingPoint: true,
-        contract: {
-          taskType: 'creative-expansion',
-          objective: '跑量衍生',
-          preserve: ['产品事实'],
-          editable: ['场景'],
-          forbidden: ['虚构功效'],
-          variationLevel: 'high',
-          requiresAdContext: true,
-          allowExploreSellingPoint: true,
-          primaryOutput: 'variablePrompt',
-          output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: true },
-        },
-      },
-    ])
-
-    const skill = normalized[0]!
-    expect(skill.requiresAdContext).toBe(true)
-    expect(skill.allowWordEntries).toBe(true)
-    expect(skill.allowExploreSellingPoint).toBe(true)
-    expect(skill.contract?.taskType).toBe('creative-expansion')
-    expect(skill.contract?.objective).toBe('跑量衍生')
-    expect(skill.contract?.allowExploreSellingPoint).toBe(true)
-  })
-
-  it('uses the effective locked selling point policy for custom ad skills that forbid exploration', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({ finalPrompt: '保留原始卖点生成素材', prompts: ['保留原始卖点生成素材'] }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const result = await runAssistantAction('custom-ad', context({ text: '产品卖点：轻便耐用' }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { sellingPointPolicy: 'explore' },
-      customSkill: {
-        id: 'custom-ad',
-        name: '投放改写',
-        icon: 'sparkles',
-        instruction: '只做广告投放改写，不得扩展新卖点',
-        steps: [],
-        trigger: 'text',
-        enabled: true,
-        priority: 65,
-        when: { text: 'required', image: 'optional' },
-        outputMode: 'show-candidates',
-        isCustom: true,
-        requiresAdContext: true,
-        allowWordEntries: false,
-        allowExploreSellingPoint: false,
-        contract: {
-          taskType: 'prompt-optimize',
-          objective: '投放改写',
-          preserve: ['原始卖点'],
-          editable: ['表达方式'],
-          forbidden: ['扩展新卖点'],
-          variationLevel: 'low',
-          requiresAdContext: true,
-          allowExploreSellingPoint: false,
-          primaryOutput: 'finalPrompt',
-          output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: false },
-        },
+        'wild-derive': getDefaultBuiltInSkillSettings()['wild-derive'],
       },
     })
-
-    expect(result.sellingPointPolicy).toBe('lock')
-    expect(result.testPlan).toContain('锁定原卖点')
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: prefs })
+    expect(result.wordEntries?.[0].entries).toEqual(['A', 'B', 'C'])
   })
 
-  it('keeps market breakdown as a single final prompt instead of an analysis report', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({
-        finalPrompt: '适合测试安全防护、权限控制、加密与设备保护类图标素材的一致性和差异化表达。',
-        prompts: ['不应保留的候选'],
-        sections: [{ title: '样本范围', items: ['不应保留的分析'] }],
-        wordEntries: [{ category: '产品主体', entries: ['盾牌图标'] }],
-      }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+  it('repairs malformed JSON once (without re-uploading images)', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '{ prompt: "缺少引号" ' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '修复后的提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    expect(result.prompt).toBe('修复后的提示词')
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
+  })
 
-    const result = await runAssistantAction('market-breakdown', context({ hasImage: true, imageCount: 9 }), {
-      settings,
-      profile,
-      params,
-      actionSettings: { wordDerive: { ...DEFAULT_WORD_DERIVE_SETTINGS, variableCount: 1 } },
-    })
+  it('falls back to a single prompt when JSON cannot be repaired', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '完全不是 JSON 的一段描述文字' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: '仍然不是 JSON' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    expect(result.prompt).toBe('仍然不是 JSON')
+    expect(result.qualityState).toBe('repaired')
+  })
 
-    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.calls[0]?.[0].input)
-    expect(requestText).toContain('只输出一个自然段')
-    expect(result.primaryText).toBe('适合测试安全防护、权限控制、加密与设备保护类图标素材的一致性和差异化表达。')
-    expect(result.candidates).toEqual([])
-    expect(result.sections).toEqual([{ title: '样本范围', items: ['不应保留的分析'] }])
+  it('keeps only the first item when the model returns multiple numbered directions', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '完全不是 JSON 的多方向文字' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: '1. 金色宝箱打开，金币飞向镜头\n2. 蓝色数据阶梯，冷静专业风' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    expect(result.prompt).toBe('金色宝箱打开，金币飞向镜头')
+    expect(result.qualityNote).toContain('保留第一条')
+  })
+
+  it('keeps only the first inline numbered direction when fallback text contains multiple prompts', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '不是 JSON' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: '1. 金色宝箱打开，金币飞向镜头 2. 蓝色数据阶梯，冷静专业风' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    expect(result.prompt).toBe('金色宝箱打开，金币飞向镜头')
+  })
+
+  it('extracts a prompt from a Markdown code fence', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '不是 JSON' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: '```json\n{"prompt":"来自代码块的提示词"}\n```' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
+    expect(result.prompt).toBe('来自代码块的提示词')
+  })
+
+  it('triggers one repair when super-derive returns no word entries', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '一条没有词条的提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompt: '{{主视觉主体}}，突出卖点',
+          wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+        }),
+      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
+    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+  })
+
+  it('triggers one repair when wild-derive has no {{创意方向}} placeholder', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompt: '一条没有占位符的提示词',
+          wordEntries: [{ category: '创意方向', entries: ['金色宝箱爆发式开启'] }],
+        }),
+      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prompt: '{{创意方向}}，高能促销',
+          wordEntries: [{ category: '创意方向', entries: ['金色宝箱爆发式开启'] }],
+        }),
+      } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('wild-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('wild-derive') })
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
+    expect(result.prompt).toBe('{{创意方向}}，高能促销')
+  })
+
+  it('triggers one repair when wild-derive has a placeholder but no usable direction entries', async () => {
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '{{创意方向}}' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '{{创意方向}}', wordEntries: [{ category: '创意方向', entries: ['金色宝箱爆发式开启'] }] }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('wild-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('wild-derive') })
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
+    expect(result.wordEntries?.[0].entries).toEqual(['金色宝箱爆发式开启'])
+  })
+
+  it('uses at most one repair request across the whole run', async () => {
+    // First response is malformed JSON AND a variable skill with no mapping;
+    // the single repair returns valid JSON but still no word entries -> degrade.
+    mockedCallAgentResponsesApi
+      .mockResolvedValueOnce({ text: '{ prompt: "缺少引号且缺词条" ' } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+      .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '修复后仍然无词条' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+    expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
     expect(result.wordEntries).toBeUndefined()
-    expect(result.variablePrompt).toBeUndefined()
+    expect(result.qualityState).toBe('repaired')
+  })
+
+  it('keeps placeholder mapping intact after compliance cleaning', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        prompt: '{{主视觉主体}}，客观展示产品卖点',
+        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+    expect(result.prompt).toBe('{{主视觉主体}}，客观展示产品卖点')
+    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+  })
+
+  it('image-describe never receives an instruction to add non-existent ad elements', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: '忠实描述的提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    await runAssistantAction('image-describe', context({ hasImage: true, imageCount: 1 }), { settings, profile, params })
+    const input = lastInputText()
+    expect(input).toContain('不得添加图片中不存在的主体、装饰、卖点、人物、CTA 或商业符号')
+    expect(input).not.toContain('商业展示方式')
+  })
+
+  it('wild-derive uses direction-pack and only keeps the 创意方向 category', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        prompt: '{{创意方向}}，高能促销',
+        wordEntries: [
+          { category: '创意方向', entries: ['金色宝箱爆发式开启，金币飞向镜头'] },
+          { category: '错误分类', entries: ['丢弃'] },
+        ],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('wild-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('wild-derive') })
+    expect(result.wordEntries?.map((group) => group.category)).toEqual(['创意方向'])
+  })
+
+  it('custom skills inherit the shared base and emit a single prompt', async () => {
+    const custom: AssistantCustomSkill = {
+      id: 'custom-1',
+      name: '自定义',
+      icon: 'sparkles',
+      priority: 65,
+      enabled: true,
+      source: 'custom',
+      isCustom: true,
+      instruction: '把输入变成可爱风格提示词',
+      inputMode: 'text',
+      intensity: 'controlled',
+      when: { text: 'optional', image: 'optional' },
+      outputMode: 'replace-input',
+      preserveRules: ['原始意图'],
+      editableRules: ['风格'],
+      forbiddenRules: ['虚构事实'],
+      wordEntries: { enabled: false, count: 0, categories: [], strategy: 'atomic' },
+    }
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: '可爱风格的提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+    const result = await runAssistantAction('custom-1', context(), { settings, profile, params, skill: custom })
+    expect(result.prompt).toBe('可爱风格的提示词')
+    expect(lastInputText()).toContain('共享 AI 视觉语义转换底座')
+    expect(lastInputText()).toContain('把输入变成可爱风格提示词')
+  })
+
+  it('rejects an action when its required input is missing before calling the API', async () => {
+    await expect(runAssistantAction('image-describe', context(), { settings, profile, params })).rejects.toThrow('当前输入不满足该技能要求')
+    expect(mockedCallAgentResponsesApi).not.toHaveBeenCalled()
   })
 })
 
-describe('resolved skill steps drive execution', () => {
-  beforeEach(() => {
-    mockedCallAgentResponsesApi.mockReset()
+describe('default built-in skill settings', () => {
+  it('super-derive defaults to 8 categories / 8 count', () => {
+    const builtInSettings = getDefaultBuiltInSkillSettings()
+    expect(builtInSettings['super-derive'].wordEntries.count).toBe(8)
+    expect(builtInSettings['super-derive'].wordEntries.categories.length).toBe(8)
+    expect(builtInSettings['super-derive'].autoSave).toBe(true)
   })
 
-  it('feeds the edited skill steps into the model instruction', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({ finalPrompt: '生成画面', prompts: [] }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const skill = {
-      id: 'market-breakdown',
-      name: '大盘拆解',
-      icon: 'image',
-      priority: 60,
-      when: { image: 'optional', text: 'optional' },
-      outputMode: 'show-candidates',
-      steps: [
-        { id: 's1', title: '我的自定义步骤', role: 'observe', outputTo: 'sections', instruction: '只看参考图数量并输出编辑后的独特指令', enabled: true },
-      ],
-    } as AssistantAction
-
-    await runAssistantAction('market-breakdown', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, skill })
-
-    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.lastCall?.[0].input)
-    expect(requestText).toContain('你正在执行技能：大盘拆解')
-    expect(requestText).toContain('只看参考图数量并输出编辑后的独特指令')
-  })
-
-  it('runs image-derive through its step flow (not the concept fallback) when the resolved skill has steps', async () => {
-    mockedCallAgentResponsesApi.mockResolvedValueOnce({
-      text: JSON.stringify({ finalPrompt: '生成一张独立画面', prompts: [] }),
-    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
-
-    const skill = {
-      id: 'image-derive',
-      name: '概念抽取',
-      icon: 'image',
-      priority: 120,
-      when: { image: 'required', text: 'optional' },
-      outputMode: 'show-candidates',
-      steps: [
-        { id: 's1', title: '自定义观察', role: 'observe', outputTo: 'sections', instruction: '我编辑后的观察步骤', enabled: true },
-      ],
-    } as AssistantAction
-
-    await runAssistantAction('image-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, skill })
-
-    const requestText = JSON.stringify(mockedCallAgentResponsesApi.mock.lastCall?.[0].input)
-    expect(requestText).toContain('我编辑后的观察步骤')
-    expect(requestText).not.toContain('你是“概念抽取”提示词助手')
-  })
-})
-
-describe('buildSkillInstruction (step-based assembly)', () => {
-  it('assembles enabled steps in order and labels their output position', () => {
-    const instruction = buildSkillInstruction('大盘拆解', [
-      { id: 's1', title: '第一步：观察样本', role: 'observe', outputTo: 'sections', instruction: '统计参考图数量', enabled: true },
-      { id: 's2', title: '第四步：输出最终提示词', role: 'finalPrompt', outputTo: 'finalPrompt', instruction: '只输出一个自然段', enabled: true },
-    ])
-
-    expect(instruction).toContain('你正在执行技能：大盘拆解')
-    expect(instruction).toContain('第一步：观察样本')
-    expect(instruction).toContain('sections（仅供“查看更多”）')
-    expect(instruction).toContain('第四步：输出最终提示词')
-    expect(instruction).toContain('finalPrompt（主结果）')
-  })
-
-  it('drops disabled steps so they do not participate in execution', () => {
-    const instruction = buildSkillInstruction('测试', [
-      { id: 's1', title: '第一步', role: 'observe', outputTo: 'sections', instruction: '观察', enabled: false },
-      { id: 's2', title: '第二步', role: 'finalPrompt', outputTo: 'finalPrompt', instruction: '生成提示词', enabled: true },
-    ])
-
-    expect(instruction).not.toContain('第一步')
-    expect(instruction).toContain('第二步')
-  })
-
-  it('returns empty when no enabled step has an instruction', () => {
-    expect(buildSkillInstruction('空', [])).toBe('')
-    expect(buildSkillInstruction('空', [
-      { id: 's1', title: 'x', role: 'observe', outputTo: 'sections', instruction: '', enabled: true },
-    ])).toBe('')
+  it('wild-derive defaults to 12 direction entries, direction-pack strategy', () => {
+    const builtInSettings = getDefaultBuiltInSkillSettings()
+    expect(builtInSettings['wild-derive'].wordEntries.count).toBe(12)
+    expect(builtInSettings['wild-derive'].wordEntries.categories).toEqual(['创意方向'])
+    expect(builtInSettings['wild-derive'].wordEntries.strategy).toBe('direction-pack')
   })
 })

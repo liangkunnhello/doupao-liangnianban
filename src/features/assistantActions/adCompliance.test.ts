@@ -15,6 +15,7 @@ describe('information flow ad compliance', () => {
       actionId: 'prompt-optimize',
       title: '提示词优化',
       content: '全球第一，零风险',
+      prompt: '全球第一，零风险',
       primaryText: '全球第一产品',
       candidates: ['包治百病', '保证就业'],
       variablePrompt: '{{卖点}}，保本保收益',

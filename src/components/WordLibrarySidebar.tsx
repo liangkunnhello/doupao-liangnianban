@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import { useStore } from '../store'
+import { getUniqueWordLibraryEntryKey, useStore } from '../store'
 import { CloseIcon, FavoriteIcon, DragHandleIcon, HistoryIcon, ChevronDownIcon } from './icons'
 import { Checkbox } from './Checkbox'
 import { createVariableMention, parseVariableMention, resolveVariableMentionEntry, VAR_MENTION_RE, VAR_START, VAR_END } from '../lib/promptImageMentions'
@@ -174,7 +174,6 @@ export default function WordLibrarySidebar() {
   const derivedCloseTimerRef = useRef<number | null>(null)
 
   const lastPrompt = useRef('')
-  const autoCreated = useRef<Set<string>>(new Set())
   const lastAdded = useRef<string | null>(null)
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
@@ -529,15 +528,17 @@ export default function WordLibrarySidebar() {
     if (!activeId) return
     const lines = parseEntryLines(editText)
     const oldEntry = entries.find((e) => e.id === activeId)
+    const uniqueKey = getUniqueWordLibraryEntryKey(entries, editKey.trim(), activeId)
     updateEntry(activeId, {
-      key: editKey, groupId: editGroupId,
+      key: uniqueKey, groupId: editGroupId,
       draw_count: Math.max(1, Math.min(999, editDraw)), entries: lines,
     })
     // 如果改名了，同步更新 prompt 中的变量标记
-    if (oldEntry && oldEntry.key !== editKey) {
+    if (oldEntry && oldEntry.key !== uniqueKey) {
       const currentPrompt = useStore.getState().prompt
-      setPrompt(replaceVariableNameInPrompt(currentPrompt, oldEntry.key, editKey))
+      setPrompt(replaceVariableNameInPrompt(currentPrompt, oldEntry.key, uniqueKey))
     }
+    setEditKey(uniqueKey)
     toast('词条已保存', 'success')
   }, [activeId, editKey, editGroupId, editDraw, editText, entries, updateEntry, setPrompt, toast])
 
@@ -817,8 +818,7 @@ export default function WordLibrarySidebar() {
         names.push({ name: mention.varName, entryId: mention.entryId })
       }
       for (const { name, entryId } of names) {
-        if (entryId || state.wordLibraryEntries.some((e) => e.key === name) || autoCreated.current.has(name)) continue
-        autoCreated.current.add(name)
+        if (entryId || state.wordLibraryEntries.some((e) => e.key === name)) continue
         const ne = state.createWordLibraryEntry('default', name)
         state.updateWordLibraryEntry(ne.id, { entries: [name] })
         lastAdded.current = name

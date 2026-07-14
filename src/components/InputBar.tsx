@@ -4,7 +4,7 @@ import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteC
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers, VAR_START, VAR_END } from '../lib/promptImageMentions'
+import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -21,7 +21,7 @@ import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon, FolderOpenIcon } from './icons'
 import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
-import { resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
+import { buildWordGroupName, resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
 import type { AssistantActionPreferences, AssistantWordEntryGroup } from '../features/assistantActions/types'
 import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
 
@@ -873,6 +873,7 @@ export default function InputBar() {
     if (!sel || sel.rangeCount === 0) return
     const range = sel.getRangeAt(0)
     if (range.collapsed) return
+    if (!el.contains(range.commonAncestorContainer)) return
 
     // 检查选中区域是否在 mention-tag 或 wildcard-var 内
     const startTag = range.startContainer.parentElement?.closest?.('.mention-tag, .wildcard-var')
@@ -882,8 +883,20 @@ export default function InputBar() {
     const selectedText = range.toString().trim()
     if (!selectedText) return
 
-    // 用变量标记包裹选中文本
-    const varText = VAR_START + selectedText + VAR_END
+    // 划词时直接创建或复用词条，并写入绑定 entryId 的变量标记。
+    // 不再依赖词条侧栏的异步订阅补建，避免未挂载或时序问题导致标记被清理。
+    let entryId = wordLibraryEntries.find((entry) => entry.deletedAt == null && entry.key === selectedText)?.id
+    if (!entryId) {
+      const groupId = wordLibraryGroups.find((group) => group.id === 'default' && group.archivedAt == null)?.id
+        ?? wordLibraryGroups.find((group) => group.archivedAt == null)?.id
+        ?? createWordLibraryGroup('默认分组').id
+      const entry = createWordLibraryEntry(groupId, selectedText)
+      updateWordLibraryEntry(entry.id, { label: selectedText, entries: [selectedText] })
+      entryId = entry.id
+      showToast('已创建词条', 'success')
+    }
+
+    const varText = createVariableMention(selectedText, entryId)
     range.deleteContents()
     range.insertNode(document.createTextNode(varText))
     sel.removeAllRanges()
@@ -891,7 +904,8 @@ export default function InputBar() {
     // 同步到 store
     const plainText = getContentEditablePlainText(el)
     useStore.getState().setPrompt(plainText)
-  }, [])
+    setWordLibraryEditEntryId(entryId)
+  }, [createWordLibraryEntry, createWordLibraryGroup, setWordLibraryEditEntryId, showToast, updateWordLibraryEntry, wordLibraryEntries, wordLibraryGroups])
   const handlePromptVariableContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const el = textareaRef.current
     if (!el) return
@@ -1118,12 +1132,13 @@ export default function InputBar() {
   }, [setSettings, settings])
 
   const getAssistantWordGroupId = useCallback((options: AssistantWordEntryApplyOptions) => {
+    const suggestedName = buildWordGroupName(options.actionName, prompt, inputImages.length)
     return resolveAssistantWordGroupId(
-      options,
+      { ...options, suggestedName },
       useStore.getState().wordLibraryGroups,
       (name) => createWordLibraryGroup(name).id,
     )
-  }, [createWordLibraryGroup])
+  }, [createWordLibraryGroup, inputImages, prompt])
 
   const saveAssistantWordEntryGroups = useCallback((groups: AssistantWordEntryGroup[], options: AssistantWordEntryApplyOptions) => {
     const targetGroupId = getAssistantWordGroupId(options)
@@ -1136,24 +1151,13 @@ export default function InputBar() {
         .filter((entry) => entry !== key && entry !== `{{${key}}}`)
       if (!key || entries.length === 0) return
 
-      const existing = useStore.getState().wordLibraryEntries.find((entry) => entry.groupId === targetGroupId && entry.key === key && entry.deletedAt == null)
-      if (existing) {
-        const merged = [...new Set([...existing.entries, ...entries])]
-        updateWordLibraryEntry(existing.id, {
-          entries: merged,
-          label: existing.label || key,
-          sourceSkillName: options.actionName,
-        })
-        entryIdsByKey[key] = existing.id
-      } else {
-        const created = createWordLibraryEntry(targetGroupId, key)
-        updateWordLibraryEntry(created.id, {
-          label: key,
-          entries,
-          sourceSkillName: options.actionName,
-        })
-        entryIdsByKey[key] = created.id
-      }
+      const created = createWordLibraryEntry(targetGroupId, key)
+      updateWordLibraryEntry(created.id, {
+        label: created.key,
+        entries,
+        sourceSkillName: options.actionName,
+      })
+      entryIdsByKey[key] = created.id
       savedCount += entries.length
     })
     const entryIds = Object.values(entryIdsByKey)
@@ -2928,6 +2932,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={varConvertHover} text="转换为变量" />
                   <button
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={handleConvertToVariable}
                     className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow"
                     aria-label="转换为变量"
@@ -3084,6 +3089,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={varConvertHover} text="转换为变量" />
                   <button
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={handleConvertToVariable}
                     className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300"
                     aria-label="转换为变量"

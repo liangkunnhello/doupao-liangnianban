@@ -1,20 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { AssistantInputContext } from './types'
-import { BUILT_IN_SKILL_STEPS } from './builtInActions'
+import { BUILT_IN_ASSISTANT_ACTION_IDS } from './builtInActions'
 import {
-  applySkillOverride,
-  buildCustomSkillContract,
-  duplicateSkillAsCustom,
-  getMoreAssistantActions,
-  getOrderedManageActions,
+  getDefaultBuiltInSkillSettings,
+  buildCustomSkillFromDraft,
   getRecommendedAssistantActions,
   getResolvedBuiltInActions,
-  hasSkillOverride,
+  isAssistantActionRunnable,
+  migrateAssistantActionsToV2,
   normalizeAssistantActionPreferences,
-  normalizeEditorOutputRule,
-  normalizeSkillSteps,
-  restoreSkillDefault,
-  upsertSkillOverride,
+  normalizeCustomSkills,
+  resolveEffectiveVisualSkill,
+  resolveWordConfig,
 } from './matcher'
 
 function context(patch: Partial<AssistantInputContext> = {}): AssistantInputContext {
@@ -28,233 +25,177 @@ function context(patch: Partial<AssistantInputContext> = {}): AssistantInputCont
   }
 }
 
-describe('assistant action matcher', () => {
-  it('uses a skill-named word group by default and migrates the previous numbered default', () => {
-    expect(normalizeAssistantActionPreferences(undefined).actionSettings.wordDerive.targetGroupMode).toBe('skill-name')
-    expect(normalizeAssistantActionPreferences({
-      actionSettings: { wordDerive: { targetGroupMode: 'auto-numbered' } as never } as never,
-    }).actionSettings.wordDerive.targetGroupMode).toBe('skill-name')
+describe('default skill set', () => {
+  it('strictly contains the four default skills in fixed order', () => {
+    expect(BUILT_IN_ASSISTANT_ACTION_IDS).toEqual(['prompt-optimize', 'image-describe', 'super-derive', 'wild-derive'])
   })
 
-  it('keeps core actions visible even when older preferences hid them', () => {
-    const preferences = normalizeAssistantActionPreferences({
-      hiddenActionIds: ['image-derive', 'prompt-optimize', 'batch-variants'],
-    })
-
-    expect(preferences.hiddenActionIds).toEqual(['batch-variants'])
-  })
-
-  it('prioritizes image derive when images are present', () => {
-    const actions = getRecommendedAssistantActions(context({ hasImage: true, imageCount: 1 }), undefined, 3)
-
-    expect(actions.map((action) => action.id)).toContain('image-derive')
-    expect(actions[0]?.id).toBe('image-derive')
-    expect(actions.some((action) => action.id === 'prompt-optimize')).toBe(false)
-  })
-
-  it('prioritizes prompt optimize when text is present', () => {
-    const actions = getRecommendedAssistantActions(context({ text: '产品卖点', hasText: true }), undefined, 3)
-
-    expect(actions[0]?.id).toBe('prompt-optimize')
-    expect(actions.some((action) => action.id === 'image-derive')).toBe(false)
-  })
-
-  it('shows both core actions when image and text are present', () => {
-    const actions = getRecommendedAssistantActions(
-      context({ text: '产品卖点', hasText: true, hasImage: true, imageCount: 1 }),
-      undefined,
-      5,
-    )
-
-    expect(actions.map((action) => action.id).slice(0, 2)).toEqual(['image-derive', 'prompt-optimize'])
-  })
-
-  it('does not expose internal channel rewrite in recommended or overflow actions', () => {
-    const input = context({ text: '通用素材提示词', hasText: true })
-    const preferences = normalizeAssistantActionPreferences(undefined)
-    const allVisibleIds = [
-      ...getRecommendedAssistantActions(input, preferences).map((action) => action.id),
-      ...getMoreAssistantActions(input, preferences).map((action) => action.id),
-    ]
-
-    expect(allVisibleIds).not.toContain('channel-rewrite')
-  })
-
-  it('rebuilds custom skill contract fields from explicit toggles', () => {
-    const contract = buildCustomSkillContract({
-      taskType: 'creative-expansion',
-      objective: '跑量衍生',
-      preserve: ['产品事实'],
-      editable: ['场景'],
-      forbidden: ['虚构功效'],
-      variationLevel: 'high',
-      requiresAdContext: false,
-      allowExploreSellingPoint: false,
-      primaryOutput: 'variablePrompt',
-      output: { finalPrompt: true, candidates: false, analysis: true, wordEntries: false },
-    }, '做跑量衍生', true, true, true)
-
-    expect(contract.requiresAdContext).toBe(true)
-    expect(contract.output.wordEntries).toBe(true)
-    expect(contract.allowExploreSellingPoint).toBe(true)
-    expect(contract.objective).toBe('跑量衍生')
+  it('recommends exactly the four default skills on the bar', () => {
+    const actions = getRecommendedAssistantActions(context({ hasText: true }))
+    expect(actions.map((action) => action.id)).toEqual(['prompt-optimize', 'image-describe', 'super-derive', 'wild-derive'])
   })
 })
 
-describe('skill override layer (builtin + override = actual)', () => {
-  it('resolves built-in skills with their default step flow', () => {
-    const preferences = normalizeAssistantActionPreferences(undefined)
-    const resolved = getResolvedBuiltInActions(preferences)
-    const breakdown = resolved.find((action) => action.id === 'market-breakdown')
+describe('input-mode runnability', () => {
+  const prefs = normalizeAssistantActionPreferences(undefined)
+  const find = (id: string) => getResolvedBuiltInActions(prefs).find((action) => action.id === id)!
 
-    expect(breakdown?.steps?.length).toBeGreaterThan(0)
-    expect(breakdown?.steps?.every((step) => step.enabled)).toBe(true)
-    expect(hasSkillOverride(preferences, 'market-breakdown')).toBe(false)
+  it('disables all skills when there is no input', () => {
+    const ctx = context()
+    for (const id of BUILT_IN_ASSISTANT_ACTION_IDS) {
+      expect(isAssistantActionRunnable(find(id), ctx)).toBe(false)
+    }
   })
 
-  it('applies a user override on top of the built-in definition', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const withOverride = upsertSkillOverride(base, {
-      skillId: 'market-breakdown',
-      name: '我的拆解',
-      steps: [{ id: 's1', title: '只看样本', role: 'observe', outputTo: 'sections', instruction: '只统计参考图数量', enabled: true }],
-    })
-
-    expect(hasSkillOverride(withOverride, 'market-breakdown')).toBe(true)
-
-    const resolved = getResolvedBuiltInActions(withOverride)
-    const breakdown = resolved.find((action) => action.id === 'market-breakdown')!
-
-    expect(breakdown.name).toBe('我的拆解')
-    expect(breakdown.steps).toHaveLength(1)
-    expect(breakdown.steps?.[0]?.instruction).toBe('只统计参考图数量')
+  it('text-only enables prompt-optimize / super-derive / wild-derive, not image-describe', () => {
+    const ctx = context({ text: '产品卖点', hasText: true })
+    expect(isAssistantActionRunnable(find('prompt-optimize'), ctx)).toBe(true)
+    expect(isAssistantActionRunnable(find('image-describe'), ctx)).toBe(false)
+    expect(isAssistantActionRunnable(find('super-derive'), ctx)).toBe(true)
+    expect(isAssistantActionRunnable(find('wild-derive'), ctx)).toBe(true)
   })
 
-  it('never re-enables candidates through an override', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const withOverride = upsertSkillOverride(base, {
-      skillId: 'market-breakdown',
-      contract: { primaryOutput: 'finalPrompt', output: { finalPrompt: true, analysis: true, wordEntries: true } as never },
-    })
-    const resolved = getResolvedBuiltInActions(withOverride).find((action) => action.id === 'market-breakdown')!
-
-    expect(resolved.contract?.output.candidates).toBe(false)
-    expect(resolved.contract?.output.wordEntries).toBe(true)
+  it('image-only enables image-describe / super-derive / wild-derive, not prompt-optimize', () => {
+    const ctx = context({ hasImage: true, imageCount: 1 })
+    expect(isAssistantActionRunnable(find('prompt-optimize'), ctx)).toBe(false)
+    expect(isAssistantActionRunnable(find('image-describe'), ctx)).toBe(true)
+    expect(isAssistantActionRunnable(find('super-derive'), ctx)).toBe(true)
+    expect(isAssistantActionRunnable(find('wild-derive'), ctx)).toBe(true)
   })
 
-  it('ignores legacy overrides that try to disable the required final prompt', () => {
-    const normalized = normalizeAssistantActionPreferences({
-      skillOverrides: [{
-        skillId: 'market-breakdown',
-        contract: { output: { finalPrompt: false, analysis: true, wordEntries: false } },
-      }],
-    })
-    const resolved = getResolvedBuiltInActions(normalized).find((action) => action.id === 'market-breakdown')!
-
-    expect(normalized.skillOverrides[0]?.contract?.output?.finalPrompt).toBeUndefined()
-    expect(resolved.contract?.output.finalPrompt).toBe(true)
-    expect(resolved.contract?.output.candidates).toBe(false)
+  it('text + image enables all four default skills', () => {
+    const ctx = context({ text: '产品卖点', hasText: true, hasImage: true, imageCount: 1 })
+    for (const id of BUILT_IN_ASSISTANT_ACTION_IDS) {
+      expect(isAssistantActionRunnable(find(id), ctx)).toBe(true)
+    }
   })
 
-  it('restores the shipped default by dropping the override', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const edited = upsertSkillOverride(base, { skillId: 'market-breakdown', name: '临时名称' })
-    expect(hasSkillOverride(edited, 'market-breakdown')).toBe(true)
-
-    const restored = restoreSkillDefault(edited, 'market-breakdown')
-    expect(hasSkillOverride(restored, 'market-breakdown')).toBe(false)
-    expect(getResolvedBuiltInActions(restored).find((action) => action.id === 'market-breakdown')?.name).toBe('大盘拆解')
-  })
-
-  it('keeps built-in definitions untouched when applying an override', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const edited = upsertSkillOverride(base, { skillId: 'market-breakdown', name: '改了' })
-    expect(getResolvedBuiltInActions(base).find((action) => action.id === 'market-breakdown')?.name).toBe('大盘拆解')
-    const source = getResolvedBuiltInActions(base).find((action) => action.id === 'market-breakdown')!
-    expect(applySkillOverride(source, undefined).name).toBe('大盘拆解')
-  })
-
-  it('duplicates a built-in skill into an editable custom skill', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const source = getResolvedBuiltInActions(base).find((action) => action.id === 'market-breakdown')!
-    const custom = duplicateSkillAsCustom(source)
-
-    expect(custom.isCustom).toBe(true)
-    expect(custom.source).toBe('custom')
-    expect(custom.steps.length).toBe(source.steps?.length ?? 0)
-    expect(custom.name).toContain('副本')
-  })
-})
-
-describe('management list uses resolved built-ins', () => {
-  it('shows the edited (overridden) name and enabled state instead of the shipped default', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const edited = upsertSkillOverride(base, { skillId: 'market-breakdown', name: '我的拆解', enabled: false })
-    const ordered = getOrderedManageActions(edited)
-    const breakdown = ordered.find((action) => action.id === 'market-breakdown')
-
-    expect(breakdown?.name).toBe('我的拆解')
-    expect(breakdown?.enabled).toBe(false)
-    // Default preferences still render the shipped default name.
-    expect(getOrderedManageActions(base).find((action) => action.id === 'market-breakdown')?.name).toBe('大盘拆解')
-  })
-})
-
-describe('normalizeEditorOutputRule (output rule mutual exclusion)', () => {
-  it('falls back to finalPrompt when variablePrompt has no word entries', () => {
-    expect(normalizeEditorOutputRule({ primaryOutput: 'variablePrompt', allowWordEntries: false })).toEqual({
-      primaryOutput: 'finalPrompt',
-      allowFinalPrompt: true,
-      allowWordEntries: false,
-      allowAnalysis: true,
-    })
-  })
-
-  it('keeps variablePrompt when word entries are enabled and never disables finalPrompt', () => {
-    expect(normalizeEditorOutputRule({ primaryOutput: 'variablePrompt', allowWordEntries: true, allowAnalysis: false })).toEqual({
-      primaryOutput: 'variablePrompt',
-      allowFinalPrompt: true,
-      allowWordEntries: true,
-      allowAnalysis: false,
-    })
-  })
-})
-
-describe('built-in image-derive step flow', () => {
-  it('ships an editable step flow that ends in a final prompt', () => {
-    const steps = BUILT_IN_SKILL_STEPS['image-derive']
-    expect(steps?.length).toBeGreaterThan(0)
-    expect(steps?.some((step) => step.outputTo === 'finalPrompt')).toBe(true)
-  })
-
-  it('exposes those default steps on the resolved built-in action so the editor can show them', () => {
-    const base = normalizeAssistantActionPreferences(undefined)
-    const imageDerive = getResolvedBuiltInActions(base).find((action) => action.id === 'image-derive')
-    expect(imageDerive?.steps?.length).toBeGreaterThan(0)
-  })
-})
-
-describe('normalizeSkillSteps', () => {
-  it('accepts both structured steps and legacy string hints', () => {
-    const structured = normalizeSkillSteps([
-      { id: 'a', title: '第一步', role: 'observe', outputTo: 'sections', instruction: '观察', enabled: true },
-      'legacy hint',
+  it('custom skills follow their own inputMode', () => {
+    const customs = normalizeCustomSkills([
+      { id: 'c-text', name: '文字技能', instruction: '只处理文字', trigger: 'text', inputMode: 'text' },
+      { id: 'c-img', name: '图片技能', instruction: '只处理图片', trigger: 'image', inputMode: 'image' },
     ])
-    expect(structured).toHaveLength(2)
-    expect(structured[0]?.role).toBe('observe')
-    expect(structured[1]?.role).toBe('finalPrompt')
-    expect(structured[1]?.outputTo).toBe('finalPrompt')
+    const ctx = context({ text: 'x', hasText: true })
+    expect(isAssistantActionRunnable(customs[0], ctx)).toBe(true)
+    expect(isAssistantActionRunnable(customs[1], ctx)).toBe(false)
+  })
+})
+
+describe('effective skill resolution', () => {
+  it('super-derive resolves to high intensity, atomic strategy, 8 categories', () => {
+    const prefs = normalizeAssistantActionPreferences(undefined)
+    const skill = getResolvedBuiltInActions(prefs).find((action) => action.id === 'super-derive')!
+    const effective = resolveEffectiveVisualSkill(skill, prefs)
+    expect(effective.intensity).toBe('high')
+    expect(effective.wordEntries?.strategy).toBe('atomic')
+    expect(effective.wordEntries?.categories.length).toBe(8)
+    expect(effective.wordEntries?.count).toBe(8)
   })
 
-  it('falls back to a final-prompt role for the last legacy step when word entries are allowed', () => {
-    const steps = normalizeSkillSteps(['观察样本', '写变量提示词'], { allowWordEntries: true })
-    expect(steps[steps.length - 1]?.role).toBe('variablePrompt')
-    expect(steps[steps.length - 1]?.outputTo).toBe('variablePrompt')
+  it('wild-derive resolves to maximum intensity, direction-pack, 创意方向', () => {
+    const prefs = normalizeAssistantActionPreferences(undefined)
+    const skill = getResolvedBuiltInActions(prefs).find((action) => action.id === 'wild-derive')!
+    const effective = resolveEffectiveVisualSkill(skill, prefs)
+    expect(effective.intensity).toBe('maximum')
+    expect(effective.wordEntries?.strategy).toBe('direction-pack')
+    expect(effective.wordEntries?.categories).toEqual(['创意方向'])
+    expect(effective.wordEntries?.count).toBe(12)
   })
 
-  it('drops invalid roles and outputs and limits length', () => {
-    const steps = normalizeSkillSteps([{ title: 'x', role: 'bogus' as never, outputTo: 'nowhere' as never, instruction: '做点什么' }])
-    expect(steps[0]?.role).toBe('observe')
-    expect(steps[0]?.outputTo).toBe('sections')
+  it('per-skill settings override the skill default word config', () => {
+    const prefs = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        'super-derive': {
+          wordEntries: { enabled: true, count: 4, categories: ['主视觉主体'], strategy: 'atomic' },
+          autoSave: true,
+          applyMode: 'replace',
+          targetGroupMode: 'new',
+          targetGroupId: null,
+        },
+        'wild-derive': getDefaultBuiltInSkillSettings()['wild-derive'],
+      },
+    })
+    const skill = getResolvedBuiltInActions(prefs).find((action) => action.id === 'super-derive')!
+    const word = resolveWordConfig(skill, prefs)
+    expect(word?.count).toBe(4)
+    expect(word?.categories).toEqual(['主视觉主体'])
+  })
+
+  it('locks wild-derive to its direction-pack contract and restores empty super categories', () => {
+    const prefs = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        'super-derive': {
+          wordEntries: { enabled: false, count: 4, categories: [], strategy: 'direction-pack' },
+          autoSave: true, applyMode: 'replace', targetGroupMode: 'new', targetGroupId: null,
+        },
+        'wild-derive': {
+          wordEntries: { enabled: false, count: 4, categories: ['任意分类'], strategy: 'atomic' },
+          autoSave: true, applyMode: 'replace', targetGroupMode: 'new', targetGroupId: null,
+        },
+      },
+    })
+    expect(prefs.builtInSkillSettings['super-derive'].wordEntries).toMatchObject({ enabled: true, strategy: 'atomic' })
+    expect(prefs.builtInSkillSettings['super-derive'].wordEntries.categories.length).toBeGreaterThan(0)
+    expect(prefs.builtInSkillSettings['wild-derive'].wordEntries).toMatchObject({ enabled: true, categories: ['创意方向'], strategy: 'direction-pack' })
+  })
+
+  it('keeps the existing custom skill identity and boundary rules on edit', () => {
+    const skill = buildCustomSkillFromDraft({
+      id: 'custom-existing', name: '旧技能', icon: 'sparkles', enabled: false, priority: 90,
+      contract: {
+        taskType: 'prompt-optimize', objective: '旧规则', preserve: ['保留主体'], editable: ['只改光线'], forbidden: ['不得改构图'], variationLevel: 'low', primaryOutput: 'finalPrompt',
+        output: { finalPrompt: true, candidates: false, analysis: false, wordEntries: false },
+      },
+    }, {
+      name: '新技能', icon: 'wand', instruction: '更新说明', inputMode: 'text', intensity: 'controlled',
+      wordEntries: { enabled: false, count: 8, categories: [], strategy: 'atomic' },
+    })
+    expect(skill.id).toBe('custom-existing')
+    expect(skill.enabled).toBe(false)
+    expect(skill.priority).toBe(90)
+    expect(skill.preserveRules).toEqual(['保留主体'])
+    expect(skill.forbiddenRules).toEqual(['不得改构图'])
+  })
+})
+
+describe('migration (pure, deterministic)', () => {
+  it('drops unedited removed built-ins but converts edited ones to hidden custom skills', () => {
+    const migrated = migrateAssistantActionsToV2({
+      schemaVersion: 1,
+      skillOverrides: [
+        { skillId: 'image-derive' },
+        { skillId: 'style-expand', name: '我的版式' },
+      ],
+    } as never)
+    expect(migrated.schemaVersion).toBe(2)
+    expect(migrated.skillOverrides.find((override) => override.skillId === 'image-derive')).toBeUndefined()
+    const hidden = migrated.customSkills.find((skill) => skill.id === 'custom-legacy-style-expand')
+    expect(hidden).toBeDefined()
+    expect(hidden?.enabled).toBe(false)
+  })
+
+  it('uses stable ids and is idempotent', () => {
+    const input = { schemaVersion: 1, skillOverrides: [{ skillId: 'style-expand', name: '我的版式' }] } as never
+    const once = migrateAssistantActionsToV2(input)
+    const twice = migrateAssistantActionsToV2(once as never)
+    expect(twice.customSkills.map((skill) => skill.id).sort()).toEqual(once.customSkills.map((skill) => skill.id).sort())
+  })
+
+  it('preserves existing custom skills and word library settings', () => {
+    const migrated = migrateAssistantActionsToV2({
+      schemaVersion: 1,
+      customSkills: [{
+        id: 'my-custom',
+        name: '我的技能',
+        instruction: '做点什么',
+        trigger: 'always',
+        isCustom: true,
+        source: 'custom',
+        steps: [],
+      }],
+      actionSettings: { wordDerive: { targetGroupMode: 'new', targetGroupId: null, variableCount: 12, categories: ['A'], promptMode: 'replace', autoSaveWordEntries: true } },
+    } as never)
+    expect(migrated.customSkills.some((skill) => skill.id === 'my-custom')).toBe(true)
+    expect(migrated.actionSettings.wordDerive.variableCount).toBe(12)
   })
 })

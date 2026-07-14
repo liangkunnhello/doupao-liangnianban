@@ -1,8 +1,9 @@
-import { BUILT_IN_ASSISTANT_ACTIONS, BUILT_IN_SKILL_STEPS, cloneBuiltInSkillSteps } from './builtInActions'
-import type { AssistantAction, AssistantActionIcon, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillContract, AssistantSkillOverride, AssistantSkillStep, AssistantSkillTaskType, AssistantSkillTrigger, AssistantStepOutput, AssistantStepRole, AssistantVariationLevel, WordDeriveActionSettings } from './types'
+import { BUILT_IN_ASSISTANT_ACTIONS, BUILT_IN_ASSISTANT_ACTION_IDS, BUILT_IN_SKILL_STEPS, cloneBuiltInSkillSteps } from './builtInActions'
+import type { AssistantAction, AssistantActionIcon, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillContract, AssistantSkillOverride, AssistantSkillStep, AssistantSkillTaskType, AssistantSkillTrigger, AssistantStepOutput, AssistantStepRole, AssistantVariationLevel, BuiltInSkillSettings, EffectiveVisualSkill, SuperDeriveSkillSettings, VisualInputMode, VisualSkillFormValue, VisualSkillIntensity, WildDeriveSkillSettings, WordDeriveActionSettings, WordEntryConfig, WordEntryStrategy, WordDeriveTargetGroupMode } from './types'
+import { ASSISTANT_SKILL_SCHEMA_VERSION } from './types'
 
 export const DEFAULT_WORD_DERIVE_SETTINGS: WordDeriveActionSettings = {
-  targetGroupMode: 'skill-name',
+  targetGroupMode: 'new',
   targetGroupId: null,
   variableCount: 20,
   categories: ['产品主体', '目标人群', '痛点场景', '核心卖点', '视觉钩子', '情绪氛围', '人物状态', '使用场景', '信任背书', '优惠机制', 'CTA', '平台版式'],
@@ -28,16 +29,175 @@ export const DEFAULT_ASSISTANT_ACTION_PREFERENCES: AssistantActionPreferences = 
   actionSettings: DEFAULT_ASSISTANT_ACTION_SETTINGS,
   customSkills: [],
   skillOverrides: [],
+  builtInSkillSettings: getDefaultBuiltInSkillSettings(),
 }
 
 const STEP_ROLES = new Set<AssistantStepRole>(['observe', 'lock', 'extract', 'finalPrompt', 'variablePrompt', 'wordEntries', 'risk'])
 const STEP_OUTPUTS = new Set<AssistantStepOutput>(['sections', 'finalPrompt', 'variablePrompt', 'wordEntries'])
 const SKILL_ICONS = new Set<AssistantActionIcon>(['image', 'wand', 'sparkles', 'palette', 'tags', 'thumbs-up'])
 
-const CORE_VISIBLE_ACTION_IDS = new Set<AssistantActionId>(['image-derive', 'prompt-optimize'])
+const CORE_VISIBLE_ACTION_IDS = new Set<AssistantActionId>(['prompt-optimize', 'image-describe', 'super-derive', 'wild-derive'])
 
-export function normalizeAssistantActionPreferences(value: Partial<AssistantActionPreferences> | undefined): AssistantActionPreferences {
+/** Built-in skills removed in V2. Their ids are stripped from ordering/hidden
+ *  configs; if a user had *edited* one, it is converted to a hidden custom skill
+ *  so their configuration is not lost (see {@link migrateAssistantActionsToV2}). */
+const REMOVED_BUILT_IN_IDS = new Set<AssistantActionId>([
+  'image-derive',
+  'style-expand',
+  'word-extract',
+  'prompt-examples',
+  'market-breakdown',
+  'viral-remix',
+  'angle-matrix',
+  'batch-variants',
+  'ad-review',
+  'channel-rewrite',
+])
+
+/** Minimal description of removed built-ins, used only to rebuild an edited
+ *  removed skill as a custom skill during migration. */
+const LEGACY_REMOVED_BUILTINS: Record<string, { name: string; objective: string; variationLevel: AssistantVariationLevel; wordEntries: boolean; trigger: AssistantSkillTrigger }> = {
+  'image-derive': { name: '概念抽取', objective: '从参考图中提炼简短概念，输出一段只生成单张独立画面、严格沿用参考图视觉参数的图生图提示词。', variationLevel: 'low', wordEntries: false, trigger: 'image' },
+  'style-expand': { name: '版式扩展', objective: '保持内容和视觉资产不变，探索信息层级和元素位置的不同布局。', variationLevel: 'medium', wordEntries: false, trigger: 'always' },
+  'word-extract': { name: '变量拆解', objective: '从当前输入中提取已有的、可复用的变量，不凭空扩写。', variationLevel: 'none', wordEntries: true, trigger: 'text' },
+  'prompt-examples': { name: '爆款案例', objective: '提供可供参考的高潜广告素材结构案例。', variationLevel: 'high', wordEntries: false, trigger: 'always' },
+  'market-breakdown': { name: '大盘拆解', objective: '从一组参考素材中提炼一个可直接用于测试的最终生图提示词。', variationLevel: 'none', wordEntries: false, trigger: 'always' },
+  'viral-remix': { name: '爆款复刻', objective: '复刻有效素材的结构逻辑和视觉节奏，不复制其具体内容。', variationLevel: 'high', wordEntries: false, trigger: 'always' },
+  'angle-matrix': { name: '角度探索', objective: '围绕同一产品或素材信息探索不同营销切入角度。', variationLevel: 'high', wordEntries: true, trigger: 'always' },
+  'batch-variants': { name: '批量变体', objective: '基于一个基准方向创建可归因的 A/B 测试变体。', variationLevel: 'medium', wordEntries: false, trigger: 'always' },
+  'ad-review': { name: '投放复盘', objective: '根据用户提供的投放数据分析保留、淘汰和下一轮测试变量。', variationLevel: 'none', wordEntries: false, trigger: 'text' },
+  'channel-rewrite': { name: '渠道改写', objective: '保持现有内容和创意方向，仅做目标渠道适配。', variationLevel: 'low', wordEntries: false, trigger: 'text' },
+}
+
+function mapVariationLevelToV2(level: AssistantVariationLevel): VisualSkillIntensity {
+  switch (level) {
+    case 'none': return 'faithful'
+    case 'low': return 'controlled'
+    case 'medium': return 'high'
+    case 'high': return 'maximum'
+    default: return 'controlled'
+  }
+}
+
+function mapTriggerToInputMode(trigger: AssistantSkillTrigger): VisualInputMode {
+  switch (trigger) {
+    case 'image': return 'image'
+    case 'text': return 'text'
+    case 'image_text': return 'both'
+    case 'always':
+    default: return 'either'
+  }
+}
+
+/** Migrate legacy (V1) assistant preferences to Visual Semantic Skills V2:
+ *  strip removed built-ins from ordering, drop their overrides unless the user
+ *  edited them (in which case they become hidden custom skills), and tag the
+ *  schema version. Word libraries and existing custom skills are preserved. */
+export function migrateAssistantActionsToV2(value: Partial<AssistantActionPreferences> | undefined): AssistantActionPreferences {
+  const base = normalizeAssistantActionPreferencesRaw(value)
+  if ((value?.schemaVersion ?? 1) >= ASSISTANT_SKILL_SCHEMA_VERSION) return base
+
+  const overrides = base.skillOverrides
+  const keptOverrides: AssistantSkillOverride[] = []
+  const convertedCustomSkills: AssistantCustomSkill[] = []
+  const convertedHiddenIds: AssistantActionId[] = []
+
+  for (const override of overrides) {
+    if (!REMOVED_BUILT_IN_IDS.has(override.skillId)) {
+      keptOverrides.push(override)
+      continue
+    }
+    // Only convert a removed built-in if the user actually edited it (changed
+    // something beyond a bare enabled toggle). Pure-id overrides are dropped.
+    const editKeys = Object.keys(override).filter((key) => key !== 'skillId' && key !== 'enabled')
+    if (editKeys.length === 0) continue
+    const legacy = LEGACY_REMOVED_BUILTINS[override.skillId]
+    if (!legacy) continue
+    const trigger = override.trigger ?? legacy.trigger
+    const inputMode = mapTriggerToInputMode(trigger)
+    const intensity = mapVariationLevelToV2(legacy.variationLevel)
+    // Legacy edited steps are merged into the instruction text (V2 ignores steps).
+    const stepInstruction = override.steps?.length
+      ? override.steps
+        .map((step, index) => `步骤${index + 1}：${step.title?.trim() || `第${index + 1}步`}：${step.instruction?.trim() ?? ''}`)
+        .join('\n')
+      : ''
+    const instruction = stepInstruction ? `${legacy.objective}\n${stepInstruction}` : legacy.objective
+    // Stable id (no Date.now / Math.random) so migration is deterministic / idempotent.
+    const custom: AssistantCustomSkill = {
+      id: `custom-legacy-${override.skillId}`,
+      name: override.name ?? legacy.name,
+      icon: override.icon ?? 'sparkles',
+      instruction,
+      steps: [],
+      trigger,
+      enabled: false,
+      priority: 65,
+      when: getWhenByTrigger(trigger),
+      outputMode: legacy.wordEntries ? 'create-word-tags' : 'show-candidates',
+      isCustom: true,
+      source: 'custom',
+      intensity,
+      inputMode,
+      preserveRules: ['参考图片和用户原始文字中的可观察事实', '原始意图'],
+      editableRules: ['技能明确允许的处理'],
+      forbiddenRules: ['套用行业通用模板替换参考输入', '把推断内容当作输入事实'],
+      wordEntries: { enabled: legacy.wordEntries, count: 8, categories: DEFAULT_WORD_DERIVE_SETTINGS.categories, strategy: 'atomic' },
+      requiresAdContext: false,
+      allowWordEntries: legacy.wordEntries,
+      allowExploreSellingPoint: false,
+    }
+    convertedCustomSkills.push(custom)
+    convertedHiddenIds.push(custom.id)
+  }
+
+  // Migrate the legacy global word-derive settings into the per-skill
+  // super-derive settings (spec §七.2). Only do this when the ORIGINAL input
+  // actually carried the legacy fields — the normalized defaults always include
+  // a superDerive block, so using `base` would clobber the proper V2 categories.
+  const rawActionSettings = (value?.actionSettings ?? {}) as Record<string, unknown>
+  const legacyWord = (
+    rawActionSettings.superDerive ?? rawActionSettings.wordDerive
+  ) as undefined | {
+    variableCount?: number
+    categories?: string[]
+    autoSaveWordEntries?: boolean
+    promptMode?: string
+    targetGroupMode?: WordDeriveTargetGroupMode
+    targetGroupId?: string | null
+  }
+  const superDefaults = base.builtInSkillSettings['super-derive']
+  const migratedSuper: SuperDeriveSkillSettings = legacyWord
+    ? {
+        wordEntries: {
+          enabled: (legacyWord.variableCount ?? 0) > 0 ? true : superDefaults.wordEntries.enabled,
+          count: Math.max(1, Math.min(50, legacyWord.variableCount || superDefaults.wordEntries.count)),
+          categories: legacyWord.categories && legacyWord.categories.length ? legacyWord.categories : superDefaults.wordEntries.categories,
+          strategy: 'atomic',
+        },
+        autoSave: typeof legacyWord.autoSaveWordEntries === 'boolean' ? legacyWord.autoSaveWordEntries : superDefaults.autoSave,
+        applyMode: legacyWord.promptMode === 'append' ? 'append' : 'replace',
+        targetGroupMode: legacyWord.targetGroupMode ?? superDefaults.targetGroupMode,
+        targetGroupId: legacyWord.targetGroupId ?? superDefaults.targetGroupId,
+      }
+    : superDefaults
+
   return {
+    ...base,
+    schemaVersion: ASSISTANT_SKILL_SCHEMA_VERSION,
+    pinnedActionIds: base.pinnedActionIds.filter((id) => !REMOVED_BUILT_IN_IDS.has(id)),
+    hiddenActionIds: [...base.hiddenActionIds.filter((id) => !REMOVED_BUILT_IN_IDS.has(id)), ...convertedHiddenIds],
+    actionOrder: base.actionOrder.filter((id) => !REMOVED_BUILT_IN_IDS.has(id)),
+    skillOverrides: keptOverrides,
+    customSkills: [...base.customSkills, ...convertedCustomSkills],
+    builtInSkillSettings: { ...base.builtInSkillSettings, 'super-derive': migratedSuper },
+  }
+}
+
+/** Raw preferences normalization without migration (used by the migrator). */
+export function normalizeAssistantActionPreferencesRaw(value: Partial<AssistantActionPreferences> | undefined): AssistantActionPreferences {
+  return {
+    schemaVersion: value?.schemaVersion,
     enabled: value?.enabled ?? true,
     pinnedActionIds: normalizeActionIds(value?.pinnedActionIds),
     hiddenActionIds: normalizeHiddenActionIds(value?.hiddenActionIds),
@@ -45,7 +205,12 @@ export function normalizeAssistantActionPreferences(value: Partial<AssistantActi
     actionSettings: normalizeAssistantActionSettings(value?.actionSettings),
     customSkills: normalizeCustomSkills(value?.customSkills),
     skillOverrides: normalizeSkillOverrides(value?.skillOverrides),
+    builtInSkillSettings: normalizeBuiltInSkillSettings(value?.builtInSkillSettings),
   }
+}
+
+export function normalizeAssistantActionPreferences(value: Partial<AssistantActionPreferences> | undefined): AssistantActionPreferences {
+  return migrateAssistantActionsToV2(value)
 }
 
 let stepIdCounter = 0
@@ -234,21 +399,34 @@ export function upsertSkillOverride(preferences: AssistantActionPreferences, ove
 /** Copy a built-in (or any) skill into a new editable custom skill. */
 export function duplicateSkillAsCustom(source: AssistantAction): AssistantCustomSkill {
   const contract = source.contract
+  const allowWordEntries = source.wordEntries?.enabled ?? contract?.output.wordEntries === true
+  const wordEntries: WordEntryConfig = source.wordEntries ?? {
+    enabled: allowWordEntries,
+    count: 8,
+    categories: DEFAULT_WORD_DERIVE_SETTINGS.categories,
+    strategy: 'atomic',
+  }
   return {
     id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     name: `${source.name} 副本`.slice(0, 16),
     icon: source.icon,
-    instruction: '',
-    steps: (source.steps ?? cloneBuiltInSkillSteps(source.id)).map((step) => ({ ...step, id: generateStepId() })),
+    instruction: source.instruction ?? contract?.objective ?? '',
+    steps: [],
     trigger: source.trigger ?? 'always',
     enabled: true,
     priority: 65,
     when: getWhenByTrigger(source.trigger ?? 'always'),
-    outputMode: source.outputMode === 'create-word-tags' ? 'create-word-tags' : 'show-candidates',
+    outputMode: allowWordEntries ? 'create-word-tags' : 'show-candidates',
     isCustom: true,
     source: 'custom',
+    intensity: source.intensity ?? mapVariationLevelToV2(contract?.variationLevel ?? 'low'),
+    inputMode: source.inputMode ?? mapTriggerToInputMode(source.trigger ?? 'always'),
+    wordEntries,
+    preserveRules: contract?.preserve ?? ['参考图片和用户原始文字中的可观察事实', '原始意图'],
+    editableRules: contract?.editable ?? ['技能明确允许的处理'],
+    forbiddenRules: contract?.forbidden ?? ['套用行业通用模板替换参考输入', '把推断内容当作输入事实'],
     requiresAdContext: contract?.requiresAdContext === true,
-    allowWordEntries: contract?.output.wordEntries === true,
+    allowWordEntries,
     allowExploreSellingPoint: contract?.allowExploreSellingPoint === true,
     contract: contract ? { ...contract } : undefined,
   }
@@ -280,7 +458,10 @@ function normalizeWordDeriveSettings(value: Partial<WordDeriveActionSettings> | 
     ? value.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
     : DEFAULT_WORD_DERIVE_SETTINGS.categories
   const targetGroupId = typeof value?.targetGroupId === 'string' && value.targetGroupId ? value.targetGroupId : null
-  const targetGroupMode = value?.targetGroupMode === 'selected' && targetGroupId ? 'selected' : 'skill-name'
+  // 'selected' only applies with an explicit target; everything else (including
+  // the legacy 'skill-name' auto-append) becomes 'new' so each generation lands
+  // in its own group and never merges into a shared bucket.
+  const targetGroupMode = value?.targetGroupMode === 'selected' && targetGroupId ? 'selected' : 'new'
 
   return {
     targetGroupMode,
@@ -304,6 +485,8 @@ function normalizeHiddenActionIds(value: unknown): AssistantActionId[] {
 export function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
   if (!Array.isArray(value)) return []
   const triggers = new Set<AssistantSkillTrigger>(['always', 'image', 'text', 'image_text'])
+  const intensities = new Set<VisualSkillIntensity>(['faithful', 'controlled', 'high', 'maximum'])
+  const inputModes = new Set<VisualInputMode>(['text', 'image', 'either', 'both'])
   return value.flatMap((item): AssistantCustomSkill[] => {
     if (!item || typeof item !== 'object') return []
     const record = item as Record<string, unknown>
@@ -321,12 +504,39 @@ export function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
     const allowWordEntries = typeof record.allowWordEntries === 'boolean' ? record.allowWordEntries : false
     const allowExploreSellingPoint = typeof record.allowExploreSellingPoint === 'boolean' ? record.allowExploreSellingPoint : false
     const contract = buildCustomSkillContract(record.contract, instruction, requiresAdContext, allowWordEntries, allowExploreSellingPoint)
+    const intensity = intensities.has(record.intensity as VisualSkillIntensity) ? (record.intensity as VisualSkillIntensity) : mapVariationLevelToV2(contract.variationLevel)
+    const inputMode = inputModes.has(record.inputMode as VisualInputMode) ? (record.inputMode as VisualInputMode) : mapTriggerToInputMode(trigger)
+    const wordEntries = normalizeWordEntryConfig(record.wordEntries, allowWordEntries)
+    // Legacy custom skills stored an editable multi-step flow; the V2 runner does
+    // not execute steps, so merge them into the instruction text (spec §七.3).
+    const mergedInstruction = [instruction, ...rawSteps.map((step, index) => `${step.title || `步骤${index + 1}`}：${step.instruction}`)].
+      filter(Boolean).
+      join('\n')
     return [{
-      id, name, instruction, steps: rawSteps, icon, trigger, enabled, priority: 65,
-      when: getWhenByTrigger(trigger), outputMode: allowWordEntries ? 'create-word-tags' : 'show-candidates', isCustom: true,
-      source: 'custom', requiresAdContext, allowWordEntries, allowExploreSellingPoint, contract,
+      id, name, instruction: mergedInstruction || instruction, steps: [], icon, trigger, enabled, priority: 65,
+      when: getWhenByTrigger(trigger), outputMode: wordEntries.enabled ? 'create-word-tags' : 'show-candidates', isCustom: true,
+      source: 'custom', intensity, inputMode, wordEntries,
+      preserveRules: contract.preserve,
+      editableRules: contract.editable,
+      forbiddenRules: contract.forbidden,
+      requiresAdContext, allowWordEntries, allowExploreSellingPoint, contract,
     }]
   })
+}
+
+/** Normalize a custom skill's word-entry config, falling back to the legacy
+ *  allowWordEntries flag when the structured config is absent. */
+export function normalizeWordEntryConfig(record: unknown, allowWordEntries: boolean): WordEntryConfig {
+  if (!record || typeof record !== 'object') {
+    return { enabled: allowWordEntries, count: 8, categories: DEFAULT_WORD_DERIVE_SETTINGS.categories, strategy: 'atomic' }
+  }
+  const rec = record as Record<string, unknown>
+  const enabled = typeof rec.enabled === 'boolean' ? rec.enabled : allowWordEntries
+  const count = typeof rec.count === 'number' && Number.isFinite(rec.count) ? Math.max(1, Math.min(50, Math.round(rec.count))) : 8
+  const rawCategories = Array.isArray(rec.categories) ? rec.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 12) : []
+  const categories = enabled ? (rawCategories.length ? rawCategories : DEFAULT_WORD_DERIVE_SETTINGS.categories) : []
+  const strategy: WordEntryStrategy = rec.strategy === 'direction-pack' ? 'direction-pack' : 'atomic'
+  return { enabled, count, categories, strategy }
 }
 
 /** Build the stable contract for a custom skill.
@@ -394,82 +604,283 @@ export function getWhenByTrigger(trigger: AssistantSkillTrigger): AssistantActio
   }
 }
 
-function getAllActions(preferences: AssistantActionPreferences): AssistantAction[] {
-  return [...getResolvedBuiltInActions(preferences), ...preferences.customSkills]
-}
-
-const NO_INPUT_VISIBLE_IDS = new Set<AssistantActionId>(['angle-matrix'])
-
-/** 仅允许程序调用的内部技能，不在横向技能条里出现 */
-const INTERNAL_ACTION_IDS = new Set<AssistantActionId>(['channel-rewrite'])
-
-function isCustomAction(action: AssistantAction) {
-  return 'isCustom' in action && action.isCustom === true
-}
-
-function actionMatchesContext(action: AssistantAction, context: AssistantInputContext) {
-  if (INTERNAL_ACTION_IDS.has(action.id)) return false
-  if (action.enabled === false) return false
-  if (!context.hasImage && !context.hasText && !isCustomAction(action)) {
-    return NO_INPUT_VISIBLE_IDS.has(action.id)
+/** Single source of truth for whether a skill can run against the current input.
+ *  Replaces the old double trigger+when judgment with one inputMode switch. */
+export function isAssistantActionRunnable(skill: AssistantAction, context: AssistantInputContext): boolean {
+  const inputMode = skill.inputMode ?? 'either'
+  switch (inputMode) {
+    case 'text': return context.hasText
+    case 'image': return context.hasImage
+    case 'either': return context.hasText || context.hasImage
+    case 'both': return context.hasText && context.hasImage
+    default: return context.hasText || context.hasImage
   }
-  if (action.trigger) {
-    if (action.trigger === 'image' && !context.hasImage) return false
-    if (action.trigger === 'text' && (!context.hasText || context.hasImage)) return false
-    if (action.trigger === 'image_text' && (!context.hasText || !context.hasImage)) return false
-  }
-  if (action.when.text === 'required' && !context.hasText) return false
-  if (action.when.text === 'none' && context.hasText) return false
-  if (action.when.image === 'required' && !context.hasImage) return false
-  if (action.when.image === 'none' && context.hasImage) return false
-  return true
 }
 
-function getContextPriority(action: AssistantAction, context: AssistantInputContext): number {
-  let order: AssistantActionId[]
-  if (context.hasImage && context.hasText) {
-    order = ['image-derive', 'prompt-optimize', 'angle-matrix', 'batch-variants', 'ad-review']
-  } else if (context.hasImage && !context.hasText) {
-    order = ['image-derive', 'angle-matrix', 'batch-variants']
-  } else if (!context.hasImage && context.hasText) {
-    order = ['prompt-optimize', 'angle-matrix', 'batch-variants', 'ad-review']
+/** Resolve the effective word-entry config for a skill, applying the override
+ *  order: user per-skill settings > skill default > (legacy global wordDerive).
+ *  Returns null when the skill does not emit variables. */
+export function resolveWordConfig(action: AssistantAction, preferences: AssistantActionPreferences): WordEntryConfig | null {
+  let effective: WordEntryConfig | undefined
+  if (action.id === 'super-derive' || action.id === 'wild-derive') {
+    effective = preferences.builtInSkillSettings?.[action.id]?.wordEntries ?? action.wordEntries
   } else {
-    order = ['angle-matrix']
+    effective = action.wordEntries
   }
-  const index = order.indexOf(action.id)
-  return index >= 0 ? (order.length - index) * 10 : 0
+  if (effective?.enabled && effective.categories.length > 0) return effective
+  // Legacy fallback: a custom skill that only set the old allowWordEntries flag.
+  if (!effective?.enabled && action.source === 'custom' && (action as AssistantCustomSkill).allowWordEntries) {
+    return {
+      enabled: true,
+      count: preferences.actionSettings.wordDerive.variableCount,
+      categories: preferences.actionSettings.wordDerive.categories,
+      strategy: 'atomic',
+    }
+  }
+  return null
+}
+
+/** Build the fully-resolved skill the runner consumes, so the runner never reads
+ *  trigger / when / outputMode / contract / steps directly. */
+export function resolveEffectiveVisualSkill(action: AssistantAction, preferences: AssistantActionPreferences): EffectiveVisualSkill {
+  const contract = action.contract
+  const preserveRules = action.preserveRules?.length ? action.preserveRules : (contract?.preserve ?? [])
+  const editableRules = action.editableRules?.length ? action.editableRules : (contract?.editable ?? [])
+  const forbiddenRules = action.forbiddenRules?.length ? action.forbiddenRules : (contract?.forbidden ?? [])
+  const intensity = action.intensity ?? mapVariationLevelToV2(contract?.variationLevel ?? 'low')
+  const inputMode = action.inputMode ?? mapTriggerToInputMode(action.trigger ?? 'always')
+  const instruction = action.instruction ?? contract?.objective ?? ''
+  const wordEntries = resolveWordConfig(action, preferences)
+  return {
+    id: action.id,
+    name: action.name,
+    inputMode,
+    intensity,
+    instruction,
+    preserveRules,
+    editableRules,
+    forbiddenRules,
+    wordEntries,
+  }
+}
+
+/** Default per-skill settings for the two variable built-ins. */
+export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
+  const superAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'super-derive')!
+  const wildAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'wild-derive')!
+  return {
+    'super-derive': {
+      wordEntries: superAction.wordEntries!,
+      autoSave: true,
+      applyMode: 'replace',
+      targetGroupMode: 'new',
+      targetGroupId: null,
+    },
+    'wild-derive': {
+      wordEntries: wildAction.wordEntries!,
+      autoSave: true,
+      applyMode: 'replace',
+      targetGroupMode: 'new',
+      targetGroupId: null,
+    },
+  }
+}
+
+export function normalizeBuiltInSkillSettings(value: unknown): BuiltInSkillSettings {
+  const defaults = getDefaultBuiltInSkillSettings()
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  const normalizeWord = (raw: unknown, fallback: WordEntryConfig): WordEntryConfig => {
+    const rec = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    const enabled = typeof rec.enabled === 'boolean' ? rec.enabled : fallback.enabled
+    const count = typeof rec.count === 'number' && Number.isFinite(rec.count) ? Math.max(1, Math.min(50, Math.round(rec.count))) : fallback.count
+    const categories = Array.isArray(rec.categories) ? rec.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 12) : fallback.categories
+    const strategy: WordEntryStrategy = rec.strategy === 'direction-pack' ? 'direction-pack' : fallback.strategy
+    return { enabled, count, categories, strategy }
+  }
+  const superRaw = record['super-derive'] as Record<string, unknown> | undefined
+  const wildRaw = record['wild-derive'] as Record<string, unknown> | undefined
+  const superSettings: SuperDeriveSkillSettings = {
+    wordEntries: (() => {
+      const normalized = normalizeWord(superRaw?.wordEntries, defaults['super-derive'].wordEntries)
+      return {
+        ...normalized,
+        enabled: true,
+        categories: normalized.categories.length ? normalized.categories : defaults['super-derive'].wordEntries.categories,
+        strategy: 'atomic' as const,
+      }
+    })(),
+    autoSave: typeof superRaw?.autoSave === 'boolean' ? superRaw.autoSave : defaults['super-derive'].autoSave,
+    applyMode: superRaw?.applyMode === 'append' ? 'append' : 'replace',
+    targetGroupMode: superRaw?.targetGroupMode === 'selected' ? 'selected' : 'new',
+    targetGroupId: typeof superRaw?.targetGroupId === 'string' && superRaw.targetGroupId ? superRaw.targetGroupId : null,
+  }
+  const wildSettings: WildDeriveSkillSettings = {
+    wordEntries: {
+      ...normalizeWord(wildRaw?.wordEntries, defaults['wild-derive'].wordEntries),
+      enabled: true,
+      categories: ['创意方向'],
+      strategy: 'direction-pack',
+    },
+    autoSave: typeof wildRaw?.autoSave === 'boolean' ? wildRaw.autoSave : defaults['wild-derive'].autoSave,
+    applyMode: wildRaw?.applyMode === 'append' ? 'append' : 'replace',
+    targetGroupMode: wildRaw?.targetGroupMode === 'selected' ? 'selected' : 'new',
+    targetGroupId: typeof wildRaw?.targetGroupId === 'string' && wildRaw.targetGroupId ? wildRaw.targetGroupId : null,
+  }
+  return { 'super-derive': superSettings, 'wild-derive': wildSettings }
 }
 
 export function getRecommendedAssistantActions(
   context: AssistantInputContext,
   preferences: AssistantActionPreferences = DEFAULT_ASSISTANT_ACTION_PREFERENCES,
-  limit = 5,
+  limit = 12,
 ) {
   if (!preferences.enabled) return []
 
   const hidden = new Set(preferences.hiddenActionIds)
-  const pinned = new Set(preferences.pinnedActionIds)
   const manualOrder = new Map(preferences.actionOrder.map((id, index) => [id, index]))
 
-  return getAllActions(preferences)
-    .filter((action) => !hidden.has(action.id) && actionMatchesContext(action, context))
+  // The four default skills always occupy the skill bar in a fixed order; the UI
+  // disables them when input conditions are unmet rather than hiding them.
+  const builtIns = getResolvedBuiltInActions(preferences)
+    .filter((action) => action.enabled !== false && !hidden.has(action.id))
     .sort((a, b) => {
-      const pinnedDelta = Number(pinned.has(b.id)) - Number(pinned.has(a.id))
-      if (pinnedDelta) return pinnedDelta
-
-      const aManual = manualOrder.get(a.id)
-      const bManual = manualOrder.get(b.id)
-      if (aManual != null && bManual != null && aManual !== bManual) return aManual - bManual
-      if (aManual != null) return -1
-      if (bManual != null) return 1
-
-      return (getContextPriority(b, context) + b.priority) - (getContextPriority(a, context) + a.priority)
+      const ai = manualOrder.get(a.id) ?? BUILT_IN_ASSISTANT_ACTION_IDS.indexOf(a.id)
+      const bi = manualOrder.get(b.id) ?? BUILT_IN_ASSISTANT_ACTION_IDS.indexOf(b.id)
+      if (ai < 0 && bi < 0) return b.priority - a.priority
+      if (ai < 0) return 1
+      if (bi < 0) return -1
+      return ai - bi
     })
-    .slice(0, limit)
+
+  const customs = preferences.customSkills
+    .filter((action) => action.enabled !== false && !hidden.has(action.id) && isAssistantActionRunnable(action, context))
+    .sort((a, b) => b.priority - a.priority)
+
+  return [...builtIns, ...customs].slice(0, limit)
 }
 
-export function getMoreAssistantActions(context: AssistantInputContext, preferences: AssistantActionPreferences) {
-  const recommendedIds = new Set(getRecommendedAssistantActions(context, preferences).map((action) => action.id))
-  const hidden = new Set(preferences.hiddenActionIds)
-  return getAllActions(preferences).filter((action) => !hidden.has(action.id) && actionMatchesContext(action, context) && !recommendedIds.has(action.id))
+export function getMoreAssistantActions(_context: AssistantInputContext, _preferences: AssistantActionPreferences): AssistantAction[] {
+  // V2 shows all skills on the fixed bar; there is no secondary overflow list.
+  return []
+}
+
+/** Resolve the word-entry save/apply settings for a given skill, per spec §六.5.
+ *  Super-derive / wild-derive read their own per-skill settings; a custom skill
+ *  with word entries uses its own config; everything else falls back to the
+ *  (legacy) global word-derive settings. */
+export function resolveWordEntryApplySettings(
+  action: AssistantAction,
+  preferences: AssistantActionPreferences,
+): WordDeriveActionSettings {
+  const builtIn = preferences.builtInSkillSettings
+  if (action.id === 'super-derive' && builtIn['super-derive']) {
+    const s = builtIn['super-derive']
+    return {
+      targetGroupMode: s.targetGroupMode,
+      targetGroupId: s.targetGroupId,
+      variableCount: s.wordEntries.count,
+      categories: s.wordEntries.categories,
+      promptMode: s.applyMode,
+      autoSaveWordEntries: s.autoSave,
+    }
+  }
+  if (action.id === 'wild-derive' && builtIn['wild-derive']) {
+    const w = builtIn['wild-derive']
+    return {
+      targetGroupMode: w.targetGroupMode,
+      targetGroupId: w.targetGroupId,
+      variableCount: w.wordEntries.count,
+      categories: w.wordEntries.categories,
+      promptMode: w.applyMode,
+      autoSaveWordEntries: w.autoSave,
+    }
+  }
+  if (isCustomAssistantSkill(action) && action.wordEntries?.enabled) {
+    return {
+      targetGroupMode: 'new',
+      targetGroupId: null,
+      variableCount: action.wordEntries.count,
+      categories: action.wordEntries.categories,
+      promptMode: 'replace',
+      autoSaveWordEntries: false,
+    }
+  }
+  return preferences.actionSettings.wordDerive
+}
+
+/** Pure updater for per-skill built-in settings (spec §九.3). */
+export function updateBuiltInSkillSettings(
+  preferences: AssistantActionPreferences,
+  skillId: 'super-derive' | 'wild-derive',
+  patch: Partial<BuiltInSkillSettings['super-derive'] & BuiltInSkillSettings['wild-derive']>,
+): AssistantActionPreferences {
+  const current = preferences.builtInSkillSettings[skillId]
+  const nextSettings = { ...current, ...patch } as BuiltInSkillSettings['super-derive'] & BuiltInSkillSettings['wild-derive']
+  return {
+    ...preferences,
+    builtInSkillSettings: {
+      ...preferences.builtInSkillSettings,
+      [skillId]: nextSettings,
+    },
+  }
+}
+
+function createCustomSkillId(): string {
+  return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+export function inputModeToLegacyTrigger(inputMode: VisualInputMode): AssistantSkillTrigger {
+  switch (inputMode) {
+    case 'text': return 'text'
+    case 'image': return 'image'
+    case 'both': return 'image_text'
+    case 'either':
+    default: return 'always'
+  }
+}
+
+/** Build a saved custom skill from the reviewed V2 form value (spec §四.3).
+ *  This is the single save path for both create and edit, so V2 fields are
+ *  always persisted and never rely on the legacy outputMode/trigger. */
+export function buildCustomSkillFromDraft(
+  draft: {
+    id?: string
+    name: string
+    icon: AssistantCustomSkill['icon']
+    contract?: AssistantSkillContract
+    enabled?: boolean
+    priority?: number
+  },
+  form: VisualSkillFormValue,
+): AssistantCustomSkill {
+  const trigger = inputModeToLegacyTrigger(form.inputMode)
+  const contract = buildCustomSkillContract(draft.contract, form.instruction, false, form.wordEntries.enabled, false)
+  return {
+    id: draft.id ?? createCustomSkillId(),
+    name: form.name.trim().slice(0, 16) || draft.name,
+    icon: form.icon,
+    instruction: form.instruction,
+    steps: [],
+    trigger,
+    enabled: draft.enabled ?? true,
+    priority: draft.priority ?? 65,
+    when: getWhenByTrigger(trigger),
+    outputMode: form.wordEntries.enabled ? 'create-word-tags' : 'replace-input',
+    isCustom: true,
+    source: 'custom',
+    intensity: form.intensity,
+    inputMode: form.inputMode,
+    wordEntries: form.wordEntries,
+    preserveRules: contract.preserve,
+    editableRules: contract.editable,
+    forbiddenRules: contract.forbidden,
+    requiresAdContext: false,
+    allowWordEntries: form.wordEntries.enabled,
+    allowExploreSellingPoint: false,
+    contract,
+  }
+}
+
+function isCustomAssistantSkill(action: AssistantAction): action is AssistantCustomSkill {
+  return 'isCustom' in action && action.isCustom === true
 }
