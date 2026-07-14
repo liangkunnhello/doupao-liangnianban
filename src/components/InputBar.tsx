@@ -4,6 +4,11 @@ import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteC
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import {
+  MAX_ALL_REFERENCE_IMAGES,
+  MAX_DIRECT_INPUT_IMAGES,
+  MAX_FOLDER_IMAGES,
+} from '../lib/inputImageLimits'
 import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -398,9 +403,6 @@ function BatchActionButton({
   )
 }
 
-const API_MAX_IMAGES = 16
-const MAX_FOLDER_IMAGES = 999
-
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[]) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
   if (collectionId === ALL_FAVORITES_COLLECTION_ID) return favoriteTasks
@@ -747,6 +749,7 @@ export default function InputBar() {
   const [varConvertHover, setVarConvertHover] = useState(false)
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
+  const [imageThumbsExpanded, setImageThumbsExpanded] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
@@ -995,8 +998,8 @@ export default function InputBar() {
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
       ]
-  const atImageLimit = !inputImageFolder && inputImages.length >= API_MAX_IMAGES
-  const uploadImageTooltipText = inputImageFolder ? '已选择图片文件夹' : atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '选择图片文件夹'
+  const atImageLimit = !inputImageFolder && inputImages.length >= MAX_DIRECT_INPUT_IMAGES
+  const uploadImageTooltipText = inputImageFolder ? '已选择图片文件夹' : atImageLimit ? `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张），无法继续添加` : '选择图片文件夹'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
@@ -1400,15 +1403,15 @@ export default function InputBar() {
       useStore.getState().setInputImageFolder(null)
 
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      if (currentCount >= MAX_DIRECT_INPUT_IMAGES) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = MAX_DIRECT_INPUT_IMAGES - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -1419,7 +1422,7 @@ export default function InputBar() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${MAX_DIRECT_INPUT_IMAGES} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -1744,7 +1747,14 @@ export default function InputBar() {
         : []
 
       if (imageIds.length > 0) {
-        Promise.all(imageIds.map(async (imageId) => {
+        const state = useStore.getState()
+        state.setInputImageFolder(null)
+        const existingIds = new Set(state.inputImages.map((image) => image.id))
+        const uniqueIds = Array.from(new Set(imageIds)).filter((imageId) => !existingIds.has(imageId))
+        const remaining = Math.max(0, MAX_DIRECT_INPUT_IMAGES - state.inputImages.length)
+        const toAdd = uniqueIds.slice(0, remaining)
+        const discarded = uniqueIds.length - toAdd.length
+        Promise.all(toAdd.map(async (imageId) => {
           const dataUrl = await ensureImageCached(imageId)
           if (!dataUrl) {
             showToast('部分图片已不存在', 'error')
@@ -1752,7 +1762,11 @@ export default function InputBar() {
           }
           addInputImage({ id: imageId, dataUrl })
         })).then(() => {
-          showToast('已上传图片', 'success')
+          if (discarded > 0) {
+            showToast(`已达上限 ${MAX_DIRECT_INPUT_IMAGES} 张，${discarded} 张图片未添加`, 'error')
+          } else if (toAdd.length > 0) {
+            showToast(`已添加 ${toAdd.length} 张图片`, 'success')
+          }
         }).catch((err) => showToast(`上传图片失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
       }
     }
@@ -2274,8 +2288,88 @@ export default function InputBar() {
   )
 
   const renderImageThumbs = () => {
+    if (inputImages.length > 4 && !imageThumbsExpanded) {
+      const stackImages = inputImages.slice(0, 3)
+      const allModeUnavailable = inputImages.length > MAX_ALL_REFERENCE_IMAGES
+      return (
+        <div ref={imagesRef} className="mb-3 flex h-[60px] items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setImageThumbsExpanded(true)}
+            className="group flex min-w-0 items-center gap-3 rounded-xl px-1 py-1 text-left transition-colors hover:bg-gray-100/70 dark:hover:bg-white/[0.05]"
+            title={`展开管理全部 ${inputImages.length} 张参考图`}
+          >
+            <span className="relative block h-[54px] w-[82px] shrink-0">
+              {stackImages.map((image, index) => {
+                const src = maskDraft?.targetImageId === image.id && maskPreviewUrl ? maskPreviewUrl : image.dataUrl
+                const className = "absolute top-1 h-[48px] w-[48px] rounded-lg border-2 border-white bg-gray-100 object-cover shadow-md dark:border-gray-800 dark:bg-gray-700"
+                const style = { left: `${index * 13}px`, transform: `rotate(${(index - 1) * 5}deg)`, zIndex: index + 1 }
+                return src
+                  ? <img key={image.id} src={src} className={className} style={style} alt="" />
+                  : <span key={image.id} className={className} style={style} />
+              })}
+              <span className="absolute bottom-0 right-0 z-10 flex h-7 min-w-7 items-center justify-center rounded-full bg-gray-800 px-1.5 text-[10px] font-semibold text-white shadow-md dark:bg-gray-600">
+                {inputImages.length}
+              </span>
+            </span>
+            <span className="hidden min-w-0 sm:block">
+              <span className="block truncate text-xs font-medium text-gray-700 dark:text-gray-200">{inputImages.length} 张参考图</span>
+              <span className="block text-[10px] text-gray-400 dark:text-gray-500">点击展开管理</span>
+            </span>
+          </button>
+          <div className="ml-auto flex shrink-0 rounded-lg bg-gray-100 p-0.5 dark:bg-white/[0.06]">
+            <button
+              type="button"
+              onClick={() => setParams({ reference_mode: 'cycle' })}
+              aria-pressed={params.reference_mode !== 'all'}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode !== 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
+            >
+              逐张参考
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (allModeUnavailable) {
+                  showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片`, 'error')
+                  return
+                }
+                setParams({ reference_mode: 'all' })
+              }}
+              aria-disabled={allModeUnavailable}
+              aria-pressed={params.reference_mode === 'all'}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : allModeUnavailable ? 'cursor-not-allowed text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}
+              title={allModeUnavailable ? `同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片` : '每个生成请求同时携带全部参考图'}
+            >
+              同时参考全部
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={atImageLimit}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xl leading-none text-white shadow-md transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-gray-600 dark:hover:bg-gray-500"
+            title={atImageLimit ? `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张）` : '继续添加参考图'}
+            aria-label="继续添加参考图"
+          >
+            +
+          </button>
+        </div>
+      )
+    }
+
     return (
       <div ref={imagesRef}>
+        {inputImages.length > 4 && (
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setImageThumbsExpanded(false)}
+              className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              收起参考图
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
@@ -2289,6 +2383,43 @@ export default function InputBar() {
           </div>,
           document.body,
         )}
+      </div>
+    )
+  }
+
+  const renderReferenceModeControl = () => {
+    const imageCount = inputImageFolder?.imageIds.length ?? inputImages.length
+    if (imageCount === 0) return null
+    const allModeUnavailable = imageCount > MAX_ALL_REFERENCE_IMAGES
+    return (
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">参考方式</span>
+        <div className="flex rounded-lg bg-gray-100 p-0.5 dark:bg-white/[0.06]">
+          <button
+            type="button"
+            onClick={() => setParams({ reference_mode: 'cycle' })}
+            aria-pressed={params.reference_mode !== 'all'}
+            className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode !== 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
+          >
+            逐张参考
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (allModeUnavailable) {
+                showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片`, 'error')
+                return
+              }
+              setParams({ reference_mode: 'all' })
+            }}
+            aria-disabled={allModeUnavailable}
+            aria-pressed={params.reference_mode === 'all'}
+            className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : allModeUnavailable ? 'cursor-not-allowed text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}
+            title={allModeUnavailable ? `同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片` : '每个生成请求同时携带全部参考图'}
+          >
+            同时参考全部
+          </button>
+        </div>
       </div>
     )
   }
@@ -2501,7 +2632,7 @@ export default function InputBar() {
             <div className="text-center">
               {atImageLimit ? (
                 <>
-                  <p className="text-lg font-semibold text-red-500">已达上限 {API_MAX_IMAGES} 张</p>
+                  <p className="text-lg font-semibold text-red-500">已达上限 {MAX_DIRECT_INPUT_IMAGES} 张</p>
                   <p className="text-sm text-gray-400 mt-1">请先移除部分参考图后再添加</p>
                 </>
               ) : (
@@ -2765,6 +2896,8 @@ export default function InputBar() {
               renderImageThumbs()
             )
           )}
+
+          {!(inputImages.length > 4 && !imageThumbsExpanded) && renderReferenceModeControl()}
 
           {/* 输入框 */}
           <div className="relative grid">

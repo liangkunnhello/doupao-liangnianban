@@ -287,8 +287,7 @@ export interface AssistantActionPreferences {
   customSkills: AssistantCustomSkill[]
   /** Override layers for built-in skills; empty means all built-ins use defaults. */
   skillOverrides: AssistantSkillOverride[]
-  /** Per-skill settings for built-in skills. Always present after normalization
-   *  (only the two variable skills carry meaningful settings). */
+  /** Editable variable-output settings for every built-in skill. Always present after normalization. */
   builtInSkillSettings: BuiltInSkillSettings
 }
 
@@ -355,9 +354,8 @@ export interface WordDeriveActionSettings {
 
 export type SuperDeriveActionSettings = WordDeriveActionSettings
 
-/** Per-skill settings for 超级衍生. The runner reads these before the skill's
- *  own defaults and before any legacy global word-derive fallback. */
-export interface SuperDeriveSkillSettings {
+/** Editable variable-output settings shared by every built-in skill. */
+export interface BuiltInVisualSkillSettings {
   wordEntries: WordEntryConfig
   autoSave: boolean
   applyMode: 'replace' | 'append'
@@ -365,18 +363,13 @@ export interface SuperDeriveSkillSettings {
   targetGroupId: string | null
 }
 
-/** Per-skill settings for 赌狗模式. */
-export interface WildDeriveSkillSettings {
-  wordEntries: WordEntryConfig
-  autoSave: boolean
-  applyMode: 'replace' | 'append'
-  targetGroupMode: WordDeriveTargetGroupMode
-  targetGroupId: string | null
-}
+export type SuperDeriveSkillSettings = BuiltInVisualSkillSettings
+export type WildDeriveSkillSettings = BuiltInVisualSkillSettings
 
-/** Per-skill settings keyed by built-in skill id. Only the two variable skills
- *  carry settings; the other two default skills have no run-time parameters. */
+/** Per-skill settings keyed by every built-in skill id. */
 export interface BuiltInSkillSettings {
+  'prompt-optimize': BuiltInVisualSkillSettings
+  'image-describe': BuiltInVisualSkillSettings
   'super-derive': SuperDeriveSkillSettings
   'wild-derive': WildDeriveSkillSettings
 }

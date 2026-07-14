@@ -7,11 +7,13 @@ import type {
   ApiMode,
   ApiProfile,
   AppSettings,
+  RemoteGenerationProvider,
   AppMode,
   BatchItemError,
   BatchItemStatus,
   TaskProgressStage,
   TaskParams,
+  TaskStatus,
   InputImage,
   InputImageFolder,
   MaskDraft,
@@ -74,11 +76,42 @@ import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { IMAGE_FETCH_CORS_HINT, isRetryableError, runWithConcurrencyAndRetry } from './lib/imageApiShared'
+import { getDataUrlDecodedByteSize, IMAGE_FETCH_CORS_HINT, isRetryableError, runWithConcurrencyAndRetry } from './lib/imageApiShared'
+import {
+  formatInputImageLimitBytes,
+  MAX_ALL_REFERENCE_IMAGES,
+  MAX_ALL_REFERENCE_PAYLOAD_BYTES,
+  MAX_DIRECT_INPUT_IMAGES,
+  shouldCycleReferenceImages,
+} from './lib/inputImageLimits'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib/imagePostprocess'
+import {
+  fingerprintImage,
+} from './lib/imageFingerprint'
+import {
+  applyProviderResult,
+  applyRemoteRequestSubmitted,
+  applyRequestFailure,
+  classifyGenerationError,
+  classifyImageAgainstState,
+  computeSeed,
+  createGenerationPolicy,
+  createInitialGenerationState,
+  getBatchCompletion,
+  getRecoverableRequests,
+  markExhaustedSlots,
+  planNextRequests,
+  computeBackoffDelay,
+  type GenerationPolicy,
+  type GenerationState,
+  type ImageProviderCapabilities,
+  type PlannedRequest,
+  type SlotAssignment,
+  type ImageFingerprintLike,
+} from './lib/imageBatchOrchestrator'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
@@ -2153,6 +2186,7 @@ export const useStore = create<AppState>()(
       addInputImage: (img) =>
         set((s) => {
           if (s.inputImages.find((i) => i.id === img.id)) return s
+          if (s.inputImages.length >= MAX_DIRECT_INPUT_IMAGES) return s
           return syncActiveInputDraft(s, { inputImages: [...s.inputImages, img] })
         }),
       replaceInputImage: (idx, img) => {
@@ -2196,7 +2230,7 @@ export const useStore = create<AppState>()(
         }),
       setInputImages: (imgs, options) =>
         set((s) => {
-          const inputImages = orderImagesWithMaskFirst(imgs, s.maskDraft?.targetImageId)
+          const inputImages = orderImagesWithMaskFirst(imgs.slice(0, MAX_DIRECT_INPUT_IMAGES), s.maskDraft?.targetImageId)
           const shouldClearMask =
             Boolean(s.maskDraft) && !inputImages.some((img) => img.id === s.maskDraft?.targetImageId)
           return syncActiveInputDraft(s, {
@@ -3721,16 +3755,40 @@ function mapActualParamsByImage(outputIds: string[], paramsList: Array<Partial<T
   return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
 }
 
+export interface PreparedGeneratedImage {
+  dataUrl: string
+  actualParams?: Partial<TaskParams>
+}
+
+/**
+ * 预处理（后处理）但不写入存储。
+ * 拆分自 {@link processAndStoreGeneratedImage}，用于先校验 / 去重，再决定是否 commit。
+ */
+async function prepareGeneratedImage(
+  dataUrl: string,
+  params: TaskParams,
+  originalActualParams?: Partial<TaskParams>,
+): Promise<PreparedGeneratedImage> {
+  const processed = await postprocessGeneratedImage(dataUrl, params)
+  const actualParams = mergePostprocessedActualParams(originalActualParams, processed.actualParams)
+  return { dataUrl: processed.dataUrl, actualParams }
+}
+
+/** 仅在校验通过（非重复）后调用：写入 IndexedDB（及内存缓存）。返回 imageId。 */
+async function commitGeneratedImage(prepared: PreparedGeneratedImage): Promise<string> {
+  const imgId = await storeImage(prepared.dataUrl, 'generated')
+  cacheImage(imgId, prepared.dataUrl)
+  return imgId
+}
+
 async function processAndStoreGeneratedImage(
   dataUrl: string,
   params: TaskParams,
   originalActualParams?: Partial<TaskParams>,
 ): Promise<{ id: string; dataUrl: string; actualParams?: Partial<TaskParams> }> {
-  const processed = await postprocessGeneratedImage(dataUrl, params)
-  const actualParams = mergePostprocessedActualParams(originalActualParams, processed.actualParams)
-  const imgId = await storeImage(processed.dataUrl, 'generated')
-  cacheImage(imgId, processed.dataUrl)
-  return { id: imgId, dataUrl: processed.dataUrl, actualParams }
+  const prepared = await prepareGeneratedImage(dataUrl, params, originalActualParams)
+  const id = await commitGeneratedImage(prepared)
+  return { id, dataUrl: prepared.dataUrl, actualParams: prepared.actualParams }
 }
 
 async function readImageSizeParam(dataUrl: string): Promise<Partial<TaskParams> | undefined> {
@@ -4052,6 +4110,16 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
+      task.status === 'running' &&
+      task.generationSlots?.length === Math.max(1, task.params.n || 1) &&
+      Array.isArray(task.remoteGenerationRequests)
+    ) {
+      // New orchestrated batches restore every persisted request and slot through
+      // executeTask. Do not also run the legacy single-request recovery below.
+      void executeTask(task.id)
+      continue
+    }
+    if (
       task.apiProvider === 'fal' &&
       task.falRequestId &&
       task.falEndpoint &&
@@ -4314,6 +4382,36 @@ export async function submitTaskWithData(
   if (!prompt.trim()) {
     showToast('请输入提示词', 'error')
     return
+  }
+
+  if (params.reference_mode === 'all') {
+    const inputCount = inputImageFolder?.imageIds.length ?? inputImages.length
+    if (inputCount > MAX_ALL_REFERENCE_IMAGES) {
+      showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片，请减少图片或切换为逐张参考`, 'error')
+      return
+    }
+
+    try {
+      const inputDataUrls = inputImageFolder
+        ? await Promise.all(inputImageFolder.imageIds.map(async (imageId) => {
+            const dataUrl = await ensureImageCached(imageId)
+            if (!dataUrl) throw new Error('输入图片已不存在')
+            return dataUrl
+          }))
+        : inputImages.map((image) => image.dataUrl)
+      const totalBytes = inputDataUrls.reduce((sum, dataUrl) => sum + getDataUrlDecodedByteSize(dataUrl), 0) +
+        (maskDraft ? getDataUrlDecodedByteSize(maskDraft.maskDataUrl) : 0)
+      if (totalBytes > MAX_ALL_REFERENCE_PAYLOAD_BYTES) {
+        showToast(
+          `同时参考全部的图片总大小不能超过 ${formatInputImageLimitBytes(MAX_ALL_REFERENCE_PAYLOAD_BYTES)}，请压缩图片、减少图片或切换为逐张参考`,
+          'error',
+        )
+        return
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error')
+      return
+    }
   }
 
   let orderedInputImages = inputImages
@@ -6244,7 +6342,7 @@ async function executeTask(taskId: string) {
     }
 
     const n = task.params.n > 0 ? task.params.n : 1
-    const useFolderMode = task.inputImageIds.length > 0 && n > 1
+    const useFolderMode = shouldCycleReferenceImages(task.params.reference_mode, task.inputImageIds.length, n)
     const variableResolver = { wordLibraryEntries: useStore.getState().wordLibraryEntries.filter((e) => e.deletedAt == null) }
 
     const maxConcurrent = normalizeMaxConcurrent(activeProfile.maxConcurrent)
@@ -6429,173 +6527,458 @@ async function executeTask(taskId: string) {
       }
     }
 
-    if (useFolderMode) {
-      const imageCount = task.inputImageIds.length
-      const folderItems = Array.from({ length: n }, (_, i) => i)
-      const result = await executeInBatches(folderItems, async (_, i) => {
-        const imgId = task.inputImageIds[i % imageCount]
-        const singleDataUrl = await ensureImageCached(imgId)
-        if (!singleDataUrl) throw new Error('输入图片已不存在')
-        return callImageApi({
-          settings: requestSettings,
-          prompt: replaceImageMentionsForApi(task.prompt, 1, undefined, variableResolver),
-          params: { ...task.params, n: 1 },
-          inputImageDataUrls: [singleDataUrl],
-          maskDataUrl,
-          onFalRequestEnqueued: (request) => {
-            falRequestInfo = request
-            updateTaskProgress(taskId, 'relay-received')
-            updateTaskInStore(taskId, {
-              falRequestId: request.requestId,
-              falEndpoint: request.endpoint,
-              falRecoverable: false,
-            })
-          },
-          onCustomTaskEnqueued: (request) => {
-            customTaskInfo = request
-            updateTaskProgress(taskId, 'relay-received')
-            updateTaskInStore(taskId, {
-              customTaskId: request.taskId,
-              customRecoverable: false,
-            })
-          },
-          onPartialImage: (partial) => {
-            updateTaskProgress(taskId, 'previewing')
-            useStore.getState().setTaskStreamPreview(taskId, partial.image, i)
-            void persistTaskStreamPartialImage(taskId, partial.image)
-            scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
-          },
-        })
-      })
-
-      const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
-      if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') {
-        useStore.getState().setTaskStreamPreview(taskId)
-        return
+    /**
+     * 多图（n>1）的编排执行：使用纯函数编排器保证数量、去重与补偿。
+     * - 按供应商能力拆分首轮请求（fal 每请求最多 4 张，OpenAI 兼容每请求 1 张）。
+     * - 欠交付 / 完全重复 -> 自动创建单张补偿请求（n=1）。
+     * - 每张图先预处理 + 指纹校验，确认非重复后才 commit（只写入一次）。
+     * - 每个远端请求独立持久化 request id，支持崩溃后恢复。
+     * 返回与 CallApiResult 兼容的结构，复用下方既有的最终化逻辑。
+     */
+    async function executeOrchestratedBatch(): Promise<
+      CallApiResult & {
+        outputImages?: string[]
+        batchItemStatuses?: BatchItemStatus[]
+        batchItemErrors?: BatchItemError[]
+        status?: 'running' | 'done' | 'partial-failure' | 'error' | 'cancelled'
+        error?: string
       }
+    > {
+      if (!task) {
+        return {
+          images: [],
+          actualParams: { n: 0 },
+          actualParamsList: [],
+          revisedPrompts: [],
+          status: 'error' as const,
+          error: '任务不存在',
+        }
+      }
+      const isAsyncCustom = taskProvider !== 'fal' && isAsyncCustomProviderTask(requestSettings, taskProvider, inputDataUrls.length > 0)
+      const capabilities: ImageProviderCapabilities = {
+        maxImagesPerRequest: useFolderMode ? 1 : apiMaxN,
+        supportsSeed: taskProvider === 'fal',
+        supportsAsyncRecovery: taskProvider === 'fal' || isAsyncCustom,
+        supportsCancel: taskProvider === 'fal' || isAsyncCustom,
+      }
+      const policy: GenerationPolicy = createGenerationPolicy(n, {
+        maxConcurrent,
+        transientRetries: maxRetries,
+        replacementAttempts: 2,
+        rejectExactDuplicates: true,
+        rejectNearDuplicates: false,
+        nearDuplicateThreshold: 0,
+        capabilities,
+      })
+      const canResume = task.generationSlots?.length === n && Array.isArray(task.remoteGenerationRequests)
+      let state: GenerationState = canResume
+        ? {
+            requestedCount: n,
+            slots: task.generationSlots!.map((slot) => ({ ...slot })),
+            remoteRequests: task.remoteGenerationRequests!.map((request) => ({ ...request, slotIndexes: [...request.slotIndexes] })),
+            replacementCount: 0,
+            duplicateCount: 0,
+            nearDuplicateCount: 0,
+            providerFailureCount: 0,
+            status: 'running',
+          }
+        : createInitialGenerationState(n)
 
-      // 最终更新（outputImages 已在每轮追加，这里做最终收尾）
-      const outputIds = latestBeforeSuccess.outputImages || []
-      const isAsyncCustomTask = taskProvider !== 'fal' && taskProvider !== 'openai' && Boolean(customTaskInfo)
-      const finalActualParamsList = taskProvider === 'fal'
-        ? await resolveImageSizeParamsList(result.images, result.actualParamsList)
-        : isAsyncCustomTask
-        ? await readImageSizeParamsList(result.images)
-        : result.actualParamsList
-      const finalActualParams = (() => {
-        if (taskProvider === 'fal') return firstActualParams(finalActualParamsList)
-        if (isAsyncCustomTask) return firstActualParams(finalActualParamsList)
-        return { ...result.actualParams, n: outputIds.length }
-      })()
-      const shouldStoreRevisedPrompts = taskProvider !== 'fal' && !isAsyncCustomTask
-      const actualParamsByImage = mapActualParamsByImage(outputIds, finalActualParamsList)
-      const revisedPromptByImage = shouldStoreRevisedPrompts ? result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
-        const imgId = outputIds[index]
-        if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
-        return acc
-      }, {}) : undefined
-      const promptWasRevised = shouldStoreRevisedPrompts && result.revisedPrompts?.some(
-        (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== task.prompt.trim(),
-      )
-      const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
-      if (taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
-        if (promptWasRevised) {
-          showCodexCliPrompt()
-        } else if (!hasRevisedPromptValue) {
-          showCodexCliPrompt(false, '接口没有返回官方 API 会返回的部分信息')
+      // A renderer crash can happen after creating a local request record but before
+      // the provider returns its remote id. That request cannot be recovered, so make
+      // its slots eligible for a bounded replacement instead of leaving them in flight forever.
+      if (canResume) {
+        const unrecoverableIds = new Set(
+          state.remoteRequests
+            .filter((request) =>
+              (request.status === 'created' || request.status === 'submitted' || request.status === 'running') &&
+              !request.remoteRequestId,
+            )
+            .map((request) => request.id),
+        )
+        if (unrecoverableIds.size > 0) {
+          const affectedSlots = new Set(
+            state.remoteRequests
+              .filter((request) => unrecoverableIds.has(request.id))
+              .flatMap((request) => request.slotIndexes),
+          )
+          state = {
+            ...state,
+            remoteRequests: state.remoteRequests.map((request) =>
+              unrecoverableIds.has(request.id)
+                ? { ...request, status: 'failed' as const, error: '应用中断，未取得远端任务 ID', updatedAt: Date.now() }
+                : request,
+            ),
+            slots: state.slots.map((slot) =>
+              affectedSlots.has(slot.index) && slot.status !== 'done' && slot.status !== 'failed'
+                ? { ...slot, status: 'pending' as const }
+                : slot,
+            ),
+          }
         }
       }
 
-      // 更新任务
-      const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
-      if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') {
-        useStore.getState().setTaskStreamPreview(taskId)
-        return
-      }
-      const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
-      clearOpenAIWatchdogTimer(taskId)
-      useStore.getState().setTaskStreamPreview(taskId)
-      const hasPartialFailure = result.batchItemStatuses && result.batchItemErrors && result.batchItemErrors.length > 0
-      updateTaskProgress(taskId, 'saving')
-      updateTaskInStore(taskId, {
-        streamPartialImageIds: undefined,
-        rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
-        actualParams: finalActualParams,
-        actualParamsByImage,
-        revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
-        batchItemStatuses: result.batchItemStatuses,
-        batchItemErrors: result.batchItemErrors,
-        status: 'done',
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
-        falRecoverable: false,
-        customRecoverable: false,
-      })
-      void deleteUnreferencedImageIds(partialImageIdsToClean)
+      const persist = () =>
+        updateTaskInStore(taskId, {
+          generationSlots: state.slots.map((s) => ({ ...s })),
+          remoteGenerationRequests: state.remoteRequests.map((r) => ({ ...r })),
+        })
 
-      if (hasPartialFailure) {
-        const failCount = result.batchItemErrors!.length
-        const totalCount = result.batchItemStatuses!.length
-        useStore.getState().showToast(`生成完成，${totalCount - failCount}/${totalCount} 张成功`, 'info')
-        if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，${totalCount - failCount}/${totalCount} 张成功，${failCount} 张失败。`)
-      } else {
-        useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
-        if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `生成完成，共 ${outputIds.length} 张图片。`)
+      persist()
+
+      // 并发信号量
+      let activeCount = 0
+      const waitQueue: Array<() => void> = []
+      const acquire = async () => {
+        if (activeCount < maxConcurrent) {
+          activeCount++
+          return
+        }
+        await new Promise<void>((resolve) => waitQueue.push(resolve))
       }
-      void saveTaskMetaToLocalFS(task.id)
-      const currentMask = useStore.getState().maskDraft
-      if (
-        maskDataUrl &&
-        currentMask &&
-        currentMask.targetImageId === task.maskTargetImageId &&
-        currentMask.maskDataUrl === maskDataUrl
-      ) {
-        useStore.getState().clearMaskDraft()
+      const release = () => {
+        activeCount--
+        if (waitQueue.length > 0 && activeCount < maxConcurrent) {
+          activeCount++
+          waitQueue.shift()!()
+        }
       }
-      return
+      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+      const committed = new Map<
+        number,
+        { imgId: string; dataUrl: string; actualParams?: Partial<TaskParams>; revised?: string; rawUrl?: string }
+      >()
+
+      // Result processing mutates slot state and persists images. Serializing this
+      // critical section prevents two concurrently completed requests from accepting
+      // the same fingerprint before either one has committed it.
+      let resultCommitChain = Promise.resolve()
+      const withResultCommitLock = async <T,>(fn: () => Promise<T>): Promise<T> => {
+        const next = resultCommitChain.then(fn, fn)
+        resultCommitChain = next.then(() => undefined, () => undefined)
+        return next
+      }
+
+      for (const slot of state.slots) {
+        if (slot.status !== 'done' || !slot.outputImageId) continue
+        const dataUrl = await ensureImageCached(slot.outputImageId)
+        if (!dataUrl) continue
+        committed.set(slot.index, {
+          imgId: slot.outputImageId,
+          dataUrl,
+          actualParams: task.actualParamsByImage?.[slot.outputImageId],
+        })
+      }
+
+      const processResult = async (requestId: string, result: CallApiResult): Promise<GenerationState> => withResultCommitLock(async () => {
+        const request = state.remoteRequests.find((r) => r.id === requestId)
+        if (!request) return state
+        const candidates: Array<{
+          slotIndex: number
+          prepared: PreparedGeneratedImage
+          contentHash: string
+          perceptualHash?: string
+          revised?: string
+          rawUrl?: string
+        }> = []
+        const rejectedExact: number[] = []
+        const seen: ImageFingerprintLike[] = []
+        for (let i = 0; i < request.slotIndexes.length; i++) {
+          const slotIndex = request.slotIndexes[i]
+          const image = result.images[i]
+          if (!image) continue
+          const prepared = await prepareGeneratedImage(
+            image,
+            taskParams,
+            result.actualParamsList?.[i] ?? result.actualParams,
+          )
+          const fingerprint = await fingerprintImage(prepared.dataUrl)
+          const kind = classifyImageAgainstState(state, fingerprint.contentHash, fingerprint.perceptualHash, policy, seen)
+          if (kind === 'accepted') {
+            candidates.push({
+              slotIndex,
+              contentHash: fingerprint.contentHash,
+              perceptualHash: fingerprint.perceptualHash,
+              prepared,
+              revised: result.revisedPrompts?.[i],
+              rawUrl: result.rawImageUrls?.[i],
+            })
+            seen.push({ contentHash: fingerprint.contentHash, perceptualHash: fingerprint.perceptualHash })
+          } else if (kind === 'exact-duplicate') {
+            rejectedExact.push(slotIndex)
+          }
+        }
+
+        const assignments: SlotAssignment[] = []
+        const newlyCommittedIds: string[] = []
+        try {
+          for (const candidate of candidates) {
+            const imgId = await commitGeneratedImage(candidate.prepared)
+            newlyCommittedIds.push(imgId)
+            assignments.push({
+              slotIndex: candidate.slotIndex,
+              imageId: imgId,
+              contentHash: candidate.contentHash,
+              perceptualHash: candidate.perceptualHash,
+            })
+            committed.set(candidate.slotIndex, {
+              imgId,
+              dataUrl: candidate.prepared.dataUrl,
+              actualParams: candidate.prepared.actualParams,
+              revised: candidate.revised,
+              rawUrl: candidate.rawUrl,
+            })
+          }
+        } catch (err) {
+          await deleteUnreferencedImageIds(newlyCommittedIds)
+          for (const candidate of candidates) committed.delete(candidate.slotIndex)
+          throw err
+        }
+
+        state = applyProviderResult(
+          state,
+          requestId,
+          assignments,
+          rejectedExact.length ? { slotIndexes: rejectedExact, kind: 'exact-duplicate' } : undefined,
+        )
+        const current = useStore.getState().tasks.find((t) => t.id === taskId)
+        if (current && current.status === 'running') {
+          const outputImages = state.slots
+            .filter((slot) => slot.status === 'done' && slot.outputImageId)
+            .sort((a, b) => a.index - b.index)
+            .map((slot) => slot.outputImageId!)
+          updateTaskProgress(taskId, 'generating')
+          updateTaskInStore(taskId, { outputImages })
+          for (const assignment of assignments) {
+            void saveTaskImagesToLocalFS(taskId, [assignment.imageId], assignment.slotIndex)
+          }
+          scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
+        }
+        return state
+      })
+
+      const submitRequest = async (planned: PlannedRequest): Promise<void> => {
+        await acquire()
+        const requestId = genId()
+        try {
+          const provider: RemoteGenerationProvider =
+            taskProvider === 'fal' ? 'fal' : isAsyncCustom ? 'custom' : 'openai'
+          state = applyRemoteRequestSubmitted(state, planned, { id: requestId, provider })
+          persist()
+          const seed = capabilities.supportsSeed
+            ? computeSeed(taskId, planned.slotIndexes[0], planned.attempt)
+            : undefined
+          const requestInputDataUrls = useFolderMode
+            ? await Promise.all(planned.slotIndexes.map(async (slotIndex) => {
+                const imgId = task.inputImageIds[slotIndex % task.inputImageIds.length]
+                const dataUrl = await ensureImageCached(imgId)
+                if (!dataUrl) throw new Error('输入图片已不存在')
+                return dataUrl
+              }))
+            : inputDataUrls
+          const result = await retryWithBackoff(requestId, async () =>
+            callImageApi({
+              settings: requestSettings,
+              prompt: replaceImageMentionsForApi(task.prompt, requestInputDataUrls.length, undefined, variableResolver),
+              params: { ...taskParams, n: planned.count, ...(seed !== undefined ? { seed } : {}) },
+              inputImageDataUrls: requestInputDataUrls,
+              maskDataUrl,
+              onFalRequestEnqueued: (request) => {
+                state = applyRemoteRequestSubmitted(state, planned, {
+                  id: requestId,
+                  provider: 'fal',
+                  endpoint: request.endpoint,
+                  remoteRequestId: request.requestId,
+                })
+                persist()
+                falRequestInfo = request
+                updateTaskProgress(taskId, 'relay-received')
+                updateTaskInStore(taskId, {
+                  falRequestId: request.requestId,
+                  falEndpoint: request.endpoint,
+                  falRecoverable: false,
+                })
+              },
+              onCustomTaskEnqueued: (request) => {
+                state = applyRemoteRequestSubmitted(state, planned, {
+                  id: requestId,
+                  provider: 'custom',
+                  remoteRequestId: request.taskId,
+                })
+                persist()
+                customTaskInfo = request
+                updateTaskProgress(taskId, 'relay-received')
+                updateTaskInStore(taskId, {
+                  customTaskId: request.taskId,
+                  customRecoverable: false,
+                })
+              },
+              onPartialImage: (partial) => {
+                updateTaskProgress(taskId, 'previewing')
+                const baseIndex = planned.slotIndexes[0] + (partial.requestIndex ?? 0)
+                useStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
+                void persistTaskStreamPartialImage(taskId, partial.image)
+                scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
+              },
+            }),
+          )
+          state = await processResult(requestId, result)
+          persist()
+        } catch (err) {
+          const kind = classifyGenerationError(err, {
+            hasRemoteId: Boolean(state.remoteRequests.find((r) => r.id === requestId)?.remoteRequestId),
+            afterSubmitTimeout: err instanceof Error ? /timeout/i.test(err.message) : false,
+          })
+          state = applyRequestFailure(state, requestId, kind)
+          persist()
+        } finally {
+          release()
+        }
+      }
+
+      const retryWithBackoff = async (requestId: string, fn: () => Promise<CallApiResult>): Promise<CallApiResult> => {
+        let lastError: unknown
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          if (attempt > 0) {
+            const delayMs = computeBackoffDelay(attempt - 1)
+            release()
+            try {
+              await sleep(delayMs)
+            } finally {
+              await acquire()
+            }
+          }
+          try {
+            return await fn()
+          } catch (err) {
+            lastError = err
+            const hasRemoteId = Boolean(state.remoteRequests.find((request) => request.id === requestId)?.remoteRequestId)
+            const kind = classifyGenerationError(err, { hasRemoteId, afterSubmitTimeout: hasRemoteId })
+            // Once a queue provider has accepted a request, resubmitting would create
+            // an untracked duplicate. Let the outer failure path poll that request instead.
+            if (hasRemoteId) throw err
+            if (attempt < maxRetries && (kind === 'transient' || kind === 'rate-limit' || kind === 'result-missing')) {
+              continue
+            }
+            throw err
+          }
+        }
+        throw lastError
+      }
+
+      const recoverRequest = async (req: (typeof state.remoteRequests)[number]): Promise<void> => {
+        try {
+          let result: CallApiResult
+          if (req.provider === 'fal' && req.endpoint && req.remoteRequestId) {
+            result = await getFalQueuedImageResult(activeProfile, req.endpoint, req.remoteRequestId, taskParams)
+          } else if (req.provider === 'custom' && req.remoteRequestId) {
+            const customDef = getCustomProviderDefinition(requestSettings, task.apiProvider ?? activeProfile.provider)
+            if (!customDef) {
+              state = applyRequestFailure(state, req.id, 'invalid-input')
+              persist()
+              return
+            }
+            result = await getCustomQueuedImageResult(activeProfile, customDef, req.remoteRequestId, taskParams)
+          } else {
+            return
+          }
+          state = await processResult(req.id, result)
+          persist()
+        } catch (err) {
+          const kind = classifyGenerationError(err, { hasRemoteId: true, afterSubmitTimeout: true })
+          state = applyRequestFailure(state, req.id, kind)
+          persist()
+        }
+      }
+
+      let recoveryIterations = 0
+      const maxRecovery = maxRetries + 2
+      // 主循环：规划 -> 提交 -> 恢复，直到完成或进入 partial-failure
+      for (;;) {
+        const completion = getBatchCompletion(state, policy)
+        if (completion.status !== 'running') break
+        state = markExhaustedSlots(state, policy)
+        const afterMark = getBatchCompletion(state, policy)
+        if (afterMark.status !== 'running') break
+        const plannedList = planNextRequests(state, policy)
+        if (plannedList.length > 0) {
+          await Promise.all(plannedList.map((planned) => submitRequest(planned)))
+          persist()
+          continue
+        }
+        const recoverable = getRecoverableRequests(state)
+        if (recoverable.length === 0) break
+        if (recoveryIterations >= maxRecovery) {
+          // 恢复预算耗尽：硬失败该请求，并把被覆盖的槽位退回 pending，
+          // 使其能被当作补偿请求重新规划（若补偿预算也用尽，则由 markExhaustedSlots 标记失败）。
+          for (const req of recoverable) {
+            state = {
+              ...state,
+              remoteRequests: state.remoteRequests.map((r) =>
+                r.id === req.id
+                  ? { ...r, status: 'failed' as const, error: '恢复超时，放弃该远端请求', updatedAt: Date.now() }
+                  : r,
+              ),
+              slots: state.slots.map((s) =>
+                req.slotIndexes.includes(s.index) && s.status !== 'done' && s.status !== 'failed'
+                  ? { ...s, status: 'pending' as const }
+                  : s,
+              ),
+            }
+          }
+          persist()
+          continue
+        }
+        recoveryIterations++
+        for (const req of recoverable) await recoverRequest(req)
+      }
+
+      const doneSlots = state.slots.filter((s) => s.status === 'done').sort((a, b) => a.index - b.index)
+      const images = doneSlots.map((s) => committed.get(s.index)!.dataUrl)
+      //  race-free 的槽位级结果（并发提交不会互相覆盖），用于最终 outputImages。
+      const outputImages = doneSlots.map((s) => committed.get(s.index)!.imgId)
+      const actualParamsList = doneSlots.map((s) => committed.get(s.index)!.actualParams)
+      const revisedPrompts = doneSlots.map((s) => committed.get(s.index)!.revised)
+      const rawImageUrls = doneSlots
+        .map((s) => committed.get(s.index)!.rawUrl)
+        .filter((u): u is string => Boolean(u))
+      const batchItemStatuses: BatchItemStatus[] = state.slots.map((s) =>
+        s.status === 'failed' ? 'error' : 'done',
+      )
+      const batchItemErrors: BatchItemError[] = state.slots
+        .filter((s) => s.status === 'failed' && s.error)
+        .map((s) => ({ index: s.index, error: s.error! }))
+      const hasPartialFailure = batchItemErrors.length > 0
+      const finalCompletion = getBatchCompletion(state, policy)
+      return {
+        images,
+        outputImages,
+        actualParams: { ...firstActualParams(actualParamsList), n: images.length },
+        actualParamsList,
+        revisedPrompts,
+        ...(rawImageUrls.length ? { rawImageUrls } : {}),
+        // 始终输出槽位级状态，便于 UI 展示「生成中 X/N」「补齐 Y 张」等。
+        batchItemStatuses,
+        batchItemErrors,
+        status: finalCompletion.status,
+        ...(finalCompletion.status === 'error'
+          ? { error: state.error ?? '生成失败' }
+          : hasPartialFailure
+            ? { error: `${batchItemErrors.length} 张图片生成失败` }
+            : {}),
+      }
     }
 
-    let result: CallApiResult
+    let result: CallApiResult & {
+      status?: 'running' | 'done' | 'partial-failure' | 'error' | 'cancelled'
+      error?: string
+      outputImages?: string[]
+      batchItemStatuses?: BatchItemStatus[]
+      batchItemErrors?: BatchItemError[]
+    }
     if (n > 1) {
-      const requestN = Math.min(apiMaxN, n)
-      const batchCount = Math.ceil(n / requestN)
-      const batchItems = Array.from({ length: batchCount }, (_, i) => {
-        const remaining = n - i * requestN
-        return Math.min(requestN, remaining)
-      })
-      result = await executeInBatches(batchItems, async (currentN, batchIndex) => {
-        return callImageApi({
-          settings: requestSettings,
-          prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length, undefined, variableResolver),
-          params: { ...task.params, n: currentN },
-          inputImageDataUrls: inputDataUrls,
-          maskDataUrl,
-          onFalRequestEnqueued: (request) => {
-            falRequestInfo = request
-            updateTaskProgress(taskId, 'relay-received')
-            updateTaskInStore(taskId, {
-              falRequestId: request.requestId,
-              falEndpoint: request.endpoint,
-              falRecoverable: false,
-            })
-          },
-          onCustomTaskEnqueued: (request) => {
-            customTaskInfo = request
-            updateTaskProgress(taskId, 'relay-received')
-            updateTaskInStore(taskId, {
-              customTaskId: request.taskId,
-              customRecoverable: false,
-            })
-          },
-          onPartialImage: (partial) => {
-            updateTaskProgress(taskId, 'previewing')
-            const baseIndex = batchIndex * requestN + (partial.requestIndex ?? 0)
-            useStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
-            void persistTaskStreamPartialImage(taskId, partial.image)
-            scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
-          },
-        })
-      }, (currentN) => currentN)
+      result = await executeOrchestratedBatch()
     } else {
       result = await callImageApi({
         settings: requestSettings,
@@ -6636,7 +7019,11 @@ async function executeTask(taskId: string) {
     }
 
     // 存储输出图片（n>1 分批模式已在每轮追加，这里只需补充单张模式）
-    const outputIds: string[] = latestBeforeSuccess.outputImages || []
+    // 多图编排路径直接返回 race-free 的槽位级 outputImages；单张路径沿用 store 中已累积的 outputImages。
+    const outputIds: string[] =
+      result.outputImages && result.outputImages.length > 0
+        ? result.outputImages
+        : latestBeforeSuccess.outputImages || []
     let storedSingleActualParamsList: Array<Partial<TaskParams> | undefined> | undefined
     if (n === 1) {
       storedSingleActualParamsList = []
@@ -6687,6 +7074,9 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
     const hasPartialFailure = (result as any).batchItemStatuses && (result as any).batchItemErrors && (result as any).batchItemErrors.length > 0
+    // 编排批处理可能返回明确的失败/部分完成状态，避免伪装成成功。
+    const finalTaskStatus: TaskStatus =
+      result.status === 'error' ? 'error' : 'done'
     updateTaskProgress(taskId, 'saving')
     updateTaskInStore(taskId, {
       outputImages: outputIds,
@@ -6697,7 +7087,8 @@ async function executeTask(taskId: string) {
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
       batchItemStatuses: (result as any).batchItemStatuses,
       batchItemErrors: (result as any).batchItemErrors,
-      status: 'done',
+      status: finalTaskStatus,
+      ...(result.status === 'error' ? { error: result.error ?? '生成失败' } : { error: null }),
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
       falRecoverable: false,

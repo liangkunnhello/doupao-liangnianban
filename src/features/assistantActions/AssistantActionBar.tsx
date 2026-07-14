@@ -78,8 +78,6 @@ export type AssistantActionFeedbackState =
   | { type: 'error'; action: AssistantAction; message: string }
   | { type: 'success'; action: AssistantAction; result: AssistantActionResult }
 
-type PositionedAction = { action: AssistantAction; rect: DOMRect }
-
 export interface AssistantActionProgressPhase {
   id: string
   label: string
@@ -125,7 +123,7 @@ function phase(id: string, label: string, detail: string, indeterminate = false)
   return { id, label, detail, indeterminate }
 }
 
-function getAssistantProgressPhases(action: AssistantAction): AssistantActionProgressPhase[] {
+function getAssistantProgressPhases(action: AssistantAction, preferences: AssistantActionPreferences): AssistantActionProgressPhase[] {
   const phases = [
     phase('prepare-input', '准备输入', '读取当前提示词、参考图和技能设置。'),
     phase('request-model', '等待模型返回', '请求已发送，模型生成阶段无法提供精确百分比。', true),
@@ -133,7 +131,7 @@ function getAssistantProgressPhases(action: AssistantAction): AssistantActionPro
     phase('validate-result', '校验内容', '校验最终提示词与变量词条完整性。'),
     phase('organize-result', '整理结果', '整理可应用的提示词与词条。'),
   ]
-  if (!isVariableResultAction(action)) return phases
+  if (!isVariableResultAction(action, preferences)) return phases
   return [
     ...phases.slice(0, 4),
     phase('repair-variables', '补全变量词条', '当变量数量不足或提示词缺少占位符时自动修复。'),
@@ -141,12 +139,14 @@ function getAssistantProgressPhases(action: AssistantAction): AssistantActionPro
   ]
 }
 
-function isVariableResultAction(action: AssistantAction): boolean {
-  if (action.id === 'super-derive' || action.id === 'wild-derive') return true
+function isVariableResultAction(action: AssistantAction, preferences: AssistantActionPreferences): boolean {
+  if (action.id in preferences.builtInSkillSettings) {
+    return preferences.builtInSkillSettings[action.id as keyof typeof preferences.builtInSkillSettings].wordEntries.enabled
+  }
   return isCustomAssistantSkill(action) && Boolean(action.wordEntries?.enabled)
 }
 
-function createAssistantLoadingFeedback(action: AssistantAction): Extract<AssistantActionFeedbackState, { type: 'loading' }> {
+function createAssistantLoadingFeedback(action: AssistantAction, preferences: AssistantActionPreferences): Extract<AssistantActionFeedbackState, { type: 'loading' }> {
   const now = Date.now()
   return {
     type: 'loading',
@@ -154,7 +154,7 @@ function createAssistantLoadingFeedback(action: AssistantAction): Extract<Assist
     startedAt: now,
     updatedAt: now,
     phaseIndex: 0,
-    phases: getAssistantProgressPhases(action),
+    phases: getAssistantProgressPhases(action, preferences),
   }
 }
 
@@ -225,7 +225,6 @@ export default function AssistantActionBar({
   const recommendedActions = useMemo(() => getRecommendedAssistantActions(context, normalizedPreferences), [context, normalizedPreferences])
   const moreActions = useMemo(() => getMoreAssistantActions(context, normalizedPreferences), [context, normalizedPreferences])
   const visibleActions = recommendedActions
-  const [contextAction, setContextAction] = useState<PositionedAction | null>(null)
   const [settingsAction, setSettingsAction] = useState<AssistantAction | null>(null)
   const [editorState, setEditorState] = useState<{ mode: 'create' | 'edit'; skill: AssistantCustomSkill | null } | null>(null)
   const [hoveredSkill, setHoveredSkill] = useState<{ action: AssistantAction; rect: DOMRect } | null>(null)
@@ -252,11 +251,10 @@ export default function AssistantActionBar({
 
   const runActionWithSettings = async (action: AssistantAction) => {
     if (isBusy || !isAssistantActionRunnable(action, context)) return
-    setContextAction(null)
     setHoveredSkill(null)
     const controller = new AbortController()
     runningControllerRef.current = controller
-    let loadingFeedback = createAssistantLoadingFeedback(action)
+    let loadingFeedback = createAssistantLoadingFeedback(action, normalizedPreferences)
     onFeedbackChange(loadingFeedback)
     try {
       const result = await runAssistantAction(action.id, context, {
@@ -338,6 +336,12 @@ export default function AssistantActionBar({
               className="relative shrink-0"
               onMouseEnter={(event) => setHoveredSkill({ action, rect: (event.currentTarget as HTMLElement).getBoundingClientRect() })}
               onMouseLeave={() => setHoveredSkill(null)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                if (isBusy) return
+                setHoveredSkill(null)
+                openSettings(action)
+              }}
             >
               <button
                 type="button"
@@ -348,7 +352,7 @@ export default function AssistantActionBar({
                     ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-950 dark:text-blue-200'
                     : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
                 }`}
-                title={!isAssistantActionRunnable(action, context) ? '当前输入不满足该技能要求' : (action.instruction || action.name)}
+                title={!isAssistantActionRunnable(action, context) ? '当前输入不满足该技能要求；右键可打开设置' : `${action.instruction || action.name}；右键打开设置`}
               >
                 {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
                 {action.name}
@@ -504,7 +508,15 @@ function AssistantActionSettingsPanel({
       )
     case 'prompt-optimize':
     case 'image-describe':
-      return <ReadOnlySkillInfo action={action} onClose={onClose} />
+      return (
+        <DefaultVariableSettingsPanel
+          action={action}
+          preferences={preferences}
+          wordLibraryGroups={wordLibraryGroups}
+          onChange={onChange}
+          onClose={onClose}
+        />
+      )
     default:
       return (
         <CustomSkillSettingsPanel action={action} preferences={preferences} onChange={onChange} onClose={onClose} />
@@ -542,17 +554,18 @@ function SuperDeriveSettingsPanel({
   return (
     <SettingsPanelShell title="超级衍生" onClose={onClose}>
       <div className="space-y-3">
-        <Field label="每类词条数量">
-          <SegmentedControl
+        <Field label="变量选择">
+          <VariableSelector
+            variables={settings.wordEntries.categories}
+            options={SUPER_DERIVE_CATEGORIES}
+            onChange={(categories) => update({ wordEntries: { ...settings.wordEntries, categories } })}
+          />
+        </Field>
+        <Field label="变量词数量">
+          <VariableCountControl
             value={String(settings.wordEntries.count)}
             options={['4', '8', '12']}
             onChange={(value) => update({ wordEntries: { ...settings.wordEntries, count: Number(value) } })}
-          />
-        </Field>
-        <Field label="词条分类">
-          <CategoryEditor
-            categories={settings.wordEntries.categories}
-            onChange={(categories) => update({ wordEntries: { ...settings.wordEntries, categories } })}
           />
         </Field>
         <SkillToggleRow label="自动保存词条" value={settings.autoSave} onChange={(autoSave) => update({ autoSave })} />
@@ -583,16 +596,22 @@ function WildDeriveSettingsPanel({
   return (
     <SettingsPanelShell title="赌狗模式" onClose={onClose}>
       <div className="space-y-3">
-        <Field label="创意方向数量">
-          <SegmentedControl
+        <Field label="变量选择">
+          <VariableSelector
+            variables={settings.wordEntries.categories}
+            options={['创意方向']}
+            multiple={false}
+            onChange={(categories) => update({ wordEntries: { ...settings.wordEntries, categories } })}
+          />
+        </Field>
+        <Field label="变量词数量">
+          <VariableCountControl
             value={String(settings.wordEntries.count)}
             options={['8', '12', '20']}
             onChange={(value) => update({ wordEntries: { ...settings.wordEntries, count: Number(value) } })}
           />
         </Field>
-        <Field label="创意方向分类">
-          <div className="text-xs text-gray-400">固定为「创意方向」，采用方向套装策略。</div>
-        </Field>
+        <div className="text-xs text-gray-400">采用方向套装策略，每个变量词都是完整、连贯的创意方向。</div>
         <SkillToggleRow label="自动保存词条" value={settings.autoSave} onChange={(autoSave) => update({ autoSave })} />
         <SaveLocationField
           targetGroupMode={settings.targetGroupMode}
@@ -605,29 +624,56 @@ function WildDeriveSettingsPanel({
   )
 }
 
-function ReadOnlySkillInfo({ action, onClose }: { action: AssistantAction; onClose: () => void }) {
-  const info =
-    action.id === 'prompt-optimize'
-      ? [
-          ['输入', '文字，可附参考图片'],
-          ['变化强度', '受控'],
-          ['词条', '关闭'],
-        ]
-      : [
-          ['输入', '图片，可附补充文字'],
-          ['变化强度', '忠实'],
-          ['词条', '关闭'],
-        ]
+function DefaultVariableSettingsPanel({
+  action,
+  preferences,
+  wordLibraryGroups,
+  onChange,
+  onClose,
+}: {
+  action: AssistantAction
+  preferences: AssistantActionPreferences
+  wordLibraryGroups: WordLibraryGroup[]
+  onChange: (next: AssistantActionPreferences) => void
+  onClose: () => void
+}) {
+  const skillId = action.id as 'prompt-optimize' | 'image-describe'
+  const settings = preferences.builtInSkillSettings[skillId]
+  const update = (patch: Partial<typeof settings>) => onChange(updateBuiltInSkillSettings(preferences, skillId, patch))
+  const updateWordEntries = (patch: Partial<WordEntryConfig>) => update({
+    wordEntries: { ...settings.wordEntries, ...patch },
+  })
+
   return (
     <SettingsPanelShell title={action.name} onClose={onClose}>
-      <ul className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
-        {info.map(([label, value]) => (
-          <li key={label}>
-            <span className="text-gray-400">{label}：</span>
-            {value}
-          </li>
-        ))}
-      </ul>
+      <div className="space-y-3">
+        <SkillToggleRow label="生成变量词" value={settings.wordEntries.enabled} onChange={(enabled) => updateWordEntries({ enabled })} />
+        {settings.wordEntries.enabled && (
+          <>
+            <Field label="变量选择">
+              <VariableSelector
+                variables={settings.wordEntries.categories}
+                options={SUPER_DERIVE_CATEGORIES}
+                onChange={(categories) => updateWordEntries({ categories })}
+              />
+            </Field>
+            <Field label="变量词数量">
+              <VariableCountControl
+                value={String(settings.wordEntries.count)}
+                options={['4', '8', '12']}
+                onChange={(value) => updateWordEntries({ count: Number(value) })}
+              />
+            </Field>
+            <SkillToggleRow label="自动保存词条" value={settings.autoSave} onChange={(autoSave) => update({ autoSave })} />
+            <SaveLocationField
+              targetGroupMode={settings.targetGroupMode}
+              targetGroupId={settings.targetGroupId}
+              wordLibraryGroups={wordLibraryGroups}
+              onChange={(patch) => update(patch)}
+            />
+          </>
+        )}
+      </div>
     </SettingsPanelShell>
   )
 }
@@ -732,44 +778,101 @@ function SkillToggleRow({ label, hint, value, onChange }: { label: string; hint?
   )
 }
 
-function CategoryEditor({ categories, onChange }: { categories: string[]; onChange: (categories: string[]) => void }) {
+function VariableCountControl({
+  value,
+  options,
+  onChange,
+}: {
+  value: string
+  options: string[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <SegmentedControl value={value} options={options} onChange={onChange} />
+      <input
+        type="number"
+        min={1}
+        max={50}
+        value={value}
+        aria-label="自定义变量词数量"
+        onChange={(event) => {
+          const count = Number(event.target.value)
+          if (Number.isFinite(count) && count >= 1 && count <= 50) onChange(String(Math.round(count)))
+        }}
+        className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+      />
+    </div>
+  )
+}
+
+function VariableSelector({
+  variables,
+  options,
+  multiple = true,
+  onChange,
+}: {
+  variables: string[]
+  options: string[]
+  multiple?: boolean
+  onChange: (variables: string[]) => void
+}) {
   const [draft, setDraft] = useState('')
+  const availableVariables = Array.from(new Set([...options, ...variables]))
+  const addCustomVariable = () => {
+    const variable = draft.trim()
+    if (!variable || variables.includes(variable)) return
+    onChange(multiple ? [...variables, variable].slice(0, 12) : [variable])
+    setDraft('')
+  }
+
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
-        {categories.map((category) => (
-          <span
-            key={category}
-            className="flex items-center gap-1 rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-white/[0.06] dark:text-gray-300"
-          >
-            {category}
-            <button type="button" onClick={() => onChange(categories.filter((item) => item !== category))} className="text-gray-400 hover:text-red-500">
-              <X className="h-3 w-3" />
+        {availableVariables.map((variable) => {
+          const selected = variables.includes(variable)
+          return (
+            <button
+              key={variable}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => {
+                if (selected) {
+                  if (variables.length > 1) onChange(variables.filter((item) => item !== variable))
+                  return
+                }
+                onChange(multiple ? [...variables, variable].slice(0, 12) : [variable])
+              }}
+              className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${
+                selected
+                  ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300'
+                  : 'border-gray-200 text-gray-500 dark:border-white/[0.08] dark:text-gray-400'
+              }`}
+            >
+              {selected && <Check className="h-3 w-3" />}
+              {variable}
             </button>
-          </span>
-        ))}
+          )
+        })}
       </div>
       <div className="mt-1.5 flex gap-1.5">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="新增分类"
+          placeholder="输入自定义变量"
+          aria-label="自定义变量"
           className="flex-1 rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && draft.trim()) {
-              onChange([...categories, draft.trim()])
-              setDraft('')
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              addCustomVariable()
             }
           }}
         />
         <button
           type="button"
-          onClick={() => {
-            if (draft.trim()) {
-              onChange([...categories, draft.trim()])
-              setDraft('')
-            }
-          }}
+          onClick={addCustomVariable}
+          disabled={!draft.trim() || variables.includes(draft.trim())}
           className="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-500 dark:border-white/[0.08]"
         >
           添加
@@ -1030,7 +1133,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
                 />
               </Field>
               <Field label="分类列表">
-                <CategoryEditor categories={value.wordEntries.categories} onChange={(categories) => updateWordEntries({ categories })} />
+                <VariableSelector variables={value.wordEntries.categories} options={[]} onChange={(categories) => updateWordEntries({ categories })} />
               </Field>
             </>
           )}

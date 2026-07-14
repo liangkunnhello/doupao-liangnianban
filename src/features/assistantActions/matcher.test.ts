@@ -105,6 +105,7 @@ describe('effective skill resolution', () => {
   it('per-skill settings override the skill default word config', () => {
     const prefs = normalizeAssistantActionPreferences({
       builtInSkillSettings: {
+        ...getDefaultBuiltInSkillSettings(),
         'super-derive': {
           wordEntries: { enabled: true, count: 4, categories: ['主视觉主体'], strategy: 'atomic' },
           autoSave: true,
@@ -121,9 +122,29 @@ describe('effective skill resolution', () => {
     expect(word?.categories).toEqual(['主视觉主体'])
   })
 
-  it('locks wild-derive to its direction-pack contract and restores empty super categories', () => {
+  it('allows non-variable built-ins to enable a custom variable configuration', () => {
+    const defaults = getDefaultBuiltInSkillSettings()
     const prefs = normalizeAssistantActionPreferences({
       builtInSkillSettings: {
+        ...defaults,
+        'image-describe': {
+          ...defaults['image-describe'],
+          wordEntries: { enabled: true, count: 6, categories: ['镜头语言'], strategy: 'atomic' },
+        },
+      },
+    })
+    const skill = getResolvedBuiltInActions(prefs).find((action) => action.id === 'image-describe')!
+    expect(resolveWordConfig(skill, prefs)).toMatchObject({
+      enabled: true,
+      count: 6,
+      categories: ['镜头语言'],
+    })
+  })
+
+  it('locks wild-derive to its direction-pack contract, preserves its variable, and restores empty super categories', () => {
+    const prefs = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        ...getDefaultBuiltInSkillSettings(),
         'super-derive': {
           wordEntries: { enabled: false, count: 4, categories: [], strategy: 'direction-pack' },
           autoSave: true, applyMode: 'replace', targetGroupMode: 'new', targetGroupId: null,
@@ -136,7 +157,7 @@ describe('effective skill resolution', () => {
     })
     expect(prefs.builtInSkillSettings['super-derive'].wordEntries).toMatchObject({ enabled: true, strategy: 'atomic' })
     expect(prefs.builtInSkillSettings['super-derive'].wordEntries.categories.length).toBeGreaterThan(0)
-    expect(prefs.builtInSkillSettings['wild-derive'].wordEntries).toMatchObject({ enabled: true, categories: ['创意方向'], strategy: 'direction-pack' })
+    expect(prefs.builtInSkillSettings['wild-derive'].wordEntries).toMatchObject({ enabled: true, categories: ['任意分类'], strategy: 'direction-pack' })
   })
 
   it('keeps the existing custom skill identity and boundary rules on edit', () => {

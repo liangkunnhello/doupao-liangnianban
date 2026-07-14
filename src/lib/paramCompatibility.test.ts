@@ -40,6 +40,18 @@ describe('parameter compatibility', () => {
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 4 }, settings).n).toBe(4)
   })
 
+  it('keeps all-reference mode and defaults legacy values to per-image mode', () => {
+    const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key' })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [openAIProfile],
+      activeProfileId: openAIProfile.id,
+    })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, reference_mode: 'all' }, settings).reference_mode).toBe('all')
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, reference_mode: undefined } as any, settings).reference_mode).toBe('cycle')
+  })
+
   it('only replaces fal.ai auto size in text-to-image mode', () => {
     const falProfile = createDefaultFalProfile({ apiKey: 'fal-key' })
     const settings = normalizeSettings({

@@ -130,6 +130,7 @@ describe('assistant runner', () => {
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const prefs = normalizeAssistantActionPreferences({
       builtInSkillSettings: {
+        ...getDefaultBuiltInSkillSettings(),
         'super-derive': {
           wordEntries: { enabled: true, count: 3, categories: ['主视觉主体'], strategy: 'atomic' },
           autoSave: true,

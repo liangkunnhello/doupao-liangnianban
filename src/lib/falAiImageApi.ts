@@ -64,6 +64,10 @@ async function createFalRequestInput(opts: CallApiOptions): Promise<Record<strin
     input.mask_url = opts.maskDataUrl
   }
 
+  if (typeof opts.params.seed === 'number' && Number.isFinite(opts.params.seed)) {
+    input.seed = Math.trunc(opts.params.seed)
+  }
+
   return input
 }
 

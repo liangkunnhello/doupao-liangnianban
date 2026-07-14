@@ -16,6 +16,7 @@ export function normalizeParamsForSettings(
   const activeProfile = getActiveApiProfile(settings)
   const nextParams: TaskParams = {
     ...params,
+    reference_mode: params.reference_mode === 'all' ? 'all' : 'cycle',
     size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
     n: Math.max(1, params.n || DEFAULT_PARAMS.n),
   }

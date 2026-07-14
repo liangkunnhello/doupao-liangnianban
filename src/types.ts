@@ -150,6 +150,7 @@ export const DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE = [
 ].join('\n')
 
 export interface TaskParams {
+  reference_mode: 'cycle' | 'all'
   size: string
   quality: 'auto' | 'low' | 'medium' | 'high'
   output_format: 'png' | 'jpeg' | 'webp'
@@ -161,9 +162,12 @@ export interface TaskParams {
   postprocess_max_size_kb: number | null
   moderation: 'auto' | 'low'
   n: number
+  /** 稳定且每槽位不同的 seed（仅支持的供应商如 fal 使用；不修改用户 prompt） */
+  seed?: number
 }
 
 export const DEFAULT_PARAMS: TaskParams = {
+  reference_mode: 'cycle',
   size: 'auto',
   quality: 'auto',
   output_format: 'png',
@@ -223,6 +227,62 @@ export interface BatchItemError {
   error: string
 }
 
+// ===== 批量生成编排（槽位 + 远端请求） =====
+// 以下类型用于替换旧的"请求 N 张"语义：编排器负责数量、恢复和去重，
+// 供应商适配器只负责提交、查询、取消和解析结果。
+
+export type GenerationSlotStatus =
+  | 'pending'
+  | 'submitted'
+  | 'running'
+  | 'validating'
+  | 'done'
+  | 'failed'
+
+export interface GenerationSlot {
+  index: number
+  status: GenerationSlotStatus
+  /** 该槽位被调度的次数（首轮计 1，每次补偿 +1） */
+  attempts: number
+  /** commitGeneratedImage 之后回填的图片存储 id */
+  outputImageId?: string
+  /** 通过指纹校验后回填的 SHA-256 内容哈希 */
+  contentHash?: string
+  /** 感知哈希（pHash），用于近似重复检测 */
+  perceptualHash?: string
+  /** 失败原因（status === 'failed' 时） */
+  error?: string
+}
+
+export type RemoteGenerationProvider = 'openai' | 'fal' | 'custom'
+
+export type RemoteGenerationRequestStatus =
+  | 'created'
+  | 'submitted'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface RemoteGenerationRequest {
+  id: string
+  provider: RemoteGenerationProvider
+  endpoint?: string
+  /** 供应商侧 request id（如 fal requestId / 自定义 taskId） */
+  remoteRequestId?: string
+  /** 本次请求负责的槽位下标 */
+  slotIndexes: number[]
+  /** 本次请求向供应商申请的图片数量 */
+  requestedCount: number
+  /** 调度轮次（首轮为 0，补偿轮次递增） */
+  attempt: number
+  status: RemoteGenerationRequestStatus
+  createdAt: number
+  updatedAt: number
+  /** 失败 / 错误信息 */
+  error?: string
+}
+
 export interface TaskRecord {
   id: string
   prompt: string
@@ -249,6 +309,16 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /**
+   * 批量生成槽位，数量固定等于 params.n。
+   * 旧任务可能没有该字段，UI 与编排器均应兼容（按 outputImages 直接展示）。
+   */
+  generationSlots?: GenerationSlot[]
+  /**
+   * 所有远端生成请求（fal / 自定义异步），用于应用关闭、崩溃或断网后恢复。
+   * 新的多图编排不再依赖单个 falRequestId / customTaskId，但仍保留这两个字段用于兼容旧任务。
+   */
+  remoteGenerationRequests?: RemoteGenerationRequest[]
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

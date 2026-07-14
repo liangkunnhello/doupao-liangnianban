@@ -622,8 +622,8 @@ export function isAssistantActionRunnable(skill: AssistantAction, context: Assis
  *  Returns null when the skill does not emit variables. */
 export function resolveWordConfig(action: AssistantAction, preferences: AssistantActionPreferences): WordEntryConfig | null {
   let effective: WordEntryConfig | undefined
-  if (action.id === 'super-derive' || action.id === 'wild-derive') {
-    effective = preferences.builtInSkillSettings?.[action.id]?.wordEntries ?? action.wordEntries
+  if (action.id in preferences.builtInSkillSettings) {
+    effective = preferences.builtInSkillSettings[action.id as keyof BuiltInSkillSettings]?.wordEntries ?? action.wordEntries
   } else {
     effective = action.wordEntries
   }
@@ -664,11 +664,28 @@ export function resolveEffectiveVisualSkill(action: AssistantAction, preferences
   }
 }
 
-/** Default per-skill settings for the two variable built-ins. */
+/** Default per-skill settings for all built-in skills. */
 export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
+  const promptAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'prompt-optimize')!
+  const imageAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'image-describe')!
   const superAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'super-derive')!
   const wildAction = BUILT_IN_ASSISTANT_ACTIONS.find((action) => action.id === 'wild-derive')!
+  const defaultVariables = superAction.wordEntries!.categories
   return {
+    'prompt-optimize': {
+      wordEntries: { ...promptAction.wordEntries!, count: 8, categories: defaultVariables },
+      autoSave: false,
+      applyMode: 'replace',
+      targetGroupMode: 'new',
+      targetGroupId: null,
+    },
+    'image-describe': {
+      wordEntries: { ...imageAction.wordEntries!, count: 8, categories: defaultVariables },
+      autoSave: false,
+      applyMode: 'replace',
+      targetGroupMode: 'new',
+      targetGroupId: null,
+    },
     'super-derive': {
       wordEntries: superAction.wordEntries!,
       autoSave: true,
@@ -697,36 +714,40 @@ export function normalizeBuiltInSkillSettings(value: unknown): BuiltInSkillSetti
     const strategy: WordEntryStrategy = rec.strategy === 'direction-pack' ? 'direction-pack' : fallback.strategy
     return { enabled, count, categories, strategy }
   }
-  const superRaw = record['super-derive'] as Record<string, unknown> | undefined
-  const wildRaw = record['wild-derive'] as Record<string, unknown> | undefined
+  const normalizeSettings = (skillId: keyof BuiltInSkillSettings): SuperDeriveSkillSettings => {
+    const raw = record[skillId] as Record<string, unknown> | undefined
+    const fallback = defaults[skillId]
+    const wordEntries = normalizeWord(raw?.wordEntries, fallback.wordEntries)
+    return {
+      wordEntries: {
+        ...wordEntries,
+        categories: wordEntries.categories.length ? wordEntries.categories : fallback.wordEntries.categories,
+        strategy: skillId === 'wild-derive' ? 'direction-pack' : 'atomic',
+      },
+      autoSave: typeof raw?.autoSave === 'boolean' ? raw.autoSave : fallback.autoSave,
+      applyMode: raw?.applyMode === 'append' ? 'append' : 'replace',
+      targetGroupMode: raw?.targetGroupMode === 'selected' ? 'selected' : 'new',
+      targetGroupId: typeof raw?.targetGroupId === 'string' && raw.targetGroupId ? raw.targetGroupId : null,
+    }
+  }
+  const promptSettings = normalizeSettings('prompt-optimize')
+  const imageSettings = normalizeSettings('image-describe')
+  const superRaw = normalizeSettings('super-derive')
+  const wildRaw = normalizeSettings('wild-derive')
   const superSettings: SuperDeriveSkillSettings = {
-    wordEntries: (() => {
-      const normalized = normalizeWord(superRaw?.wordEntries, defaults['super-derive'].wordEntries)
-      return {
-        ...normalized,
-        enabled: true,
-        categories: normalized.categories.length ? normalized.categories : defaults['super-derive'].wordEntries.categories,
-        strategy: 'atomic' as const,
-      }
-    })(),
-    autoSave: typeof superRaw?.autoSave === 'boolean' ? superRaw.autoSave : defaults['super-derive'].autoSave,
-    applyMode: superRaw?.applyMode === 'append' ? 'append' : 'replace',
-    targetGroupMode: superRaw?.targetGroupMode === 'selected' ? 'selected' : 'new',
-    targetGroupId: typeof superRaw?.targetGroupId === 'string' && superRaw.targetGroupId ? superRaw.targetGroupId : null,
+    ...superRaw,
+    wordEntries: { ...superRaw.wordEntries, enabled: true, strategy: 'atomic' },
   }
   const wildSettings: WildDeriveSkillSettings = {
-    wordEntries: {
-      ...normalizeWord(wildRaw?.wordEntries, defaults['wild-derive'].wordEntries),
-      enabled: true,
-      categories: ['创意方向'],
-      strategy: 'direction-pack',
-    },
-    autoSave: typeof wildRaw?.autoSave === 'boolean' ? wildRaw.autoSave : defaults['wild-derive'].autoSave,
-    applyMode: wildRaw?.applyMode === 'append' ? 'append' : 'replace',
-    targetGroupMode: wildRaw?.targetGroupMode === 'selected' ? 'selected' : 'new',
-    targetGroupId: typeof wildRaw?.targetGroupId === 'string' && wildRaw.targetGroupId ? wildRaw.targetGroupId : null,
+    ...wildRaw,
+    wordEntries: { ...wildRaw.wordEntries, enabled: true, categories: [wildRaw.wordEntries.categories[0]], strategy: 'direction-pack' },
   }
-  return { 'super-derive': superSettings, 'wild-derive': wildSettings }
+  return {
+    'prompt-optimize': promptSettings,
+    'image-describe': imageSettings,
+    'super-derive': superSettings,
+    'wild-derive': wildSettings,
+  }
 }
 
 export function getRecommendedAssistantActions(
@@ -773,26 +794,15 @@ export function resolveWordEntryApplySettings(
   preferences: AssistantActionPreferences,
 ): WordDeriveActionSettings {
   const builtIn = preferences.builtInSkillSettings
-  if (action.id === 'super-derive' && builtIn['super-derive']) {
-    const s = builtIn['super-derive']
+  if (action.id in builtIn) {
+    const settings = builtIn[action.id as keyof BuiltInSkillSettings]
     return {
-      targetGroupMode: s.targetGroupMode,
-      targetGroupId: s.targetGroupId,
-      variableCount: s.wordEntries.count,
-      categories: s.wordEntries.categories,
-      promptMode: s.applyMode,
-      autoSaveWordEntries: s.autoSave,
-    }
-  }
-  if (action.id === 'wild-derive' && builtIn['wild-derive']) {
-    const w = builtIn['wild-derive']
-    return {
-      targetGroupMode: w.targetGroupMode,
-      targetGroupId: w.targetGroupId,
-      variableCount: w.wordEntries.count,
-      categories: w.wordEntries.categories,
-      promptMode: w.applyMode,
-      autoSaveWordEntries: w.autoSave,
+      targetGroupMode: settings.targetGroupMode,
+      targetGroupId: settings.targetGroupId,
+      variableCount: settings.wordEntries.count,
+      categories: settings.wordEntries.categories,
+      promptMode: settings.applyMode,
+      autoSaveWordEntries: settings.autoSave,
     }
   }
   if (isCustomAssistantSkill(action) && action.wordEntries?.enabled) {
@@ -811,7 +821,7 @@ export function resolveWordEntryApplySettings(
 /** Pure updater for per-skill built-in settings (spec §九.3). */
 export function updateBuiltInSkillSettings(
   preferences: AssistantActionPreferences,
-  skillId: 'super-derive' | 'wild-derive',
+  skillId: keyof BuiltInSkillSettings,
   patch: Partial<BuiltInSkillSettings['super-derive'] & BuiltInSkillSettings['wild-derive']>,
 ): AssistantActionPreferences {
   const current = preferences.builtInSkillSettings[skillId]

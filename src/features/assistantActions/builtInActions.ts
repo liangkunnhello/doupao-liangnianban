@@ -108,7 +108,7 @@ const RAW_BUILT_IN_ASSISTANT_ACTIONS: AssistantAction[] = [
     intensity: 'controlled',
     inputMode: 'text',
     wordEntries: { enabled: false, count: 0, categories: [], strategy: 'atomic' },
-    instruction: '理解用户原始意图，将零散词语、普通描述或不完整提示词，转换成一条完整、清晰、可执行的 GPT 生图提示词；不改变原意、事实和承诺，不生成变量词条。',
+    instruction: '理解用户原始意图，将零散词语、普通描述或不完整提示词，转换成一条完整、清晰、可执行的 GPT 生图提示词；不改变原意、事实和承诺，并按技能设置决定是否生成变量词条。',
     preserveRules: CONTRACTS['prompt-optimize'].preserve,
     editableRules: CONTRACTS['prompt-optimize'].editable,
     forbiddenRules: CONTRACTS['prompt-optimize'].forbidden,

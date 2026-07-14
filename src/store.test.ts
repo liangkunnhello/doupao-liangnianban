@@ -976,13 +976,15 @@ describe('mask draft lifecycle in store actions', () => {
     })
   })
 
-  it('marks missing images when a multi-image API request returns too few results', async () => {
-    vi.mocked(callImageApi).mockResolvedValueOnce({
-      images: ['data:image/png;base64,only-one'],
+  it('auto-compensates when a multi-image API request returns too few results', async () => {
+    // 首轮只返回 1 张（少于请求的 N），编排器应自动补齐到 N/N。
+    let count = 0
+    vi.mocked(callImageApi).mockImplementation(async () => ({
+      images: [`data:image/png;base64,item-${count++}`],
       actualParams: { n: 1 },
       actualParamsList: [{ n: 1 }],
       revisedPrompts: [],
-    })
+    }))
     useStore.setState({
       params: { ...DEFAULT_PARAMS, n: 10 },
     })
@@ -992,22 +994,11 @@ describe('mask draft lifecycle in store actions', () => {
     await vi.waitFor(() => {
       expect(useStore.getState().tasks[0].status).toBe('done')
     })
-    expect(useStore.getState().tasks[0]).toMatchObject({
-      outputImages: expect.arrayContaining([expect.any(String)]),
-      batchItemStatuses: [
-        'done',
-        'error',
-        'error',
-        'error',
-        'error',
-        'error',
-        'error',
-        'error',
-        'error',
-        'error',
-      ],
-    })
-    expect(useStore.getState().tasks[0].batchItemErrors).toHaveLength(9)
+    const task = useStore.getState().tasks[0]
+    expect((task.outputImages ?? []).filter(Boolean)).toHaveLength(10)
+    // 全部补齐，无失败槽位。
+    expect(task.batchItemStatuses ?? []).toEqual(Array(10).fill('done'))
+    expect(task.batchItemErrors ?? []).toHaveLength(0)
   })
 
   it('does not save batch-generated images again when the task finishes', async () => {
