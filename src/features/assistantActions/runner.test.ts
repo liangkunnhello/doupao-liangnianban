@@ -3,6 +3,7 @@ import type { ApiProfile, AppSettings, TaskParams } from '../../types'
 import { callAgentResponsesApi } from '../../lib/agentApi'
 import { runAssistantAction } from './runner'
 import { getDefaultBuiltInSkillSettings, normalizeAssistantActionPreferences } from './matcher'
+import { DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES } from './builtInActions'
 import type { AssistantCustomSkill, AssistantInputContext } from './types'
 
 vi.mock('../../lib/agentApi', () => ({
@@ -50,8 +51,30 @@ describe('assistant runner', () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({ text: JSON.stringify({ prompt: '客观展示产品' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     await runAssistantAction('prompt-optimize', context(), { settings, profile, params })
     expect(lastInputText()).toContain('共享 AI 视觉语义转换底座')
+    expect(lastInputText()).toContain('所有字段值必须只使用简体中文')
+    expect(lastInputText()).toContain('不得出现英文字母、英文单词、英文缩写或中英混写')
     expect(lastInputText()).toContain('第一步 · 输入事实识别')
+    expect(lastInputText()).toContain('具体实例 → 子类/风格流派 → 上位类别 → 形态或功能原型')
+    expect(lastInputText()).toContain('复合属性概念提炼（信息流广告专用，内部分析）')
+    expect(lastInputText()).toContain('风格、主体、排版、装饰元素、配色、背景、文案')
+    expect(lastInputText()).toContain('基础属性 → 复合概念 → 高级概念')
+    expect(lastInputText()).toContain('文案维度默认关闭')
     expect(lastInputText()).toContain('信息流广告合规')
+  })
+
+  it('requires Chinese output for prompts, upper-level alternatives, and word entries', async () => {
+    const upperConcepts = DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES.map((category) => `${category}：上位概念`).join('\n')
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({ prompt: '{{主体}}，中文信息流广告', alternativePrompt: upperConcepts, wordEntries: [{ category: '主体', entries: ['产品特写'] }] }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('super-derive', context(), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+
+    expect(result.alternativePrompt).toBe(upperConcepts)
+    expect(lastInputText()).toContain('所有技能都输出一条提示词和一条分维度上位概念描述')
+    expect(lastInputText()).toContain('每个启用维度恰好一行')
+    expect(lastInputText()).toContain('变量分类名、占位符和全部变量词条必须使用中文')
+    expect(lastInputText()).toContain('最终字段值只能包含中文、数字及必要标点')
   })
 
   it('ships a JSON schema example that is itself valid JSON', async () => {
@@ -87,52 +110,94 @@ describe('assistant runner', () => {
     expect(result.variablePrompt).toBeUndefined()
   })
 
+  it('returns an upper-level alternative prompt for a skill without word entries', async () => {
+    const upperConcepts = [
+      '风格：亲和手绘传播语言',
+      '主体：陪伴型动物角色',
+      '排版：单中心信息组织',
+      '装饰元素：轻量情绪符号系统',
+      '配色：温暖柔和的亲和倾向',
+      '背景：低干扰留白空间',
+    ].join('\n')
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        prompt: '一只柴犬，日系手绘风格',
+        alternativePrompt: upperConcepts,
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    const result = await runAssistantAction('prompt-optimize', context({ text: '一只柴犬，日系手绘风格' }), { settings, profile, params })
+
+    expect(result.prompt).toBe('一只柴犬，日系手绘风格')
+    expect(result.alternativePrompt).toBe(upperConcepts)
+    expect(lastInputText()).toContain('必须同时生成 prompt 和 alternativePrompt')
+    expect(lastInputText()).toContain('启用的上位概念维度：风格、主体、排版、装饰元素、配色、背景')
+    expect(lastInputText()).toContain('每个启用维度恰好一行')
+    expect(lastInputText()).toContain('不得把七个维度合并为一个笼统概念')
+    expect(lastInputText()).toContain('不得逐句改写 prompt')
+    expect(lastInputText()).toContain('主体可提升为“亲和型数字角色系统”')
+  })
+
+  it('asks atomic word-entry skills to derive through upper-level categories', async () => {
+    mockedCallAgentResponsesApi.mockResolvedValueOnce({
+      text: JSON.stringify({
+        prompt: '{{主体}}，置于深空背景',
+        wordEntries: [{ category: '主体', entries: ['发光行星'] }],
+      }),
+    } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
+
+    await runAssistantAction('super-derive', context({ text: '月球', hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
+
+    expect(lastInputText()).toContain('先识别原始内容的上位类别')
+    expect(lastInputText()).toContain('禁止把同一具体对象仅改成不同颜色、天气、光线、材质或氛围')
+  })
+
   it('keeps only word entries whose category is referenced by a placeholder', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        prompt: '{{主视觉主体}}，突出卖点',
+        prompt: '{{主体}}，突出卖点',
         wordEntries: [
-          { category: '主视觉主体', entries: ['产品特写'] },
+          { category: '主体', entries: ['产品特写'] },
           { category: '无关分类', entries: ['丢弃'] },
         ],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
-    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
-    expect(result.prompt).toBe('{{主视觉主体}}，突出卖点')
+    expect(result.wordEntries).toEqual([{ category: '主体', entries: ['产品特写'] }])
+    expect(result.prompt).toBe('{{主体}}，突出卖点')
   })
 
   it('cleans only the illegal placeholder, keeping the mapped one', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        prompt: '{{主视觉主体}}，搭配{{未知变量}}',
-        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+        prompt: '{{主体}}，搭配{{未知变量}}',
+        wordEntries: [{ category: '主体', entries: ['产品特写'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        prompt: '{{主视觉主体}}，搭配未知变量',
-        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+        prompt: '{{主体}}，搭配未知变量',
+        wordEntries: [{ category: '主体', entries: ['产品特写'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
-    expect(result.prompt).toBe('{{主视觉主体}}，搭配未知变量')
-    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+    expect(result.prompt).toBe('{{主体}}，搭配未知变量')
+    expect(result.wordEntries).toEqual([{ category: '主体', entries: ['产品特写'] }])
     expect(result.qualityState).toBe('repaired')
   })
 
   it('caps word entries per category to the configured count and dedupes', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        prompt: '{{主视觉主体}}',
-        wordEntries: [{ category: '主视觉主体', entries: ['A', 'A', 'B', 'C', 'D', 'E'] }],
+        prompt: '{{主体}}',
+        wordEntries: [{ category: '主体', entries: ['A', 'A', 'B', 'C', 'D', 'E'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const prefs = normalizeAssistantActionPreferences({
       builtInSkillSettings: {
         ...getDefaultBuiltInSkillSettings(),
         'super-derive': {
-          wordEntries: { enabled: true, count: 3, categories: ['主视觉主体'], strategy: 'atomic' },
+          wordEntries: { enabled: true, count: 3, categories: ['主体'], strategy: 'atomic' },
           autoSave: true,
           applyMode: 'replace',
           targetGroupMode: 'new',
@@ -193,13 +258,13 @@ describe('assistant runner', () => {
       .mockResolvedValueOnce({ text: JSON.stringify({ prompt: '一条没有词条的提示词' }) } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
       .mockResolvedValueOnce({
         text: JSON.stringify({
-          prompt: '{{主视觉主体}}，突出卖点',
-          wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+          prompt: '{{主体}}，突出卖点',
+          wordEntries: [{ category: '主体', entries: ['产品特写'] }],
         }),
       } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
     expect(mockedCallAgentResponsesApi).toHaveBeenCalledTimes(2)
-    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+    expect(result.wordEntries).toEqual([{ category: '主体', entries: ['产品特写'] }])
   })
 
   it('triggers one repair when wild-derive has no {{创意方向}} placeholder', async () => {
@@ -267,13 +332,13 @@ describe('assistant runner', () => {
   it('keeps placeholder mapping intact after compliance cleaning', async () => {
     mockedCallAgentResponsesApi.mockResolvedValueOnce({
       text: JSON.stringify({
-        prompt: '{{主视觉主体}}，客观展示产品卖点',
-        wordEntries: [{ category: '主视觉主体', entries: ['产品特写'] }],
+        prompt: '{{主体}}，客观展示产品卖点',
+        wordEntries: [{ category: '主体', entries: ['产品特写'] }],
       }),
     } as Awaited<ReturnType<typeof callAgentResponsesApi>>)
     const result = await runAssistantAction('super-derive', context({ hasImage: true, imageCount: 1 }), { settings, profile, params, preferences: preferencesWithWordEntryCount('super-derive') })
-    expect(result.prompt).toBe('{{主视觉主体}}，客观展示产品卖点')
-    expect(result.wordEntries).toEqual([{ category: '主视觉主体', entries: ['产品特写'] }])
+    expect(result.prompt).toBe('{{主体}}，客观展示产品卖点')
+    expect(result.wordEntries).toEqual([{ category: '主体', entries: ['产品特写'] }])
   })
 
   it('image-describe never receives an instruction to add non-existent ad elements', async () => {
@@ -331,10 +396,11 @@ describe('assistant runner', () => {
 })
 
 describe('default built-in skill settings', () => {
-  it('super-derive defaults to 8 categories / 8 count', () => {
+  it('super-derive defaults to six enabled ad dimensions / 8 entries each', () => {
     const builtInSettings = getDefaultBuiltInSkillSettings()
     expect(builtInSettings['super-derive'].wordEntries.count).toBe(8)
-    expect(builtInSettings['super-derive'].wordEntries.categories.length).toBe(8)
+    expect(builtInSettings['super-derive'].wordEntries.categories).toEqual(['风格', '主体', '排版', '装饰元素', '配色', '背景'])
+    expect(builtInSettings['super-derive'].wordEntries.categories).not.toContain('文案')
     expect(builtInSettings['super-derive'].autoSave).toBe(true)
   })
 

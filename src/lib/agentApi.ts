@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { getAdNegativeRule } from './adNegativeRules'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -50,7 +51,7 @@ const AGENT_IMAGE_INSTRUCTIONS = [
   'Resolve user mentions ("the first image") to the matching id. Only use existing ids in image_generation prompts and generate_image_batch prompts.',
 ].join('\n')
 
-function createAgentInstructions(settings: AppSettings) {
+function createAgentInstructions(settings: AppSettings, params: TaskParams) {
   const maxToolRounds = Number.isFinite(settings.agentMaxToolRounds)
     ? Math.max(1, Math.trunc(settings.agentMaxToolRounds))
     : DEFAULT_AGENT_MAX_TOOL_ROUNDS
@@ -62,6 +63,9 @@ function createAgentInstructions(settings: AppSettings) {
     '- Call continue_generation ONLY when you have generated a prerequisite image and need another round to generate dependent images. Do NOT call it when the task is complete.',
     '- When web_search is available, use it only when current external information would improve the answer or the user asks for research/news/facts.',
     '- When the requested task is complete, stop calling tools and provide the final response.',
+    '',
+    '## Information-flow ad negative constraints',
+    `For every image-generation or batch-image prompt, do not generate the following elements: ${getAdNegativeRule(settings, params.adNegativeRuleId).content}`,
   ].join('\n')
 }
 
@@ -627,7 +631,7 @@ export async function callAgentResponsesApi(opts: {
   try {
     const body: Record<string, unknown> = {
       model: profile.model || settings.model,
-      instructions: createAgentInstructions(settings),
+      instructions: createAgentInstructions(settings, params),
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
     }
@@ -716,10 +720,14 @@ export async function callAgentConversationTitleApi(opts: {
 }
 
 const WORD_DERIVATIVE_INSTRUCTIONS = [
-  'Generate related short prompt word entries.',
+  'Generate related short prompt word entries through AI visual-semantic conversion.',
   'Return only a JSON array of strings. Do not include markdown, numbering, explanations, or extra keys.',
   'Each item should be concise and useful as one word-library entry.',
-  'Follow the derivative rule from the user message. Prefer semantic slot substitution over broad similarity.',
+  'Before generating, internally analyze the complete existing variable-entry set from the user message: identify its semantic slot, shared core, current abstraction level, variation pattern, covered range, and missing directions.',
+  'Then build the hierarchy “concrete instance → subtype/style school → upper-level category → form or function archetype”. Move up at least one level and derive coherent sibling or adjacent concepts that still fit the same variable slot.',
+  'Do not output the analysis. Do not merely restyle the seed with different colors, weather, lighting, materials, or mood unless the user derivative rule explicitly limits the variable to that dimension.',
+  'Use similarity as semantic distance: high values stay within the nearest upper category; medium values explore sibling or adjacent categories; low values may explore broader form/function archetypes while remaining directly replaceable.',
+  'Follow the derivative rule from the user message. Never repeat the seed or any existing entry.',
 ].join('\n')
 
 function parseWordEntryList(text: string, limit: number): string[] {
@@ -766,12 +774,13 @@ export async function generateDerivedWordEntries(opts: {
   settings: AppSettings
   profile: ApiProfile
   seedEntry: string
+  variableName?: string
   contextEntries?: string[]
   similarity: number
   count: number
   signal?: AbortSignal
 }): Promise<string[]> {
-  const { settings, profile, seedEntry, contextEntries = [], similarity, count, signal } = opts
+  const { settings, profile, seedEntry, variableName, contextEntries = [], similarity, count, signal } = opts
   const normalizedCount = Math.max(1, Math.min(100, Math.trunc(count)))
   const normalizedSimilarity = Math.max(0, Math.min(100, Math.trunc(similarity)))
   const proxyConfig = readClientDevProxyConfig()
@@ -787,17 +796,17 @@ export async function generateDerivedWordEntries(opts: {
       
       const promptLines = [
         `Derivative rule:\n${derivativeRule}`,
+        `Variable name: ${variableName?.trim() || '（未命名变量）'}`,
         `Seed entry: ${seedEntry.trim()}`,
       ]
       
       if (contextEntries.length > 0) {
-        // 过滤掉与种子词条相同的词条，最多提供 20 个上下文词条避免 token 过多
-        const uniqueContext = contextEntries
-          .filter(e => e.trim() && e.trim() !== seedEntry.trim())
-          .slice(0, 20)
+        const uniqueContext = [...new Set(contextEntries.map((entry) => entry.trim()))]
+          .filter((entry) => entry && entry !== seedEntry.trim())
+          .slice(0, 100)
         
         if (uniqueContext.length > 0) {
-          promptLines.push(`Existing context entries:`)
+          promptLines.push('Existing variable entries to analyze before derivation:')
           uniqueContext.forEach(e => promptLines.push(`- ${e}`))
         }
       }

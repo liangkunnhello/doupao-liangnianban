@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssistantInputContext } from './types'
-import { BUILT_IN_ASSISTANT_ACTION_IDS } from './builtInActions'
+import { BUILT_IN_ASSISTANT_ACTION_IDS, DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES } from './builtInActions'
 import {
   getDefaultBuiltInSkillSettings,
   buildCustomSkillFromDraft,
@@ -82,14 +82,43 @@ describe('input-mode runnability', () => {
 })
 
 describe('effective skill resolution', () => {
-  it('super-derive resolves to high intensity, atomic strategy, 8 categories', () => {
+  it('super-derive defaults to six enabled information-flow dimensions with copy disabled', () => {
     const prefs = normalizeAssistantActionPreferences(undefined)
     const skill = getResolvedBuiltInActions(prefs).find((action) => action.id === 'super-derive')!
     const effective = resolveEffectiveVisualSkill(skill, prefs)
     expect(effective.intensity).toBe('high')
     expect(effective.wordEntries?.strategy).toBe('atomic')
-    expect(effective.wordEntries?.categories.length).toBe(8)
+    expect(effective.wordEntries?.categories).toEqual(['风格', '主体', '排版', '装饰元素', '配色', '背景'])
+    expect(effective.wordEntries?.categories).not.toContain('文案')
     expect(effective.wordEntries?.count).toBe(8)
+  })
+
+  it('migrates the former default dimensions but preserves a custom dimension selection', () => {
+    const defaults = getDefaultBuiltInSkillSettings()
+    const legacy = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        ...defaults,
+        'super-derive': {
+          ...defaults['super-derive'],
+          wordEntries: {
+            ...defaults['super-derive'].wordEntries,
+            categories: ['主视觉主体', '视觉符号', '动作状态', '情绪氛围', '材质表现', '光影效果', '背景环境', '商业构图'],
+          },
+        },
+      },
+    })
+    expect(legacy.builtInSkillSettings['super-derive'].wordEntries.categories).toEqual(['风格', '主体', '排版', '装饰元素', '配色', '背景'])
+
+    const custom = normalizeAssistantActionPreferences({
+      builtInSkillSettings: {
+        ...defaults,
+        'super-derive': {
+          ...defaults['super-derive'],
+          wordEntries: { ...defaults['super-derive'].wordEntries, categories: ['主体', '文案'] },
+        },
+      },
+    })
+    expect(custom.builtInSkillSettings['super-derive'].wordEntries.categories).toEqual(['主体', '文案'])
   })
 
   it('wild-derive resolves to maximum intensity, direction-pack, 创意方向', () => {
@@ -99,6 +128,7 @@ describe('effective skill resolution', () => {
     expect(effective.intensity).toBe('maximum')
     expect(effective.wordEntries?.strategy).toBe('direction-pack')
     expect(effective.wordEntries?.categories).toEqual(['创意方向'])
+    expect(effective.conceptCategories).toEqual(DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES)
     expect(effective.wordEntries?.count).toBe(12)
   })
 
@@ -169,6 +199,7 @@ describe('effective skill resolution', () => {
       },
     }, {
       name: '新技能', icon: 'wand', instruction: '更新说明', inputMode: 'text', intensity: 'controlled',
+      conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       wordEntries: { enabled: false, count: 8, categories: [], strategy: 'atomic' },
     })
     expect(skill.id).toBe('custom-existing')
@@ -176,6 +207,17 @@ describe('effective skill resolution', () => {
     expect(skill.priority).toBe(90)
     expect(skill.preserveRules).toEqual(['保留主体'])
     expect(skill.forbiddenRules).toEqual(['不得改构图'])
+  })
+
+  it('preserves the shared seven-dimension selection for custom skills', () => {
+    const [skill] = normalizeCustomSkills([{
+      id: 'custom-concepts', name: '概念测试', instruction: '分析输入', icon: 'sparkles',
+      conceptCategories: ['主体', '文案'],
+      wordEntries: { enabled: false, count: 8, categories: [], strategy: 'atomic' },
+    }])
+    expect(skill.conceptCategories).toEqual(['主体', '文案'])
+    const preferences = normalizeAssistantActionPreferences({ customSkills: [skill] })
+    expect(resolveEffectiveVisualSkill(skill, preferences).conceptCategories).toEqual(['主体', '文案'])
   })
 })
 

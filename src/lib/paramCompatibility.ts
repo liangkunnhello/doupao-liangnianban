@@ -1,6 +1,7 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
 import { getActiveApiProfile } from './apiProfiles'
 import { normalizeImageSize } from './size'
+import { getAdNegativeRule } from './adNegativeRules'
 
 export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
 
@@ -19,6 +20,8 @@ export function normalizeParamsForSettings(
     reference_mode: params.reference_mode === 'all' ? 'all' : 'cycle',
     size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
     n: Math.max(1, params.n || DEFAULT_PARAMS.n),
+    moderation: 'auto',
+    adNegativeRuleId: getAdNegativeRule(settings, params.adNegativeRuleId).id,
   }
 
   if (activeProfile.provider === 'openai' && activeProfile.codexCli) {

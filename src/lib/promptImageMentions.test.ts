@@ -174,6 +174,37 @@ describe('prompt image mentions', () => {
 
       expect(resolveVariableMentionEntry('hero', 'skill-entry', entries)?.id).toBe('skill-entry')
     })
+
+    it('resolves a manually typed template variable from the word library', () => {
+      const entries = [wordEntry({ id: 'style-entry', groupId: 'default', key: '风格', entries: ['水彩插画'] })]
+
+      expect(replaceImageMentionsForApi(
+        '生成{{ 风格 }}海报',
+        undefined,
+        undefined,
+        { wordLibraryEntries: entries },
+      )).toBe('生成水彩插画海报')
+    })
+
+    it('keeps an unknown manually typed template variable visible', () => {
+      expect(replaceImageMentionsForApi(
+        '生成{{不存在}}海报',
+        undefined,
+        undefined,
+        { wordLibraryEntries: [] },
+      )).toBe('生成{{不存在}}海报')
+    })
+
+    it('does not select blank word library entries', () => {
+      const entries = [wordEntry({ id: 'style-entry', groupId: 'default', key: 'style', entries: ['', '  ', 'watercolor'] })]
+
+      expect(replaceImageMentionsForApi(
+        `make ${createVariableMention('style', 'style-entry')}`,
+        undefined,
+        undefined,
+        { wordLibraryEntries: entries },
+      )).toBe('make watercolor')
+    })
   })
 
   describe('prompt variable mention editing', () => {

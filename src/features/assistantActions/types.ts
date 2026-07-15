@@ -72,6 +72,8 @@ export interface EffectiveVisualSkill {
   preserveRules: string[]
   editableRules: string[]
   forbiddenRules: string[]
+  /** Selected information-flow dimensions used for upper-level concept analysis. */
+  conceptCategories: string[]
   wordEntries: WordEntryConfig | null
 }
 
@@ -210,6 +212,8 @@ export interface AssistantAction {
   intensity?: VisualSkillIntensity
   inputMode?: VisualInputMode
   wordEntries?: WordEntryConfig
+  /** Information-flow dimensions used for upper-level concept analysis. */
+  conceptCategories?: string[]
   /** Free-form instruction for custom skills (also kept for built-ins as docs). */
   instruction?: string
   /** V2 boundary rules. The runner reads these (with contract as legacy fallback). */
@@ -249,6 +253,7 @@ export interface VisualSkillFormValue {
   instruction: string
   inputMode: VisualInputMode
   intensity: VisualSkillIntensity
+  conceptCategories: string[]
   wordEntries: WordEntryConfig
 }
 
@@ -356,6 +361,7 @@ export type SuperDeriveActionSettings = WordDeriveActionSettings
 
 /** Editable variable-output settings shared by every built-in skill. */
 export interface BuiltInVisualSkillSettings {
+  conceptCategories?: string[]
   wordEntries: WordEntryConfig
   autoSave: boolean
   applyMode: 'replace' | 'append'
@@ -380,6 +386,8 @@ export interface AssistantActionResult {
   content: string
   /** V2 unified output: exactly one prompt. Variables (if any) appear as {{name}}. */
   prompt: string
+  /** For non-variable skills, a second usable prompt built from upper-level concepts. */
+  alternativePrompt?: string
   candidates?: string[]
   sections?: AssistantResultSection[]
   wordEntries?: AssistantWordEntryGroup[]

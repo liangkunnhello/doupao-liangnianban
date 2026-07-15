@@ -54,6 +54,7 @@ import type {
   VisualSkillIntensity,
 } from './types'
 import Select from '../../components/Select'
+import { DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES, INFORMATION_FLOW_AD_VARIABLE_CATEGORIES } from './builtInActions'
 
 interface AssistantActionBarProps {
   prompt: string
@@ -99,17 +100,6 @@ const iconMap: Record<AssistantActionIcon, typeof Sparkles> = {
   tags: Tags,
   'thumbs-up': ThumbsUp,
 }
-
-const SUPER_DERIVE_CATEGORIES = [
-  '主视觉主体',
-  '视觉符号',
-  '动作状态',
-  '情绪氛围',
-  '材质表现',
-  '光影效果',
-  '背景环境',
-  '商业构图',
-]
 
 function isCustomAssistantSkill(action: AssistantAction): action is AssistantCustomSkill {
   return (action as AssistantCustomSkill).isCustom === true
@@ -189,7 +179,8 @@ function emptyFormValue(): VisualSkillFormValue {
     instruction: '',
     inputMode: 'either',
     intensity: 'controlled',
-    wordEntries: { enabled: false, count: 8, categories: [...SUPER_DERIVE_CATEGORIES], strategy: 'atomic' },
+    conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
+    wordEntries: { enabled: false, count: 8, categories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES], strategy: 'atomic' },
   }
 }
 
@@ -200,7 +191,8 @@ function formValueFromSkill(skill: AssistantCustomSkill): VisualSkillFormValue {
     instruction: skill.instruction,
     inputMode: skill.inputMode ?? 'either',
     intensity: skill.intensity ?? 'controlled',
-    wordEntries: skill.wordEntries ?? { enabled: false, count: 8, categories: [...SUPER_DERIVE_CATEGORIES], strategy: 'atomic' },
+    conceptCategories: skill.conceptCategories?.length ? [...skill.conceptCategories] : [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
+    wordEntries: skill.wordEntries ?? { enabled: false, count: 8, categories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES], strategy: 'atomic' },
   }
 }
 
@@ -315,7 +307,8 @@ export default function AssistantActionBar({
       instruction: action.instruction ?? '',
       inputMode: action.inputMode ?? 'either',
       intensity: action.intensity ?? 'controlled',
-      wordEntries: action.wordEntries ?? { enabled: false, count: 8, categories: [...SUPER_DERIVE_CATEGORIES], strategy: 'atomic' },
+      conceptCategories: action.conceptCategories?.length ? [...action.conceptCategories] : [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
+      wordEntries: action.wordEntries ?? { enabled: false, count: 8, categories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES], strategy: 'atomic' },
     }
     const skill = buildCustomSkillFromDraft(draft, form)
     updatePreferences({
@@ -554,12 +547,22 @@ function SuperDeriveSettingsPanel({
   return (
     <SettingsPanelShell title="超级衍生" onClose={onClose}>
       <div className="space-y-3">
-        <Field label="变量选择">
+        <Field label="上位概念维度">
+          <VariableSelector
+            variables={settings.conceptCategories ?? DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            allowCustom={false}
+            onChange={(conceptCategories) => update({ conceptCategories })}
+          />
+          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+        </Field>
+        <Field label="变量词维度">
           <VariableSelector
             variables={settings.wordEntries.categories}
-            options={SUPER_DERIVE_CATEGORIES}
+            options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
             onChange={(categories) => update({ wordEntries: { ...settings.wordEntries, categories } })}
           />
+          <div className="mt-1 text-[11px] text-gray-400">点击维度可启用或关闭；文案默认关闭。</div>
         </Field>
         <Field label="变量词数量">
           <VariableCountControl
@@ -596,6 +599,15 @@ function WildDeriveSettingsPanel({
   return (
     <SettingsPanelShell title="赌狗模式" onClose={onClose}>
       <div className="space-y-3">
+        <Field label="上位概念维度">
+          <VariableSelector
+            variables={settings.conceptCategories ?? DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            allowCustom={false}
+            onChange={(conceptCategories) => update({ conceptCategories })}
+          />
+          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+        </Field>
         <Field label="变量选择">
           <VariableSelector
             variables={settings.wordEntries.categories}
@@ -648,12 +660,22 @@ function DefaultVariableSettingsPanel({
     <SettingsPanelShell title={action.name} onClose={onClose}>
       <div className="space-y-3">
         <SkillToggleRow label="生成变量词" value={settings.wordEntries.enabled} onChange={(enabled) => updateWordEntries({ enabled })} />
+        <Field label="上位概念维度">
+          <VariableSelector
+            variables={settings.conceptCategories ?? DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+            allowCustom={false}
+            onChange={(conceptCategories) => update({ conceptCategories })}
+          />
+          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+        </Field>
         {settings.wordEntries.enabled && (
           <>
-            <Field label="变量选择">
+            <Field label="变量词维度">
               <VariableSelector
                 variables={settings.wordEntries.categories}
-                options={SUPER_DERIVE_CATEGORIES}
+                options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+                allowCustom={false}
                 onChange={(categories) => updateWordEntries({ categories })}
               />
             </Field>
@@ -810,11 +832,13 @@ function VariableSelector({
   variables,
   options,
   multiple = true,
+  allowCustom = true,
   onChange,
 }: {
   variables: string[]
   options: string[]
   multiple?: boolean
+  allowCustom?: boolean
   onChange: (variables: string[]) => void
 }) {
   const [draft, setDraft] = useState('')
@@ -855,7 +879,7 @@ function VariableSelector({
           )
         })}
       </div>
-      <div className="mt-1.5 flex gap-1.5">
+      {allowCustom && <div className="mt-1.5 flex gap-1.5">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -877,7 +901,7 @@ function VariableSelector({
         >
           添加
         </button>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -959,6 +983,7 @@ function AssistantSkillEditor({
         instruction: draft.instruction,
         inputMode: draft.inputMode,
         intensity: draft.intensity,
+        conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
         wordEntries: draft.wordEntries,
       })
       setDraftContract(draft.contract)
@@ -1105,6 +1130,16 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
         />
       </Field>
 
+      <Field label="上位概念维度">
+        <VariableSelector
+          variables={value.conceptCategories}
+          options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
+          allowCustom={false}
+          onChange={(conceptCategories) => update({ conceptCategories })}
+        />
+        <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+      </Field>
+
       <Field label="词条">
         <div className="space-y-2">
           <SkillToggleRow
@@ -1133,7 +1168,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
                 />
               </Field>
               <Field label="分类列表">
-                <VariableSelector variables={value.wordEntries.categories} options={[]} onChange={(categories) => updateWordEntries({ categories })} />
+                <VariableSelector variables={value.wordEntries.categories} options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES} onChange={(categories) => updateWordEntries({ categories })} />
               </Field>
             </>
           )}
@@ -1199,19 +1234,20 @@ function AssistantResultPanel({
   onClose: () => void
 }) {
   const [wordOpen, setWordOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'primary' | 'alternative' | null>(null)
   const mainPrompt = result.prompt
+  const alternativePrompt = result.alternativePrompt
   const wordEntries = result.wordEntries
   const applyOptions: AssistantWordEntryApplyOptions = {
     ...resolveWordEntryApplySettings(action, preferences),
     actionName: action.name,
   }
 
-  const copyPrompt = async () => {
+  const copyPrompt = async (text: string, target: 'primary' | 'alternative') => {
     try {
-      await navigator.clipboard.writeText(mainPrompt)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
+      await navigator.clipboard.writeText(text)
+      setCopied(target)
+      setTimeout(() => setCopied(null), 1200)
     } catch {
       /* ignore */
     }
@@ -1249,6 +1285,7 @@ function AssistantResultPanel({
 
       {result.qualityNote && <p className="mb-2 text-xs text-amber-500">{result.qualityNote}</p>}
 
+      {alternativePrompt && <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">准确描述</div>}
       <pre className="whitespace-pre-wrap rounded-xl bg-gray-50 p-2 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-200">{mainPrompt}</pre>
 
       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1266,11 +1303,32 @@ function AssistantResultPanel({
           <ArrowDown className="h-3.5 w-3.5" />
           追加
         </button>
-        <button type="button" onClick={copyPrompt} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        <button type="button" onClick={() => copyPrompt(mainPrompt, 'primary')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
           <Copy className="h-3.5 w-3.5" />
-          {copied ? '已复制' : '复制'}
+          {copied === 'primary' ? '已复制' : '复制'}
         </button>
       </div>
+
+      {alternativePrompt && (
+        <div className="mt-3">
+          <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">上位概念备选</div>
+          <pre className="whitespace-pre-wrap rounded-xl bg-blue-50/60 p-2 text-xs leading-relaxed text-gray-700 dark:bg-blue-500/[0.06] dark:text-gray-200">{alternativePrompt}</pre>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => onInsert(alternativePrompt, 'replace')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+              <ArrowUp className="h-3.5 w-3.5" />
+              替换
+            </button>
+            <button type="button" onClick={() => onInsert(alternativePrompt, 'append')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+              <ArrowDown className="h-3.5 w-3.5" />
+              追加
+            </button>
+            <button type="button" onClick={() => copyPrompt(alternativePrompt, 'alternative')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+              <Copy className="h-3.5 w-3.5" />
+              {copied === 'alternative' ? '已复制' : '复制'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {wordEntries && wordEntries.length > 0 && (
         <div className="mt-3 rounded-xl border border-gray-200 p-2 dark:border-white/[0.08]">

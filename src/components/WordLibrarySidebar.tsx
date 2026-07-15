@@ -567,13 +567,14 @@ export default function WordLibrarySidebar() {
     setDerivedClosing(false)
     setDerivedEntries([])
     try {
-      // 获取当前词库中所有的词条作为上下文
-      const contextEntries = activeEntry ? activeEntry.entries : []
+      // 先把当前详情中已有（包括尚未保存）的变量词条作为一个整体交给模型分析。
+      const contextEntries = parseEntryLines(editText)
       
       const generated = await generateDerivedWordEntries({
         settings,
         profile,
         seedEntry,
+        variableName: activeEntry.key,
         contextEntries,
         similarity: deriveSimilarity,
         count,

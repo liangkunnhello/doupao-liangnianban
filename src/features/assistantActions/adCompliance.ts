@@ -36,6 +36,7 @@ export function sanitizeInformationFlowAdResult(result: AssistantActionResult): 
     ...result,
     content: sanitizeInformationFlowAdText(result.content),
     prompt: sanitizeInformationFlowAdText(result.prompt),
+    alternativePrompt: result.alternativePrompt ? sanitizeInformationFlowAdText(result.alternativePrompt) : result.alternativePrompt,
     primaryText: result.primaryText ? sanitizeInformationFlowAdText(result.primaryText) : result.primaryText,
     variablePrompt: result.variablePrompt ? sanitizeInformationFlowAdText(result.variablePrompt) : result.variablePrompt,
     candidates: sanitizeList(result.candidates),

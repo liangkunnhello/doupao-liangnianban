@@ -38,6 +38,7 @@ import { createDefaultScheduleRows, formatDateKey, getScheduleRunKey, getWeekSta
 import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getAgentApiProfile, getApiMaxN, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { appendAdNegativeRule, createAdNegativeRuleSnapshot, getAdNegativeRule } from './lib/adNegativeRules'
 import {
   CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
@@ -4470,6 +4471,7 @@ export async function submitTaskWithData(
     id: taskId,
     prompt: prompt.trim(),
     params: normalizedParams,
+    adNegativeRuleSnapshot: createAdNegativeRuleSnapshot(normalizedSettings, normalizedParams.adNegativeRuleId),
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
@@ -5664,6 +5666,7 @@ async function executeAgentRound(
         id: genId(),
         prompt: taskPrompt,
         params: { ...params, n: 1 },
+        adNegativeRuleSnapshot: createAdNegativeRuleSnapshot(requestSettings, params.adNegativeRuleId),
         apiProvider: activeProfile.provider,
         apiProfileId: activeProfile.id,
         apiProfileName: activeProfile.name,
@@ -5827,7 +5830,7 @@ async function executeAgentRound(
             profile: activeProfile,
             params,
             batchItemId: item.id,
-            prompt: item.prompt,
+            prompt: appendAdNegativeRule(item.prompt, getAdNegativeRule(requestSettings, params.adNegativeRuleId).content),
             referenceImageDataUrls: references.dataUrls,
             referenceIds,
             signal: controller.signal,
@@ -6780,7 +6783,10 @@ async function executeTask(taskId: string) {
           const result = await retryWithBackoff(requestId, async () =>
             callImageApi({
               settings: requestSettings,
-              prompt: replaceImageMentionsForApi(task.prompt, requestInputDataUrls.length, undefined, variableResolver),
+              prompt: appendAdNegativeRule(
+                replaceImageMentionsForApi(task.prompt, requestInputDataUrls.length, undefined, variableResolver),
+                task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
+              ),
               params: { ...taskParams, n: planned.count, ...(seed !== undefined ? { seed } : {}) },
               inputImageDataUrls: requestInputDataUrls,
               maskDataUrl,
@@ -6982,7 +6988,10 @@ async function executeTask(taskId: string) {
     } else {
       result = await callImageApi({
         settings: requestSettings,
-        prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length, undefined, variableResolver),
+        prompt: appendAdNegativeRule(
+          replaceImageMentionsForApi(task.prompt, inputDataUrls.length, undefined, variableResolver),
+          task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
+        ),
         params: task.params,
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,

@@ -2,7 +2,7 @@ import type { AssistantAction, AssistantActionId, AssistantSkillContract, Assist
 
 /** Current schema version of the built-in step definitions. Bumped to 2 together
  *  with the skill-set collapse to four visual-semantic skills. */
-export const BUILT_IN_SKILL_VERSION = 2
+export const BUILT_IN_SKILL_VERSION = 3
 
 /** In V2 every skill runs through the shared AI visual-semantic conversion base,
  *  so built-ins no longer carry an editable multi-step flow. The legacy step
@@ -42,16 +42,19 @@ export const BUILT_IN_SKILL_STEPS: Partial<Record<AssistantActionId, AssistantSk
   ],
 }
 
-const SUPER_DERIVE_CATEGORIES = [
-  '主视觉主体',
-  '视觉符号',
-  '动作状态',
-  '情绪氛围',
-  '材质表现',
-  '光影效果',
-  '背景环境',
-  '商业构图',
+export const INFORMATION_FLOW_AD_VARIABLE_CATEGORIES = [
+  '风格',
+  '主体',
+  '排版',
+  '装饰元素',
+  '配色',
+  '背景',
+  '文案',
 ]
+
+/** Copy is intentionally opt-in because generated ad copy is more likely to
+ *  alter user-provided facts or introduce unsupported claims. */
+export const DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES = INFORMATION_FLOW_AD_VARIABLE_CATEGORIES.filter((category) => category !== '文案')
 
 const CONTRACTS: Record<AssistantActionId, AssistantSkillContract> = {
   'prompt-optimize': {
@@ -141,7 +144,7 @@ const RAW_BUILT_IN_ASSISTANT_ACTIONS: AssistantAction[] = [
     outputMode: 'create-word-tags',
     intensity: 'high',
     inputMode: 'either',
-    wordEntries: { enabled: true, count: 8, categories: SUPER_DERIVE_CATEGORIES, strategy: 'atomic' },
+    wordEntries: { enabled: true, count: 8, categories: DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES, strategy: 'atomic' },
     instruction: '在保留输入核心概念和产品事实的基础上，执行完整 AI 视觉语义转换，生成一条具有商业画面感的变量提示词和配套词条（每类 8 个）。',
     preserveRules: CONTRACTS['super-derive'].preserve,
     editableRules: CONTRACTS['super-derive'].editable,

@@ -22,6 +22,7 @@ import { normalizeAssistantActionPreferences } from '../features/assistantAction
 import { shouldUseApiProxy } from './devProxy'
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './customProviderConfigUrl'
+import { normalizeAdNegativeRuleProfiles } from './adNegativeRules'
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
@@ -600,6 +601,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
   const wordLibraryDerivativeRuleMode = normalizeDerivativeRuleMode(record.wordLibraryDerivativeRuleMode)
   const wordLibraryDerivativeRules = normalizeDerivativeRules(record, wordLibraryDerivativeRuleMode)
+  const adNegativeRuleProfiles = normalizeAdNegativeRuleProfiles(record.adNegativeRuleProfiles)
 
   return {
     themeMode: normalizeThemeMode(record.themeMode),
@@ -629,6 +631,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
     assistantActions: normalizeAssistantActionPreferences(record.assistantActions as Partial<AssistantActionPreferences> | undefined),
+    adNegativeRuleProfiles,
     wordLibraryDerivativeRule: typeof record.wordLibraryDerivativeRule === 'string' ? record.wordLibraryDerivativeRule : undefined,
     wordLibraryDerivativeRuleMode,
     wordLibraryDerivativeRules,

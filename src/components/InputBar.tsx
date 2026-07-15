@@ -10,7 +10,7 @@ import {
   MAX_FOLDER_IMAGES,
 } from '../lib/inputImageLimits'
 import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers } from '../lib/promptImageMentions'
-import { normalizeImageSize } from '../lib/size'
+import { calculateImageSize, formatImageRatio, normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getSafeBoundingClientRect } from '../lib/domRect'
@@ -33,6 +33,20 @@ import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../
 
 function getMentionTagTextLength(el: Element) {
   return el.textContent?.length ?? 0
+}
+
+const QUICK_ASPECT_RATIOS = ['16:9', '9:16', '1:1'] as const
+
+function getAspectRatioFromSize(size: string): string {
+  const match = normalizeImageSize(size).match(/^(\d+)x(\d+)$/i)
+  return match ? formatImageRatio(Number(match[1]), Number(match[2])).replace(/^≈/, '') : ''
+}
+
+function withAspectRatioPrompt(prompt: string, ratio: string): string {
+  const withoutTrailingRatio = prompt
+    .replace(/(?:[，,；;。\s]*画面比例为\s*:\s*(?:\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?)?\s*)$/u, '')
+    .trimEnd()
+  return `${withoutTrailingRatio}${withoutTrailingRatio ? '，' : ''}画面比例为:${ratio}`
 }
 
 function getNodeVisibleTextLength(node: Node): number {
@@ -752,6 +766,9 @@ export default function InputBar() {
   const [imageThumbsExpanded, setImageThumbsExpanded] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
+  const [showCustomAdRuleDialog, setShowCustomAdRuleDialog] = useState(false)
+  const [customAdRuleName, setCustomAdRuleName] = useState('')
+  const [customAdRuleContent, setCustomAdRuleContent] = useState('')
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const [imageDragIndex, setImageDragIndex] = useState<number | null>(null)
   const [imageDragOverIndex, setImageDragOverIndex] = useState<number | null>(null)
@@ -973,7 +990,6 @@ export default function InputBar() {
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const agentAutoImageCount = appMode === 'agent' && activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses'
-  const moderationDisabled = isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const nLimitHintText = agentAutoImageCount
     ? 'Agent 模式下数量由模型根据提示词自动决定'
@@ -985,6 +1001,14 @@ export default function InputBar() {
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
+  const currentAspectRatio = params.size === 'auto' ? 'auto' : getAspectRatioFromSize(displaySize)
+  const quickSizeValue = currentAspectRatio === 'auto' || QUICK_ASPECT_RATIOS.includes(currentAspectRatio as typeof QUICK_ASPECT_RATIOS[number])
+    ? currentAspectRatio
+    : '__more-size-options__'
+  const applyAspectRatio = useCallback((ratio: string, size: string) => {
+    setParams({ size })
+    setPrompt(withAspectRatioPrompt(prompt, ratio))
+  }, [prompt, setParams, setPrompt])
 
   const qualityOptions = isFalProvider
     ? [
@@ -1001,7 +1025,6 @@ export default function InputBar() {
   const atImageLimit = !inputImageFolder && inputImages.length >= MAX_DIRECT_INPUT_IMAGES
   const uploadImageTooltipText = inputImageFolder ? '已选择图片文件夹' : atImageLimit ? `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张），无法继续添加` : '选择图片文件夹'
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
-  const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
@@ -1194,9 +1217,15 @@ export default function InputBar() {
         .filter(Boolean),
     )
     const promptWithVariables = variablePrompt
-      .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, name: string) => {
+      .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, name: string) => {
         const variableName = String(name).trim()
-        return validVariableNames.has(variableName) ? createVariableMention(variableName, saveResult.entryIdsByKey[variableName]) : variableName
+        if (!validVariableNames.has(variableName)) return variableName
+        if (options.autoSaveWordEntries) return createVariableMention(variableName, saveResult.entryIdsByKey[variableName])
+
+        const candidates = groups
+          .find((group) => group.category.trim() === variableName)
+          ?.entries.map((entry) => entry.trim()).filter(Boolean) ?? []
+        return candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : match
       })
 
     handleAssistantInsert(promptWithVariables, options.promptMode)
@@ -2436,14 +2465,30 @@ export default function InputBar() {
         onClick={sizeHint.show}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
-        <button
-          type="button"
-          onClick={() => { dismissAllTooltips(); setShowSizePicker(true) }}
-          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
-          title="选择尺寸"
-        >
-          {displaySize}
-        </button>
+        <Select
+          value={quickSizeValue}
+          onChange={(value) => {
+            if (value === '__more-size-options__') {
+              dismissAllTooltips()
+              setShowSizePicker(true)
+              return
+            }
+            if (value === 'auto') {
+              applyAspectRatio('', 'auto')
+              return
+            }
+            const ratio = String(value)
+            applyAspectRatio(ratio, calculateImageSize('1K', ratio) || DEFAULT_PARAMS.size)
+          }}
+          options={[
+            { label: '16:9', value: '16:9' },
+            { label: '9:16', value: '9:16' },
+            { label: '1:1', value: '1:1' },
+            ...(!isFalTextToImage ? [{ label: '自动', value: 'auto' }] : []),
+            { label: '更多尺寸与设置', value: '__more-size-options__', variant: 'action' as const },
+          ]}
+          className={selectClass}
+        />
         <ButtonTooltip
           visible={isFalTextToImage && sizeHint.visible}
           text={<>fal.ai 的文生图模式不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 参数</>}
@@ -2518,33 +2563,24 @@ export default function InputBar() {
           text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
         />
       </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={moderationHint.show}
-        onMouseLeave={moderationHint.hide}
-        onTouchStart={moderationHint.startTouch}
-        onTouchEnd={moderationHint.clearTimer}
-        onTouchCancel={moderationHint.hide}
-        onClick={moderationHint.show}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">合规规则</span>
         <Select
-          value={moderationDisabled ? 'auto' : params.moderation}
-          onChange={(val) => {
-            if (!moderationDisabled) setParams({ moderation: val as any })
+          value={params.adNegativeRuleId}
+          onChange={(value) => {
+            if (value !== '__create-ad-negative-rule__') {
+              setParams({ adNegativeRuleId: value })
+              return
+            }
+            setCustomAdRuleName('')
+            setCustomAdRuleContent('')
+            setShowCustomAdRuleDialog(true)
           }}
           options={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
+            ...settings.adNegativeRuleProfiles.map((rule) => ({ label: rule.name, value: rule.id })),
+            { label: '新建自定义规则', value: '__create-ad-negative-rule__', variant: 'action' as const },
           ]}
-          disabled={moderationDisabled}
-          className={moderationDisabled
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={moderationDisabled && moderationHint.visible}
-          text="fal.ai 不支持审核参数"
+          className={selectClass}
         />
       </label>
       <label
@@ -2661,6 +2697,7 @@ export default function InputBar() {
               updates.postprocess_resize_enabled = false
             }
             setParams(updates)
+            setPrompt(withAspectRatioPrompt(prompt, size === 'auto' ? '' : getAspectRatioFromSize(size)))
           }}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
@@ -3291,6 +3328,45 @@ export default function InputBar() {
           />
         </div>
       </div>
+      {showCustomAdRuleDialog && createPortal(
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" onMouseDown={() => setShowCustomAdRuleDialog(false)}>
+          <form
+            className="w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl dark:border-white/[0.08] dark:bg-gray-900"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault()
+              const name = customAdRuleName.trim()
+              const content = customAdRuleContent.trim()
+              if (!name || !content) {
+                showToast('请填写规则名称和负向约束', 'error')
+                return
+              }
+              const id = `custom-rule-${Date.now()}`
+              setSettings({
+                adNegativeRuleProfiles: [...settings.adNegativeRuleProfiles, {
+                  id, name, content, description: '自定义信息流广告负向约束', source: 'custom', platform: 'custom', version: 1, updatedAt: Date.now(),
+                }],
+              })
+              setParams({ adNegativeRuleId: id })
+              setShowCustomAdRuleDialog(false)
+            }}
+          >
+            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">新建自定义合规规则</h3>
+            <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">规则会作为固定负向约束附加到每次生图请求。</p>
+            <label className="mt-4 block text-xs text-gray-600 dark:text-gray-300">规则名称
+              <input autoFocus value={customAdRuleName} onChange={(event) => setCustomAdRuleName(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-100" placeholder="例如：品牌安全" />
+            </label>
+            <label className="mt-3 block text-xs text-gray-600 dark:text-gray-300">禁止生成的元素
+              <textarea value={customAdRuleContent} onChange={(event) => setCustomAdRuleContent(event.target.value)} className="mt-1 h-32 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm leading-6 text-gray-800 outline-none focus:border-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-100" placeholder="例如：不得生成二维码、联系方式、价格标签……" />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setShowCustomAdRuleDialog(false)} className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]">取消</button>
+              <button type="submit" className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600">保存规则</button>
+            </div>
+          </form>
+        </div>,
+        document.body,
+      )}
     </>
   )
 }

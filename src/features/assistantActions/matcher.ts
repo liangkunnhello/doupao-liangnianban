@@ -1,4 +1,4 @@
-import { BUILT_IN_ASSISTANT_ACTIONS, BUILT_IN_ASSISTANT_ACTION_IDS, BUILT_IN_SKILL_STEPS, cloneBuiltInSkillSteps } from './builtInActions'
+import { BUILT_IN_ASSISTANT_ACTIONS, BUILT_IN_ASSISTANT_ACTION_IDS, BUILT_IN_SKILL_STEPS, DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES, INFORMATION_FLOW_AD_VARIABLE_CATEGORIES, cloneBuiltInSkillSteps } from './builtInActions'
 import type { AssistantAction, AssistantActionIcon, AssistantActionId, AssistantActionPreferences, AssistantActionSettings, AssistantCustomSkill, AssistantInputContext, AssistantSkillContract, AssistantSkillOverride, AssistantSkillStep, AssistantSkillTaskType, AssistantSkillTrigger, AssistantStepOutput, AssistantStepRole, AssistantVariationLevel, BuiltInSkillSettings, EffectiveVisualSkill, SuperDeriveSkillSettings, VisualInputMode, VisualSkillFormValue, VisualSkillIntensity, WildDeriveSkillSettings, WordDeriveActionSettings, WordEntryConfig, WordEntryStrategy, WordDeriveTargetGroupMode } from './types'
 import { ASSISTANT_SKILL_SCHEMA_VERSION } from './types'
 
@@ -6,7 +6,7 @@ export const DEFAULT_WORD_DERIVE_SETTINGS: WordDeriveActionSettings = {
   targetGroupMode: 'new',
   targetGroupId: null,
   variableCount: 20,
-  categories: ['产品主体', '目标人群', '痛点场景', '核心卖点', '视觉钩子', '情绪氛围', '人物状态', '使用场景', '信任背书', '优惠机制', 'CTA', '平台版式'],
+  categories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
   promptMode: 'replace',
   autoSaveWordEntries: true,
 }
@@ -421,6 +421,7 @@ export function duplicateSkillAsCustom(source: AssistantAction): AssistantCustom
     source: 'custom',
     intensity: source.intensity ?? mapVariationLevelToV2(contract?.variationLevel ?? 'low'),
     inputMode: source.inputMode ?? mapTriggerToInputMode(source.trigger ?? 'always'),
+    conceptCategories: source.conceptCategories?.length ? [...source.conceptCategories] : [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
     wordEntries,
     preserveRules: contract?.preserve ?? ['参考图片和用户原始文字中的可观察事实', '原始意图'],
     editableRules: contract?.editable ?? ['技能明确允许的处理'],
@@ -507,6 +508,9 @@ export function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
     const intensity = intensities.has(record.intensity as VisualSkillIntensity) ? (record.intensity as VisualSkillIntensity) : mapVariationLevelToV2(contract.variationLevel)
     const inputMode = inputModes.has(record.inputMode as VisualInputMode) ? (record.inputMode as VisualInputMode) : mapTriggerToInputMode(trigger)
     const wordEntries = normalizeWordEntryConfig(record.wordEntries, allowWordEntries)
+    const conceptCategories = Array.isArray(record.conceptCategories)
+      ? record.conceptCategories.map(String).map((category) => category.trim()).filter((category) => INFORMATION_FLOW_AD_VARIABLE_CATEGORIES.includes(category)).slice(0, 7)
+      : []
     // Legacy custom skills stored an editable multi-step flow; the V2 runner does
     // not execute steps, so merge them into the instruction text (spec §七.3).
     const mergedInstruction = [instruction, ...rawSteps.map((step, index) => `${step.title || `步骤${index + 1}`}：${step.instruction}`)].
@@ -516,6 +520,7 @@ export function normalizeCustomSkills(value: unknown): AssistantCustomSkill[] {
       id, name, instruction: mergedInstruction || instruction, steps: [], icon, trigger, enabled, priority: 65,
       when: getWhenByTrigger(trigger), outputMode: wordEntries.enabled ? 'create-word-tags' : 'show-candidates', isCustom: true,
       source: 'custom', intensity, inputMode, wordEntries,
+      conceptCategories: conceptCategories.length ? conceptCategories : [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       preserveRules: contract.preserve,
       editableRules: contract.editable,
       forbiddenRules: contract.forbidden,
@@ -651,6 +656,12 @@ export function resolveEffectiveVisualSkill(action: AssistantAction, preferences
   const inputMode = action.inputMode ?? mapTriggerToInputMode(action.trigger ?? 'always')
   const instruction = action.instruction ?? contract?.objective ?? ''
   const wordEntries = resolveWordConfig(action, preferences)
+  const configuredConceptCategories = action.id in preferences.builtInSkillSettings
+    ? preferences.builtInSkillSettings[action.id as keyof BuiltInSkillSettings]?.conceptCategories
+    : action.conceptCategories
+  const conceptCategories = configuredConceptCategories?.length
+    ? [...configuredConceptCategories]
+    : [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES]
   return {
     id: action.id,
     name: action.name,
@@ -660,6 +671,7 @@ export function resolveEffectiveVisualSkill(action: AssistantAction, preferences
     preserveRules,
     editableRules,
     forbiddenRules,
+    conceptCategories,
     wordEntries,
   }
 }
@@ -673,6 +685,7 @@ export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
   const defaultVariables = superAction.wordEntries!.categories
   return {
     'prompt-optimize': {
+      conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       wordEntries: { ...promptAction.wordEntries!, count: 8, categories: defaultVariables },
       autoSave: false,
       applyMode: 'replace',
@@ -680,6 +693,7 @@ export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
       targetGroupId: null,
     },
     'image-describe': {
+      conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       wordEntries: { ...imageAction.wordEntries!, count: 8, categories: defaultVariables },
       autoSave: false,
       applyMode: 'replace',
@@ -687,6 +701,7 @@ export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
       targetGroupId: null,
     },
     'super-derive': {
+      conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       wordEntries: superAction.wordEntries!,
       autoSave: true,
       applyMode: 'replace',
@@ -694,6 +709,7 @@ export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
       targetGroupId: null,
     },
     'wild-derive': {
+      conceptCategories: [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES],
       wordEntries: wildAction.wordEntries!,
       autoSave: true,
       applyMode: 'replace',
@@ -706,11 +722,16 @@ export function getDefaultBuiltInSkillSettings(): BuiltInSkillSettings {
 export function normalizeBuiltInSkillSettings(value: unknown): BuiltInSkillSettings {
   const defaults = getDefaultBuiltInSkillSettings()
   const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  const legacyDefaultCategories = ['主视觉主体', '视觉符号', '动作状态', '情绪氛围', '材质表现', '光影效果', '背景环境', '商业构图']
   const normalizeWord = (raw: unknown, fallback: WordEntryConfig): WordEntryConfig => {
     const rec = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
     const enabled = typeof rec.enabled === 'boolean' ? rec.enabled : fallback.enabled
     const count = typeof rec.count === 'number' && Number.isFinite(rec.count) ? Math.max(1, Math.min(50, Math.round(rec.count))) : fallback.count
-    const categories = Array.isArray(rec.categories) ? rec.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 12) : fallback.categories
+    const normalizedCategories = Array.isArray(rec.categories) ? rec.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 12) : fallback.categories
+    const categories = normalizedCategories.length === legacyDefaultCategories.length
+      && normalizedCategories.every((category, index) => category === legacyDefaultCategories[index])
+      ? [...DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES]
+      : normalizedCategories
     const strategy: WordEntryStrategy = rec.strategy === 'direction-pack' ? 'direction-pack' : fallback.strategy
     return { enabled, count, categories, strategy }
   }
@@ -718,7 +739,15 @@ export function normalizeBuiltInSkillSettings(value: unknown): BuiltInSkillSetti
     const raw = record[skillId] as Record<string, unknown> | undefined
     const fallback = defaults[skillId]
     const wordEntries = normalizeWord(raw?.wordEntries, fallback.wordEntries)
+    const rawConceptCategories = Array.isArray(raw?.conceptCategories)
+      ? raw.conceptCategories.map(String).map((item) => item.trim()).filter((item) => INFORMATION_FLOW_AD_VARIABLE_CATEGORIES.includes(item)).slice(0, 7)
+      : []
+    const migratedConceptCategories = wordEntries.categories.length > 0
+      && wordEntries.categories.every((category) => INFORMATION_FLOW_AD_VARIABLE_CATEGORIES.includes(category))
+      ? wordEntries.categories
+      : DEFAULT_INFORMATION_FLOW_AD_VARIABLE_CATEGORIES
     return {
+      conceptCategories: rawConceptCategories.length ? rawConceptCategories : [...migratedConceptCategories],
       wordEntries: {
         ...wordEntries,
         categories: wordEntries.categories.length ? wordEntries.categories : fallback.wordEntries.categories,
@@ -880,6 +909,7 @@ export function buildCustomSkillFromDraft(
     source: 'custom',
     intensity: form.intensity,
     inputMode: form.inputMode,
+    conceptCategories: form.conceptCategories,
     wordEntries: form.wordEntries,
     preserveRules: contract.preserve,
     editableRules: contract.editable,

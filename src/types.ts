@@ -120,6 +120,7 @@ export interface AppSettings {
   agentMaxToolRounds: number
   agentWebSearch: boolean
   assistantActions: AssistantActionPreferences
+  adNegativeRuleProfiles: AdNegativeRuleProfile[]
   wordLibraryDerivativeRule?: string
   wordLibraryDerivativeRuleMode: 'single' | 'multiple'
   wordLibraryDerivativeRules: WordLibraryDerivativeRule[]
@@ -132,6 +133,35 @@ export interface AppSettings {
   customBackupPath: string
 }
 
+export type AdNegativeRulePlatform = 'general' | 'ocean-engine' | 'tencent-ads' | 'custom'
+
+/** A reusable pre-generation negative constraint for information-flow ads. */
+export interface AdNegativeRuleProfile {
+  id: string
+  name: string
+  description: string
+  content: string
+  source: 'builtin' | 'custom'
+  platform: AdNegativeRulePlatform
+  version: number
+  updatedAt: number
+}
+
+export const DEFAULT_AD_NEGATIVE_RULE_PROFILES: AdNegativeRuleProfile[] = [
+  {
+    id: 'general-strict', name: '通用严格', description: '最严格的信息流广告画面约束', source: 'builtin', platform: 'general', version: 1, updatedAt: 0,
+    content: '不得生成色情裸露、低俗暗示、未成年人不适宜内容、血腥暴力、武器犯罪、毒品、赌博、烟草；不得生成国家机关、官方标志、证件、印章、虚假专家或权威背书；不得生成伪造新闻、证书、奖项、订单、支付、聊天、收益、销量、数据图表或前后对比；不得生成仿系统通知、中奖提醒、未读消息、关闭/播放/下载按钮等诱导点击界面；不得生成医疗病灶、手术画面、疾病恐吓、金融收益承诺、绝对化功效、容貌焦虑、歧视、炫富或卖惨元素。',
+  },
+  {
+    id: 'ocean-engine', name: '今日头条', description: '适用于巨量引擎／头条信息流', source: 'builtin', platform: 'ocean-engine', version: 1, updatedAt: 0,
+    content: '不得生成政治敏感、社会热点借势、官方通知、仿新闻页面、色情、赌博、毒品、非法医疗、危险动作、血腥不适、虚假科技或虚构实验；不得生成炫富、卖惨、攀比、焦虑营销、夸大功效、虚假数据、虚假价格、虚假活动、红包领奖、订单支付、伪造系统界面或诱导点击元素；不得生成未经证实的医疗、美容、教育、招商、金融结果承诺。',
+  },
+  {
+    id: 'tencent-ads', name: '广点通', description: '适用于腾讯广告／广点通', source: 'builtin', platform: 'tencent-ads', version: 1, updatedAt: 0,
+    content: '不得生成或仿冒微信、QQ、腾讯新闻等腾讯产品的界面、图标、按钮、头像、聊天记录、添加好友、系统消息、未读提示、红包、支付、中奖或下载弹窗；不得生成伪造订单、折扣、倒计时、新闻、证书、专利、销量或收益数据；不得生成暗示用户年龄、收入、健康、婚姻等个人属性的内容，不得使用未经授权的品牌、版权角色或素材，不得生成诱导点击和虚假宣传元素。',
+  },
+]
+
 // ===== 任务参数 =====
 
 export interface WordLibraryDerivativeRule {
@@ -143,10 +173,11 @@ export interface WordLibraryDerivativeRule {
 }
 
 export const DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE = [
-  'Identify the seed entry semantic role first, such as background, style, subject, material, color, composition, lighting, mood, era, or camera treatment.',
-  'Keep the core role and noun phrase stable, then derive entries by replacing same-category descriptive modifiers.',
-  'For example, red background should derive green background or yellow background; hand-drawn illustration style should derive cartoon illustration style or watercolor illustration style.',
-  'Avoid drifting into unrelated prompt concepts, and avoid producing synonyms that only rephrase the exact same idea.',
+  'Identify the variable semantic role first, such as background, style, subject, material, color, composition, lighting, mood, era, or camera treatment.',
+  'Analyze the existing entries as one set: infer their shared semantic core, abstraction level, variation pattern, covered range, and missing directions.',
+  'Build a hierarchy from concrete instance to subtype or style school, upper-level category, and form or function archetype. Move up at least one level before deriving useful sibling or adjacent concepts for the same variable slot.',
+  'Do not merely keep the same object and swap color, weather, lighting, material, or mood adjectives. For example, moon can rise to celestial body, planet, or spherical form before deriving luminous planets or cosmic spheres; dog can rise to pet or animal; Japanese hand-drawn style can rise to hand-drawn or illustration before choosing another coherent illustration treatment.',
+  'Every result must remain a concise, concrete phrase that can directly replace the same prompt variable. Avoid empty category labels, unrelated concepts, duplicates, and synonyms that only rephrase an existing entry.',
 ].join('\n')
 
 export interface TaskParams {
@@ -161,6 +192,7 @@ export interface TaskParams {
   postprocess_format: 'png' | 'jpeg' | 'webp'
   postprocess_max_size_kb: number | null
   moderation: 'auto' | 'low'
+  adNegativeRuleId: string
   n: number
   /** 稳定且每槽位不同的 seed（仅支持的供应商如 fal 使用；不修改用户 prompt） */
   seed?: number
@@ -178,6 +210,7 @@ export const DEFAULT_PARAMS: TaskParams = {
   postprocess_format: 'webp',
   postprocess_max_size_kb: 399,
   moderation: 'auto',
+  adNegativeRuleId: 'general-strict',
   n: 1,
 }
 
@@ -287,6 +320,8 @@ export interface TaskRecord {
   id: string
   prompt: string
   params: TaskParams
+  /** Immutable copy of the business compliance rule used for this request. */
+  adNegativeRuleSnapshot?: Pick<AdNegativeRuleProfile, 'id' | 'name' | 'content' | 'version'>
   /** Stable one-based batch within the task's local date and filename label scope. */
   filenameBatch?: number
   /** 生成时使用的 Provider 类型 */

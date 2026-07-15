@@ -10,6 +10,7 @@ export const VAR_START = '\u2060'
 export const VAR_END = '\u2061'
 const VAR_ENTRY_ID_SEPARATOR = '\u2062'
 export const VAR_MENTION_RE = /\u2060([^\u2061]+)\u2061/g
+const TEMPLATE_VARIABLE_RE = /\{\{\s*([^{}]+?)\s*\}\}/g
 const SELECTED_IMAGE_MENTION_RE = /\u2063@图(\d+)\u2064/g
 const SELECTED_MENTION_RE = /\u2063(@图(\d+)|@(?:第)?\d+轮图\d+)\u2064/g
 
@@ -62,6 +63,17 @@ export function resolveVariableMentionEntry(
 
   const nonDefault = substantive.filter((entry) => entry.groupId !== 'default')
   return nonDefault.length === 1 ? nonDefault[0] : undefined
+}
+
+function resolveVariableValue(
+  varName: string,
+  entryId: string | undefined,
+  wordLibraryEntries: WordLibraryEntry[],
+): string | undefined {
+  const entry = resolveVariableMentionEntry(varName, entryId, wordLibraryEntries)
+  const values = entry?.entries.map((value) => value.trim()).filter(Boolean) ?? []
+  if (values.length === 0) return undefined
+  return values[Math.floor(Math.random() * values.length)]
 }
 
 export function getImageMentionLabel(index: number) {
@@ -281,10 +293,13 @@ export function replaceImageMentionsForApi(prompt: string, imageCount?: number, 
     result = result.replace(VAR_MENTION_RE, (_text, rawValue) => {
       const { varName: trimmedVarName, entryId } = parseVariableMention(rawValue)
       if (!trimmedVarName) return ''
-      const entry = resolveVariableMentionEntry(trimmedVarName, entryId, variableResolver.wordLibraryEntries)
-      if (!entry || entry.entries.length === 0) return trimmedVarName
-      const idx = Math.floor(Math.random() * entry.entries.length)
-      return entry.entries[idx]
+      return resolveVariableValue(trimmedVarName, entryId, variableResolver.wordLibraryEntries) ?? trimmedVarName
+    })
+    // Support variables typed directly in the gallery prompt as {{词条名}}.
+    // Unknown variables intentionally remain visible instead of being silently removed.
+    result = result.replace(TEMPLATE_VARIABLE_RE, (marker, rawName) => {
+      const name = String(rawName).trim()
+      return resolveVariableValue(name, undefined, variableResolver.wordLibraryEntries) ?? marker
     })
   }
   return result

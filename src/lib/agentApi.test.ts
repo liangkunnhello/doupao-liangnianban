@@ -43,6 +43,8 @@ describe('callAgentResponsesApi', () => {
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.stream).toBe(true)
     expect(body.tools[0].partial_images).toBe(2)
+    expect(body.instructions).toContain('Information-flow ad negative constraints')
+    expect(body.instructions).toContain('不得生成色情裸露')
     expect(textDeltas).toEqual(['Hel', 'lo'])
     expect(result).toMatchObject({
       responseId: 'resp_1',
@@ -262,6 +264,8 @@ describe('generateDerivedWordEntries', () => {
     expect(body.model).toBe('gpt-5.5')
     expect(body.tools).toBeUndefined()
     expect(body.instructions).toContain('JSON array')
+    expect(body.instructions).toContain('complete existing variable-entry set')
+    expect(body.instructions).toContain('concrete instance → subtype/style school → upper-level category')
     expect(body.input[0].content[0].text).toContain('黑色背景')
     expect(body.input[0].content[0].text).toContain('85')
     expect(body.input[0].content[0].text).toContain('3')
@@ -294,8 +298,43 @@ describe('generateDerivedWordEntries', () => {
 
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
-    expect(body.input[0].content[0].text).toContain('Identify the seed entry')
+    expect(body.input[0].content[0].text).toContain('Analyze the existing entries as one set')
     expect(body.input[0].content[0].text).toContain('red background')
+  })
+
+  it('provides the variable name and all current entries for analysis before derivation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: '["发光行星"]' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      model: 'gpt-5.5',
+    })
+
+    await generateDerivedWordEntries({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      variableName: '主视觉主体',
+      seedEntry: '月球',
+      contextEntries: ['月球', '新月', '满月'],
+      similarity: 60,
+      count: 1,
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    const input = body.input[0].content[0].text
+    expect(input).toContain('Variable name: 主视觉主体')
+    expect(input).toContain('Existing variable entries to analyze before derivation:')
+    expect(input).toContain('- 新月')
+    expect(input).toContain('- 满月')
   })
 
   it('includes the custom global derivative rule in the request', async () => {
