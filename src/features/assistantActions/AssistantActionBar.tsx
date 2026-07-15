@@ -971,9 +971,11 @@ function AssistantSkillEditor({
   const [draftContract, setDraftContract] = useState<AssistantSkillDraft['contract']>(editing?.contract)
   const [description, setDescription] = useState('')
   const [drafting, setDrafting] = useState(false)
+  const [editorError, setEditorError] = useState('')
 
   const startDraft = async () => {
-    if (!description.trim() || !profile.apiKey?.trim()) return
+    if (!description.trim()) return
+    setEditorError('')
     setDrafting(true)
     try {
       const draft = await createAssistantSkillDraft(description, { settings, profile, params })
@@ -987,13 +989,18 @@ function AssistantSkillEditor({
         wordEntries: draft.wordEntries,
       })
       setDraftContract(draft.contract)
+    } catch (error) {
+      setEditorError(error instanceof Error ? error.message : String(error))
     } finally {
       setDrafting(false)
     }
   }
 
   const save = () => {
-    if (!form.name.trim()) return
+    if (!form.name.trim() || !form.instruction.trim()) {
+      setEditorError('请填写技能名称和技能说明')
+      return
+    }
     const built = buildCustomSkillFromDraft({
       id: editing?.id,
       name: form.name,
@@ -1042,13 +1049,20 @@ function AssistantSkillEditor({
 
       <VisualSkillForm value={form} onChange={setForm} />
 
+      {editorError && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300" role="alert">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{editorError}</span>
+        </div>
+      )}
+
       <div className="mt-3 flex justify-end gap-2">
         <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-500 dark:border-white/[0.08]">
           取消
         </button>
         <button
           type="button"
-          disabled={!form.name.trim()}
+          disabled={!form.name.trim() || !form.instruction.trim()}
           onClick={save}
           className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
         >

@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
+import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, useStore } from '../store'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageEntries, downloadImageEntriesAsZip, getGeneratedImageDownloadEntries } from '../lib/downloadImages'
-import TaskCard from './TaskCard'
+import AgentImageGrid, { type AgentImageGridItem } from './AgentImageGrid'
 import ViewportTooltip from './ViewportTooltip'
 import MarkdownRenderer from './MarkdownRenderer'
-import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
+import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon, DragHandleIcon, HistoryIcon, PlusIcon } from './icons'
 
 function AgentActionButton({
   tooltip,
@@ -151,8 +151,7 @@ function AgentWebSearchStatusLines({ statuses }: { statuses: AgentWebSearchStatu
 type AgentAssistantBlock =
   | { type: 'web-search'; status: AgentWebSearchStatus; key: string }
   | { type: 'batch-params'; status: AgentWebSearchStatus; key: string }
-  | { type: 'image-task'; task: TaskRecord; key: string }
-  | { type: 'deleted-image-task'; taskId: string; key: string }
+  | { type: 'image-grid'; items: AgentImageGridItem[]; key: string }
   | { type: 'text'; key: string; content?: string }
 
 interface AgentRoundTaskSlot {
@@ -195,10 +194,11 @@ function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRound
   if (outputItems.length === 0) {
     return [
       ...(hasText ? [{ type: 'text' as const, key: 'text:fallback' }] : []),
-      ...taskSlots.map((slot) => slot.task
-        ? ({ type: 'image-task' as const, task: slot.task, key: `image:${slot.task.id}` })
-        : ({ type: 'deleted-image-task' as const, taskId: slot.taskId, key: `deleted-image:${slot.taskId}` }),
-      ),
+      ...(taskSlots.length > 0 ? [{
+        type: 'image-grid' as const,
+        items: taskSlots.map((slot) => ({ task: slot.task, taskId: slot.taskId })),
+        key: `image-grid:${taskSlots.map((slot) => slot.taskId).join(':')}`,
+      }] : []),
     ]
   }
 
@@ -206,6 +206,20 @@ function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRound
   const renderedTaskIds = new Set<string>()
   let renderedTextBlocks = 0
   let webSearchGroup: ResponsesOutputItem[] = []
+
+  const appendImageGrid = (items: AgentImageGridItem[]) => {
+    if (items.length === 0) return
+    const previous = blocks[blocks.length - 1]
+    if (previous?.type === 'image-grid') {
+      previous.items.push(...items)
+      return
+    }
+    blocks.push({
+      type: 'image-grid',
+      items,
+      key: `image-grid:${items.map((item) => item.taskId).join(':')}`,
+    })
+  }
 
   const flushWebSearchGroup = () => {
     if (webSearchGroup.length === 0) return
@@ -225,17 +239,19 @@ function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRound
     const imageTask = getImageTaskForOutputItem(item, tasksForRound)
     if (imageTask && !renderedTaskIds.has(imageTask.id)) {
       renderedTaskIds.add(imageTask.id)
-      blocks.push({ type: 'image-task', task: imageTask, key: `image:${imageTask.id}` })
+      appendImageGrid([{ task: imageTask, taskId: imageTask.id }])
       continue
     }
 
     const batchImageTasks = getBatchImageTasksForOutputItem(item, tasksForRound)
     if (batchImageTasks.length > 0) {
+      const batchItems: AgentImageGridItem[] = []
       for (const task of batchImageTasks) {
         if (renderedTaskIds.has(task.id)) continue
         renderedTaskIds.add(task.id)
-        blocks.push({ type: 'image-task', task, key: `image:${task.id}` })
+        batchItems.push({ task, taskId: task.id })
       }
+      appendImageGrid(batchItems)
       continue
     }
 
@@ -262,13 +278,15 @@ function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRound
   flushWebSearchGroup()
 
   if (hasText && renderedTextBlocks === 0) blocks.push({ type: 'text', key: 'text:fallback' })
+  const remainingItems: AgentImageGridItem[] = []
   for (const slot of taskSlots) {
     if (slot.task) {
-      if (!renderedTaskIds.has(slot.task.id)) blocks.push({ type: 'image-task', task: slot.task, key: `image:${slot.task.id}` })
+      if (!renderedTaskIds.has(slot.task.id)) remainingItems.push({ task: slot.task, taskId: slot.task.id })
     } else {
-      blocks.push({ type: 'deleted-image-task', taskId: slot.taskId, key: `deleted-image:${slot.taskId}` })
+      remainingItems.push({ task: null, taskId: slot.taskId })
     }
   }
+  appendImageGrid(remainingItems)
   return blocks
 }
 
@@ -323,17 +341,18 @@ export default function AgentWorkspace() {
   const deleteConversation = useStore((s) => s.deleteAgentConversation)
   const sidebarCollapsed = useStore((s) => s.agentSidebarCollapsed)
   const setSidebarCollapsed = useStore((s) => s.setAgentSidebarCollapsed)
+  const desktopSidebarCollapsed = useStore((s) => s.agentDesktopSidebarCollapsed)
+  const setDesktopSidebarCollapsed = useStore((s) => s.setAgentDesktopSidebarCollapsed)
+  const reorderConversations = useStore((s) => s.reorderAgentConversations)
   const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
   const setAgentMobileHeaderVisible = useStore((s) => s.setAgentMobileHeaderVisible)
   const appMode = useStore((s) => s.appMode)
   const tasks = useStore((s) => s.tasks)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
-  const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setPrompt = useStore((s) => s.setPrompt)
   const setInputImages = useStore((s) => s.setInputImages)
   const setMaskDraft = useStore((s) => s.setMaskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
-  const setAppMode = useStore((s) => s.setAppMode)
   const agentScrollToBottomAfterSubmit = useStore((s) => s.settings.agentScrollToBottomAfterSubmit)
   const agentEditingRoundId = useStore((s) => s.agentEditingRoundId)
   const agentEditingConversationId = useStore((s) => s.agentEditingConversationId)
@@ -355,6 +374,8 @@ export default function AgentWorkspace() {
   const [mobileTopBarVisible, setMobileTopBarVisible] = useState(true)
   const [conversationSearchQuery, setConversationSearchQuery] = useState('')
   const [conversationActionsId, setConversationActionsId] = useState<string | null>(null)
+  const [draggingConversationId, setDraggingConversationId] = useState<string | null>(null)
+  const [dragOverConversation, setDragOverConversation] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true)
   const touchStartY = useRef(-1)
   const conversationLongPressTimer = useRef<number | null>(null)
@@ -431,6 +452,11 @@ export default function AgentWorkspace() {
       setAgentEditingConversationId(null)
     }
   }, [sidebarCollapsed, setAgentEditingConversationId])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('agent-sidebar-expanded', appMode === 'agent' && !desktopSidebarCollapsed)
+    return () => document.documentElement.classList.remove('agent-sidebar-expanded')
+  }, [appMode, desktopSidebarCollapsed])
 
   useEffect(() => {
     if (appMode !== 'agent') return
@@ -521,7 +547,7 @@ export default function AgentWorkspace() {
   }, [appMode, conversationsLoaded, conversations, conversation, createConversation, setActiveConversationId])
 
   const sortedConversations = useMemo(
-    () => [...conversations].sort((a, b) => b.updatedAt - a.updatedAt),
+    () => [...conversations].sort((a, b) => a.order - b.order),
     [conversations],
   )
 
@@ -697,7 +723,39 @@ export default function AgentWorkspace() {
 
   const handleConversationSelect = (id: string) => {
     setActiveConversationId(id)
+    if (!window.matchMedia('(min-width: 1024px)').matches) setSidebarCollapsed(true)
     if (conversationActionsId && conversationActionsId !== id) setConversationActionsId(null)
+  }
+
+  const handleConversationDragStart = (event: React.DragEvent<HTMLDivElement>, id: string) => {
+    if (conversationSearchQuery.trim() || agentEditingConversationId === id) {
+      event.preventDefault()
+      return
+    }
+    setDraggingConversationId(id)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+  }
+
+  const handleConversationDragOver = (event: React.DragEvent<HTMLDivElement>, id: string) => {
+    if (!draggingConversationId || draggingConversationId === id || conversationSearchQuery.trim()) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    setDragOverConversation({ id, position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after' })
+  }
+
+  const handleConversationDrop = (event: React.DragEvent<HTMLDivElement>, id: string) => {
+    event.preventDefault()
+    if (draggingConversationId && dragOverConversation?.id === id) {
+      reorderConversations(draggingConversationId, id, dragOverConversation.position)
+    }
+    setDraggingConversationId(null)
+    setDragOverConversation(null)
+  }
+
+  const clearConversationDrag = () => {
+    setDraggingConversationId(null)
+    setDragOverConversation(null)
   }
 
   useEffect(() => {
@@ -786,19 +844,6 @@ export default function AgentWorkspace() {
     })
   }
 
-  const handleReuse = (task: TaskRecord) => {
-    setConfirmDialog({
-      title: '切换到画廊模式？',
-      message: '复用参数会应用到画廊输入区。切换到画廊模式后，当前 Agent 对话仍会保留。',
-      confirmText: '切换并复用',
-      cancelText: '取消',
-      action: () => {
-        setAppMode('gallery')
-        void reuseConfig(task)
-      },
-    })
-  }
-
   const handleEditRoundMessage = async (round: AgentRound, content: string) => {
     setAgentEditingRoundId(round.id)
     clearMaskDraft()
@@ -875,39 +920,62 @@ export default function AgentWorkspace() {
         <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
       
-      {/* Left Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 lg:hidden ${!sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="pl-[max(1rem,env(safe-area-inset-left))] flex h-full min-h-0 w-full flex-col">
-          <div className="safe-area-top shrink-0">
-            <div className="flex h-14 items-center justify-between gap-2 px-4">
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
-                <SidebarLeftIcon className="w-5 h-5" />
+      {/* Conversation Sidebar */}
+      <aside
+        aria-hidden={desktopSidebarCollapsed && sidebarCollapsed}
+        inert={desktopSidebarCollapsed && sidebarCollapsed}
+        className={`fixed bottom-0 left-0 top-[var(--app-header-offset)] z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 lg:w-[280px] lg:max-w-none lg:shadow-none ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'} ${desktopSidebarCollapsed ? 'lg:-translate-x-full' : 'lg:translate-x-0'}`}
+      >
+        <div className="flex h-full min-h-0 w-full flex-col pl-[max(0.75rem,env(safe-area-inset-left))]">
+          <div className="shrink-0 border-b border-gray-200/80 px-3 py-3 dark:border-white/[0.08]">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setConversationSearchQuery('')}
+                className="flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-gray-100/80 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-200/70 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-200 dark:hover:bg-white/[0.09]"
+              >
+                <HistoryIcon className="h-4 w-4" />
+                历史对话
               </button>
-              <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 lg:hover:bg-gray-100 lg:dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
-                <EditIcon className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={createConversation}
+                className="flex h-9 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 text-xs font-medium text-white transition-colors hover:bg-blue-500"
+              >
+                <PlusIcon className="h-4 w-4" />
+                新建对话
               </button>
             </div>
           </div>
-          <div className="shrink-0 px-4 pb-3">
+          <div className="shrink-0 px-3 pb-2 pt-3">
             <input
               type="text"
               value={conversationSearchQuery}
               onChange={(e) => setConversationSearchQuery(e.target.value)}
-              placeholder="搜索聊天..."
+              placeholder="搜索对话标题或内容..."
               className="w-full rounded-xl border border-gray-200 bg-gray-100/80 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
             />
           </div>
-          <div className="space-y-1 overflow-y-auto flex-1 px-4 pb-4">
+          <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-3">
           {filteredConversations.length === 0 && (
-            <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
+            <div className="px-3 py-10 text-center text-sm text-gray-400">{conversationSearchQuery ? '没有找到匹配的对话' : '暂无对话'}</div>
           )}
           {filteredConversations.map((item) => {
             const isGeneratingTitle = Boolean(agentGeneratingTitleIds[item.id])
+            const isActive = item.id === activeConversationId
+            const isRunning = item.rounds.some((round) => round.status === 'running')
+            const dragPosition = dragOverConversation?.id === item.id ? dragOverConversation.position : null
             return (
               <div
                 key={item.id}
                 data-agent-conversation-item
-                className="group flex h-14 items-center gap-2 rounded-lg px-2 hover:bg-gray-100 dark:hover:bg-white/[0.04]"
+                draggable={!conversationSearchQuery.trim() && agentEditingConversationId !== item.id}
+                onDragStart={(event) => handleConversationDragStart(event, item.id)}
+                onDragOver={(event) => handleConversationDragOver(event, item.id)}
+                onDrop={(event) => handleConversationDrop(event, item.id)}
+                onDragEnd={clearConversationDrag}
+                onDoubleClick={(event) => startRenameConversation(event, item.id, item.title)}
+                className={`group relative flex h-14 items-center gap-1.5 rounded-xl border px-2 transition-colors ${isActive ? 'border-blue-500/35 bg-blue-500/12 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200' : 'border-transparent text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.04]'} ${draggingConversationId === item.id ? 'opacity-45' : ''}`}
                 onPointerDown={(e) => handleConversationPointerDown(item.id, e)}
                 onPointerUp={clearConversationLongPressTimer}
                 onPointerCancel={clearConversationLongPressTimer}
@@ -916,6 +984,9 @@ export default function AgentWorkspace() {
                   if (conversationActionsId === item.id) e.preventDefault()
                 }}
               >
+                {dragPosition === 'before' && <span className="absolute -top-0.5 left-2 right-2 h-0.5 rounded-full bg-blue-500" />}
+                {dragPosition === 'after' && <span className="absolute -bottom-0.5 left-2 right-2 h-0.5 rounded-full bg-blue-500" />}
+                <DragHandleIcon className={`h-4 w-4 shrink-0 text-gray-400 transition-opacity ${conversationSearchQuery.trim() ? 'opacity-20' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`} />
                 {agentEditingConversationId === item.id ? (
                   <div className="min-w-0 flex-1 flex flex-col justify-center h-[38px]">
                     <input
@@ -931,8 +1002,11 @@ export default function AgentWorkspace() {
                   </div>
                 ) : (
                   <button type="button" className="min-w-0 flex-1 text-left" onClick={() => handleConversationSelect(item.id)}>
-                    <div className={`truncate ${item.id === activeConversationId ? 'font-semibold text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title}</div>
-                    <div className="text-xs text-gray-400">{formatTime(item.updatedAt)}</div>
+                    <div className={`flex items-center gap-1.5 truncate text-sm ${isActive ? 'font-semibold' : ''}`}>
+                      <span className="truncate">{item.title}</span>
+                      {isRunning && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500" aria-label="正在生成" />}
+                    </div>
+                    <div className="truncate text-[11px] text-gray-400">{formatTime(item.updatedAt)}</div>
                   </button>
                 )}
                 <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${agentEditingConversationId === item.id ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${conversationActionsId === item.id ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>
@@ -962,8 +1036,33 @@ export default function AgentWorkspace() {
             )
           })}
         </div>
+          <div className="shrink-0 border-t border-gray-200/80 p-2 dark:border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => {
+                setSidebarCollapsed(true)
+                setDesktopSidebarCollapsed(true)
+              }}
+              className="flex h-9 w-full items-center justify-center gap-2 rounded-lg text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.05] dark:hover:text-gray-200"
+            >
+              <SidebarLeftIcon className="h-4 w-4" />
+              收起侧栏
+            </button>
+          </div>
         </div>
       </aside>
+
+      {desktopSidebarCollapsed && (
+        <button
+          type="button"
+          onClick={() => setDesktopSidebarCollapsed(false)}
+          className="fixed left-0 top-[calc(var(--app-header-offset)+1rem)] z-30 hidden h-10 w-8 items-center justify-center rounded-r-xl border border-l-0 border-gray-200 bg-white/90 text-gray-500 shadow-lg backdrop-blur transition-colors hover:text-blue-500 dark:border-white/[0.08] dark:bg-gray-950/90 lg:flex"
+          title="展开对话列表"
+          aria-label="展开对话列表"
+        >
+          <SidebarLeftIcon className="h-4 w-4" />
+        </button>
+      )}
 
       {/* Center Chat Area */}
       <section className="min-w-0 flex-1 flex flex-col relative">
@@ -978,21 +1077,8 @@ export default function AgentWorkspace() {
             <button type="button" onClick={() => setSidebarCollapsed(false)} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="展开对话列表">
               <SidebarLeftIcon className="w-5 h-5" />
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSidebarCollapsed(false)
-                if (conversation) {
-                  useStore.getState().setAgentEditingConversationId(conversation.id)
-                }
-              }}
-              className="text-sm font-semibold text-gray-700 dark:text-gray-300 truncate flex-1 text-center px-2 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition-colors"
-            >
-              {conversation?.title || 'Agent'}
-            </button>
-            <button type="button" onClick={createConversation} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
-              <EditIcon className="w-5 h-5" />
-            </button>
+            <div className="flex-1 truncate px-2 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">Agent</div>
+            <span className="h-9 w-9" aria-hidden="true" />
           </div>
         </div>
 
@@ -1033,6 +1119,8 @@ export default function AgentWorkspace() {
                 const hasRoundFavoriteTasks = favoriteTasksForRound.length > 0
                 const allRoundTasksFavorited = hasRoundFavoriteTasks && favoriteTasksForRound.every((task) => task.isFavorite)
                 const assistantBlocks = isAssistant ? getAgentAssistantBlocks(round ?? null, taskSlotsForRound, tasks, Boolean(message.content.trim())) : []
+                const hasImageGrid = assistantBlocks.some((block) => block.type === 'image-grid')
+                const roundImageIds = tasksForRound.flatMap((task) => task.outputImages)
                 const inputImagesForRound = (round?.inputImageIds || []).map(id => ({ id, dataUrl: '' }))
                 const parts = getPromptMentionParts(message.content, inputImagesForRound)
                 return (
@@ -1042,10 +1130,10 @@ export default function AgentWorkspace() {
                         if (!isAssistant && node) messageRefs.current.set(message.roundId, node)
                         else if (!isAssistant) messageRefs.current.delete(message.roundId)
                       }}
-                      className={`group flex max-w-[95%] flex-col md:max-w-[85%] lg:max-w-[75%] ${isAssistant ? 'items-start' : 'items-end'}`}
+                      className={`group flex max-w-[95%] flex-col md:max-w-[85%] ${isAssistant && hasImageGrid ? 'w-full lg:max-w-[92%]' : 'lg:max-w-[75%]'} ${isAssistant ? 'items-start' : 'items-end'}`}
                     >
                       <article 
-                        className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl p-4 transition-all duration-200 ${
+                      className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl p-4 transition-all duration-200 ${isAssistant && hasImageGrid ? 'w-full' : ''} ${
                         isAssistant 
                           ? 'bg-white/70 dark:bg-white/[0.03] border border-gray-200 dark:border-white/[0.08] rounded-tl-sm hover:bg-white dark:hover:bg-white/[0.04]' 
                           : `bg-gray-100 dark:bg-[#2A2D31] rounded-tr-sm ${isEditing ? 'ring-2 ring-blue-500/50 dark:ring-blue-400/50' : ''}`
@@ -1114,26 +1202,8 @@ export default function AgentWorkspace() {
                                   </div>
                                 )
                               }
-                              if (block.type === 'deleted-image-task') {
-                                return (
-                                  <div key={block.key} className="mt-4 w-full min-w-[16rem] max-w-sm rounded-xl bg-gray-50/50 dark:bg-white/[0.02] border border-dashed border-gray-200 dark:border-white/[0.08] p-4 flex min-h-[120px] flex-col items-center justify-center text-gray-400 dark:text-gray-500" onClick={e => e.stopPropagation()}>
-                                    <TrashIcon className="w-6 h-6 mb-2 opacity-50" />
-                                    <span className="text-xs">[Image Removed]</span>
-                                  </div>
-                                )
-                              }
-                              return (
-                                <div key={block.key} className="mt-4 max-w-sm" onClick={e => e.stopPropagation()}>
-                                  <TaskCard
-                                    task={block.task}
-                                    disableSwipe={true}
-                                    onClick={() => setDetailTaskId(block.task.id)}
-                                    onReuse={() => handleReuse(block.task)}
-                                    onEditOutputs={() => editOutputs(block.task)}
-                                    onDelete={() => setConfirmDialog({ title: '删除任务', message: '确定要删除这个任务吗？', action: () => removeTask(block.task) })}
-                                  />
-                                </div>
-                              )
+                              if (block.type === 'image-grid') return <AgentImageGrid key={block.key} items={block.items} imageList={roundImageIds} />
+                              return null
                             }) : isStreamingAssistant ? <AgentStreamingCursor /> : null}
                           </>
                         ) : parts.some((part) => part.type === 'mention') ? (

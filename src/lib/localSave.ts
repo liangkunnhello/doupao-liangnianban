@@ -1,4 +1,4 @@
-import type { AgentConversation, TaskRecord } from '../types'
+import type { AgentConversation, AgentRound, TaskRecord } from '../types'
 import type { UpdateStatus } from '../hooks/useAutoUpdate'
 import { sanitizeGeneratedImageFilenamePart } from './generatedImageFilename'
 
@@ -406,6 +406,119 @@ function formatAgentConversationMarkdown(conversation: AgentConversation): strin
   return lines.join('\n')
 }
 
+function formatMarkdownJson(value: unknown) {
+  return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``
+}
+
+function getTaskOutputPath(task: TaskRecord, imageId: string, imageIndex: number) {
+  return task.localSavedOutputImagePaths?.[`${imageIndex}:${imageId}`] ?? null
+}
+
+export function formatAgentRoundSummaryMarkdown(
+  conversation: AgentConversation,
+  round: AgentRound,
+  tasks: TaskRecord[],
+): string {
+  const orderedTasks = round.outputTaskIds
+    .map((taskId) => tasks.find((task) => task.id === taskId))
+    .filter((task): task is TaskRecord => Boolean(task))
+  const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
+  const assistantMessage = round.assistantMessageId
+    ? conversation.messages.find((message) => message.id === round.assistantMessageId)
+    : undefined
+  const successCount = orderedTasks.filter((task) => task.outputImages.length > 0).length
+  const failedCount = orderedTasks.filter((task) => task.status === 'error').length
+  const statusText = round.status === 'done' ? '完成' : round.status === 'error' ? '失败' : '运行中'
+  const lines: string[] = [
+    `# ${conversation.title || 'Agent 对话'} · 第 ${round.index} 轮`,
+    '',
+    `- 对话 ID: \`${conversation.id}\``,
+    `- 轮次 ID: \`${round.id}\``,
+    `- 父轮次: ${round.parentRoundId ? `\`${round.parentRoundId}\`` : '无'}`,
+    `- 状态: ${statusText}`,
+    `- 开始时间: ${new Date(round.createdAt).toISOString()}`,
+    `- 完成时间: ${round.finishedAt ? new Date(round.finishedAt).toISOString() : '未完成'}`,
+    `- 图片任务: ${orderedTasks.length}；成功: ${successCount}；失败: ${failedCount}`,
+    '',
+    '## 用户请求',
+    '',
+    userMessage?.content || round.prompt || '无',
+    '',
+    '## 输入资源',
+    '',
+    `- 参考图 ID: ${round.inputImageIds.length > 0 ? round.inputImageIds.map((id) => `\`${id}\``).join('、') : '无'}`,
+    `- 蒙版目标图 ID: ${round.maskTargetImageId ? `\`${round.maskTargetImageId}\`` : '无'}`,
+    `- 蒙版图 ID: ${round.maskImageId ? `\`${round.maskImageId}\`` : '无'}`,
+    '',
+  ]
+
+  if (assistantMessage?.content) {
+    lines.push('## Agent 回复', '', assistantMessage.content, '')
+  }
+
+  if (round.error) {
+    lines.push('## 轮次错误', '', round.error, '')
+  }
+
+  lines.push('## 图片任务明细', '')
+  if (orderedTasks.length === 0) {
+    lines.push('本轮没有图片任务。', '')
+  }
+
+  orderedTasks.forEach((task, taskIndex) => {
+    lines.push(
+      `### ${taskIndex + 1}. 任务 \`${task.id}\``,
+      '',
+      `- 状态: ${task.status}`,
+      `- 批次调用 ID: ${task.agentBatchCallId ? `\`${task.agentBatchCallId}\`` : '无'}`,
+      `- 工具调用 ID: ${task.agentToolCallId ? `\`${task.agentToolCallId}\`` : '无'}`,
+      `- Provider: ${task.apiProvider ?? '未知'}`,
+      `- API 配置: ${task.apiProfileName ?? '未知'}`,
+      `- API 模式: ${task.apiMode ?? '未知'}`,
+      `- 模型: ${task.apiModel ?? '未知'}`,
+      `- 创建时间: ${new Date(task.createdAt).toISOString()}`,
+      `- 完成时间: ${task.finishedAt ? new Date(task.finishedAt).toISOString() : '未完成'}`,
+      `- 耗时: ${task.elapsed != null ? `${task.elapsed} ms` : '未知'}`,
+      '',
+      '#### 提示词',
+      '',
+      task.prompt || '无',
+      '',
+      '#### 请求参数',
+      '',
+      formatMarkdownJson(task.params),
+      '',
+      '#### 实际参数',
+      '',
+      formatMarkdownJson(task.actualParamsByImage ?? task.actualParams ?? {}),
+      '',
+      '#### 输出',
+      '',
+    )
+
+    if (task.outputImages.length === 0) {
+      lines.push('- 无输出图片')
+    } else {
+      task.outputImages.forEach((imageId, imageIndex) => {
+        const savedPath = getTaskOutputPath(task, imageId, imageIndex)
+        const rawUrl = task.rawImageUrls?.[imageIndex]
+        const revisedPrompt = task.revisedPromptByImage?.[imageId]
+        lines.push(`- 图片 ${imageIndex + 1}: \`${imageId}\``)
+        lines.push(`  - 本地路径: ${savedPath ?? '未保存'}`)
+        if (rawUrl) lines.push(`  - 原始 URL: ${rawUrl}`)
+        if (revisedPrompt) lines.push(`  - 改写提示词: ${revisedPrompt}`)
+      })
+    }
+
+    if (task.batchItemStatuses?.length) lines.push('', '#### 批次状态', '', formatMarkdownJson(task.batchItemStatuses))
+    if (task.batchItemErrors?.length) lines.push('', '#### 批次错误', '', formatMarkdownJson(task.batchItemErrors))
+    if (task.error) lines.push('', '#### 错误', '', task.error)
+    lines.push('')
+  })
+
+  return lines.join('\n')
+}
+
 export async function saveAgentConversationToLocal(
   conversationId: string,
   conversation: AgentConversation,
@@ -418,6 +531,24 @@ export async function saveAgentConversationToLocal(
   const filePath = await api.pathJoin(agentDir, `${conversationId}.md`)
 
   const markdown = formatAgentConversationMarkdown(conversation)
+  const success = await api.saveText(filePath, markdown)
+  return success ? filePath : null
+}
+
+export async function saveAgentRoundSummaryToLocal(
+  conversation: AgentConversation,
+  round: AgentRound,
+  tasks: TaskRecord[],
+): Promise<string | null> {
+  const api = getAPI()
+  const basePath = await getLocalSavePath()
+  if (!api || !basePath) return null
+
+  const agentDir = await ensureSubDir(basePath, 'agent')
+  const conversationDir = await ensureSubDir(agentDir, conversation.id)
+  const roundNumber = String(round.index).padStart(3, '0')
+  const filePath = await api.pathJoin(conversationDir, `round-${roundNumber}-${round.id}.md`)
+  const markdown = formatAgentRoundSummaryMarkdown(conversation, round, tasks)
   const success = await api.saveText(filePath, markdown)
   return success ? filePath : null
 }

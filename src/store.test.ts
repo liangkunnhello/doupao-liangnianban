@@ -238,6 +238,7 @@ function agentConversation(overrides: Partial<AgentConversation> = {}): AgentCon
   return {
     id: 'conversation-a',
     title: '新对话',
+    order: 0,
     activeRoundId: null,
     createdAt: 1,
     updatedAt: 1,
@@ -1449,7 +1450,7 @@ describe('agent conversation creation', () => {
       createdAt: 3_000,
       updatedAt: 3_000,
     })
-    expect(state.agentConversations.find((item) => item.id === olderEmpty.id)).toEqual(olderEmpty)
+    expect(state.agentConversations.find((item) => item.id === olderEmpty.id)).toMatchObject({ ...olderEmpty, order: 1 })
     expect(state.agentSidebarCollapsed).toBe(true)
     expect(state.agentEditingRoundId).toBeNull()
     now.mockRestore()
@@ -1486,9 +1487,46 @@ describe('agent conversation creation', () => {
     expect(id).not.toBe(olderEmpty.id)
     expect(id).not.toBe(latestUsed.id)
     expect(state.agentConversations).toHaveLength(3)
-    expect(state.agentConversations[state.agentConversations.length - 1]).toMatchObject({ id, createdAt: 3_000, updatedAt: 3_000, messages: [], rounds: [] })
+    expect(state.agentConversations[0]).toMatchObject({ id, order: 0, createdAt: 3_000, updatedAt: 3_000, messages: [], rounds: [] })
     expect(state.activeAgentConversationId).toBe(id)
     now.mockRestore()
+  })
+
+  it('reorders conversations and persists contiguous order values', () => {
+    useStore.setState({
+      agentConversations: [
+        agentConversation({ id: 'a', order: 0 }),
+        agentConversation({ id: 'b', order: 1 }),
+        agentConversation({ id: 'c', order: 2 }),
+      ],
+    })
+
+    useStore.getState().reorderAgentConversations('c', 'a', 'before')
+
+    expect(useStore.getState().agentConversations.map(({ id, order }) => ({ id, order }))).toEqual([
+      { id: 'c', order: 0 },
+      { id: 'a', order: 1 },
+      { id: 'b', order: 2 },
+    ])
+  })
+
+  it('selects the adjacent conversation after deleting the active one', () => {
+    useStore.setState({
+      agentConversations: [
+        agentConversation({ id: 'a', order: 0 }),
+        agentConversation({ id: 'b', order: 1 }),
+        agentConversation({ id: 'c', order: 2 }),
+      ],
+      activeAgentConversationId: 'b',
+    })
+
+    useStore.getState().deleteAgentConversation('b')
+
+    expect(useStore.getState().activeAgentConversationId).toBe('c')
+    expect(useStore.getState().agentConversations.map(({ id, order }) => ({ id, order }))).toEqual([
+      { id: 'a', order: 0 },
+      { id: 'c', order: 1 },
+    ])
   })
 })
 
@@ -2894,6 +2932,96 @@ describe('agent batch reference resolution', () => {
       .map((item) => item.filenameBatch)
       .sort()
     expect(batches).toEqual([1, 2])
+  })
+
+  it('limits Agent batch concurrency, preserves model order, and keeps partial failures isolated', async () => {
+    const concurrentProfile = { ...responsesProfile, maxConcurrent: 2, maxRetries: 0, streamImages: false }
+    useStore.setState((state) => ({
+      settings: normalizeSettings({
+        ...state.settings,
+        profiles: [concurrentProfile],
+        activeProfileId: concurrentProfile.id,
+      }),
+    }))
+    vi.mocked(callAgentResponsesApi)
+      .mockResolvedValueOnce({
+        text: '',
+        images: [],
+        outputItems: [{
+          type: 'function_call',
+          name: 'generate_image_batch',
+          call_id: 'batch-concurrency',
+          arguments: JSON.stringify({
+            images: [
+              { id: 'image-a', prompt: '第一张' },
+              { id: 'image-b', prompt: '第二张' },
+              { id: 'image-c', prompt: '第三张' },
+              { id: 'image-d', prompt: '第四张' },
+            ],
+          }),
+        }],
+        responseId: 'response-1',
+      })
+      .mockResolvedValueOnce({
+        text: '批量完成',
+        images: [],
+        outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '批量完成' }] }],
+        responseId: 'response-2',
+      })
+
+    let active = 0
+    let peak = 0
+    const pending: Array<{ id: string; settle: () => void }> = []
+    for (let index = 0; index < 4; index++) {
+      vi.mocked(callBatchImageSingle).mockImplementationOnce((opts) => new Promise((resolve, reject) => {
+        active++
+        peak = Math.max(peak, active)
+        pending.push({
+          id: opts.batchItemId,
+          settle: () => {
+            active--
+            if (opts.batchItemId === 'image-b') {
+              reject(new Error('第二张生成失败'))
+            } else {
+              resolve({
+                batchItemId: opts.batchItemId,
+                image: { dataUrl: 'data:image/png;base64,batch-output', revisedPrompt: opts.prompt },
+                error: null,
+              })
+            }
+          },
+        })
+      }))
+    }
+
+    await submitAgentMessage()
+    await vi.waitFor(() => expect(pending).toHaveLength(2))
+    expect(peak).toBe(2)
+
+    pending.shift()!.settle()
+    await vi.waitFor(() => expect(vi.mocked(callBatchImageSingle).mock.calls).toHaveLength(3))
+    pending.shift()!.settle()
+    await vi.waitFor(() => expect(vi.mocked(callBatchImageSingle).mock.calls).toHaveLength(4))
+    while (pending.length > 0) pending.shift()!.settle()
+
+    await vi.waitFor(() => {
+      const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-a')
+      const latestRound = conversation?.rounds.find((round) => round.id === conversation.activeRoundId)
+      expect(latestRound?.status).toBe('done')
+    })
+
+    const state = useStore.getState()
+    const conversation = state.agentConversations.find((item) => item.id === 'conversation-a')!
+    const latestRound = conversation.rounds.find((round) => round.id === conversation.activeRoundId)!
+    const orderedTasks = latestRound.outputTaskIds.map((taskId) => state.tasks.find((item) => item.id === taskId)!)
+    expect(orderedTasks.map((item) => item.prompt.split('\n')[0])).toEqual(['第一张', '第二张', '第三张', '第四张'])
+    expect(orderedTasks.map((item) => ({ status: item.status, error: item.error }))).toEqual([
+      { status: 'done', error: null },
+      { status: 'error', error: '第二张生成失败' },
+      { status: 'done', error: null },
+      { status: 'done', error: null },
+    ])
+    expect(peak).toBeLessThanOrEqual(2)
   })
 
   it('resolves batch references to current round input images', async () => {

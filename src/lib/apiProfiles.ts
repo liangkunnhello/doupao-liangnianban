@@ -1,5 +1,6 @@
 import type {
   ApiMode,
+  AgentApiConfigMode,
   ApiProfile,
   ApiProvider,
   AppSettings,
@@ -111,6 +112,10 @@ export function normalizeAgentMaxToolRounds(value: unknown, fallback: number | u
 
 function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAction {
   return value === 'replace-reference' || value === 'add-mask' ? value : 'ask'
+}
+
+function normalizeAgentApiConfigMode(value: unknown): AgentApiConfigMode {
+  return value === 'hybrid' ? 'hybrid' : 'native'
 }
 
 function normalizeImageSaveLayout(value: unknown): ImageSaveLayout {
@@ -630,6 +635,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
+    agentApiConfigMode: normalizeAgentApiConfigMode(record.agentApiConfigMode),
+    allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     assistantActions: normalizeAssistantActionPreferences(record.assistantActions as Partial<AssistantActionPreferences> | undefined),
     adNegativeRuleProfiles,
     wordLibraryDerivativeRule: typeof record.wordLibraryDerivativeRule === 'string' ? record.wordLibraryDerivativeRule : undefined,
@@ -758,6 +765,30 @@ export function getAgentApiProfile(settings: Partial<AppSettings> | unknown): Ap
     if (profile) return profile
   }
   return getActiveApiProfile(settings)
+}
+
+export function getAgentTextApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
+  return getAgentApiProfile(settings)
+}
+
+export function getAgentImageApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
+  const normalized = normalizeSettings(settings)
+  return normalized.agentApiConfigMode === 'hybrid' ? getActiveApiProfile(settings) : getAgentApiProfile(settings)
+}
+
+export function getAgentProfileValidationError(settings: Partial<AppSettings> | unknown): { message: string } | null {
+  const normalized = normalizeSettings(settings)
+  const textProfile = getAgentTextApiProfile(normalized)
+  const textError = validateApiProfile(textProfile)
+  if (textError) return { message: `文本模型配置：${textError}` }
+  if (textProfile.provider !== 'openai' || textProfile.apiMode !== 'responses') {
+    return { message: '文本模型必须使用支持 Responses API 的 OpenAI 兼容配置' }
+  }
+  if (normalized.agentApiConfigMode === 'hybrid') {
+    const imageError = validateApiProfile(getAgentImageApiProfile(normalized))
+    if (imageError) return { message: `图像模型配置：${imageError}` }
+  }
+  return null
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {
@@ -955,6 +986,8 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
+  agentApiConfigMode: 'native',
+  allowPromptRewrite: false,
   assistantActions: normalizeAssistantActionPreferences(undefined),
   agentProfileId: null,
   agentUseCustomProfile: false,

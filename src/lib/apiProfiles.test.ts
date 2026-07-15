@@ -9,6 +9,8 @@ import {
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
   findEquivalentApiProfile,
+  getAgentImageApiProfile,
+  getAgentTextApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
@@ -29,6 +31,29 @@ describe('backup settings', () => {
 
   it('keeps an explicit zero-minute backup interval for every-save backups', () => {
     expect(normalizeSettings({ backupInterval: 0 }).backupInterval).toBe(0)
+  })
+})
+
+describe('Agent API configuration mode', () => {
+  it('defaults to native mode and preserves hybrid mode', () => {
+    expect(normalizeSettings({}).agentApiConfigMode).toBe('native')
+    expect(normalizeSettings({ agentApiConfigMode: 'hybrid' }).agentApiConfigMode).toBe('hybrid')
+    expect(normalizeSettings({}).allowPromptRewrite).toBe(false)
+    expect(normalizeSettings({ allowPromptRewrite: true }).allowPromptRewrite).toBe(true)
+  })
+
+  it('uses the Agent profile for text and the active gallery profile for hybrid images', () => {
+    const textProfile = createDefaultOpenAIProfile({ id: 'agent-text', apiMode: 'responses' })
+    const imageProfile = createDefaultFalProfile({ id: 'gallery-image' })
+    const settings = normalizeSettings({
+      agentApiConfigMode: 'hybrid',
+      agentProfileId: textProfile.id,
+      activeProfileId: imageProfile.id,
+      profiles: [textProfile, imageProfile],
+    })
+
+    expect(getAgentTextApiProfile(settings)?.id).toBe(textProfile.id)
+    expect(getAgentImageApiProfile(settings)?.id).toBe(imageProfile.id)
   })
 })
 

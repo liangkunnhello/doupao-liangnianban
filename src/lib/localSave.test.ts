@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { saveImageToLocal } from './localSave'
+import { DEFAULT_PARAMS, type AgentConversation, type AgentRound, type TaskRecord } from '../types'
+import { formatAgentRoundSummaryMarkdown, saveAgentRoundSummaryToLocal, saveImageToLocal } from './localSave'
 
 describe('local image saving', () => {
   const savedImages: Array<{ filePath: string; dataUrl: string }> = []
@@ -30,6 +31,7 @@ describe('local image saving', () => {
           savedImages.push({ filePath, dataUrl })
           return true
         }),
+        saveText: vi.fn(async () => true),
         checkExists: vi.fn(async () => false),
       },
     })
@@ -94,5 +96,70 @@ describe('local image saving', () => {
       'D:\\LocalSaves\\images\\images-3.png',
       'D:\\LocalSaves\\images\\images-4.png',
     ]))
+  })
+
+  it('writes one readable summary document for an Agent round', async () => {
+    const round: AgentRound = {
+      id: 'round-a',
+      index: 1,
+      parentRoundId: null,
+      userMessageId: 'user-a',
+      assistantMessageId: 'assistant-a',
+      prompt: '生成两张海报',
+      inputImageIds: ['reference-a'],
+      outputTaskIds: ['task-a'],
+      status: 'done',
+      error: null,
+      createdAt: 1,
+      finishedAt: 2,
+    }
+    const conversation: AgentConversation = {
+      id: 'conversation-a',
+      title: '海报方案',
+      order: 0,
+      activeRoundId: round.id,
+      createdAt: 1,
+      updatedAt: 2,
+      rounds: [round],
+      messages: [
+        { id: 'user-a', role: 'user', content: '生成两张海报', roundId: round.id, createdAt: 1 },
+        { id: 'assistant-a', role: 'assistant', content: '已完成', roundId: round.id, createdAt: 2 },
+      ],
+    }
+    const task: TaskRecord = {
+      id: 'task-a',
+      prompt: '蓝色科技海报',
+      params: { ...DEFAULT_PARAMS, size: '1024x1536', n: 1 },
+      actualParams: { size: '1024x1536' },
+      actualParamsByImage: { 'image-a': { size: '1024x1536' } },
+      apiProvider: 'openai',
+      apiProfileName: 'Images API',
+      apiMode: 'images',
+      apiModel: 'gpt-image-1',
+      inputImageIds: ['reference-a'],
+      outputImages: ['image-a'],
+      rawImageUrls: ['https://example.com/image-a.png'],
+      status: 'done',
+      error: null,
+      createdAt: 1,
+      finishedAt: 2,
+      elapsed: 1,
+      sourceMode: 'agent',
+      agentConversationId: conversation.id,
+      agentRoundId: round.id,
+      agentBatchCallId: 'batch-a',
+      localSavedOutputImagePaths: { '0:image-a': 'D:\\LocalSaves\\images\\image-a.png' },
+    }
+
+    const markdown = formatAgentRoundSummaryMarkdown(conversation, round, [task])
+    expect(markdown).toContain('# 海报方案 · 第 1 轮')
+    expect(markdown).toContain('蓝色科技海报')
+    expect(markdown).toContain('1024x1536')
+    expect(markdown).toContain('D:\\LocalSaves\\images\\image-a.png')
+    expect(markdown).not.toMatch(/api[_ -]?key|authorization/i)
+
+    const savedPath = await saveAgentRoundSummaryToLocal(conversation, round, [task])
+    expect(savedPath).toBe('D:\\LocalSaves\\agent\\conversation-a\\round-001-round-a.md')
+    expect(globalThis.window.electronAPI?.saveText).toHaveBeenCalledWith(savedPath, markdown)
   })
 })

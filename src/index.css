@@ -26,7 +26,8 @@
   --workspace-tabbar-right-width: 0px;
   --word-library-left-width: 0px;
   --word-library-right-width: 0px;
-  --app-docked-left-width: calc(var(--workspace-tabbar-left-width) + var(--word-library-left-width));
+  --agent-sidebar-left-width: 0px;
+  --app-docked-left-width: calc(var(--workspace-tabbar-left-width) + var(--word-library-left-width) + var(--agent-sidebar-left-width));
   --app-docked-right-width: calc(var(--workspace-tabbar-right-width) + var(--word-library-right-width));
   --app-header-offset: calc(3.5rem + var(--safe-area-top) + 1px);
   scrollbar-gutter: stable;
@@ -617,6 +618,12 @@ input[type="number"] {
   background: var(--var-bg-selected, #f97316);
   color: var(--var-text-selected, #ffffff);
   border-color: var(--var-border-selected, #fb923c);
+}
+
+@media (min-width: 1024px) {
+  :root.agent-sidebar-expanded {
+    --agent-sidebar-left-width: 280px;
+  }
 }
 
 [data-composite-stage] {

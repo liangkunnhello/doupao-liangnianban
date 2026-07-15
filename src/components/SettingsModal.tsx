@@ -1584,6 +1584,39 @@ export default function SettingsModal() {
 
             {activeTab === 'agent' && (
               <div className="space-y-4">
+                <div>
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像生成模式</span>
+                  <Select
+                    value={draft.agentApiConfigMode}
+                    onChange={(value) => commitSettings({ ...draft, agentApiConfigMode: value as 'native' | 'hybrid' })}
+                    options={[
+                      { label: '原生 Responses 工具', value: 'native' },
+                      { label: '混合模式（文本 Agent + 画廊图像配置）', value: 'hybrid' },
+                    ]}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    混合模式使用本页配置进行 Agent 对话，并使用当前画廊配置生成图片，适用于文本模型不支持原生 image_generation 工具的情况。
+                  </div>
+                </div>
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">允许改写图像提示词</span>
+                    <button
+                      type="button"
+                      onClick={() => commitSettings({ ...draft, allowPromptRewrite: !draft.allowPromptRewrite })}
+                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.allowPromptRewrite ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={draft.allowPromptRewrite}
+                      aria-label="允许改写图像提示词"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.allowPromptRewrite ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    默认关闭，Agent 会要求图像工具严格使用原提示词；开启后允许模型为生成效果优化提示词。
+                  </div>
+                </div>
                 <div className="block">
                   <div className="mb-1 flex items-center justify-between gap-3">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">使用独立配置</span>

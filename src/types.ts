@@ -4,6 +4,7 @@ import type { CompositeV2PersistedSnapshot } from './features/composite/lib/comp
 import type { AssistantActionPreferences } from './features/assistantActions/types'
 
 export type ApiMode = 'images' | 'responses'
+export type AgentApiConfigMode = 'native' | 'hybrid'
 export type AppMode = 'gallery' | 'agent' | 'postprocess'
 export type ThemeMode = 'light' | 'dark'
 export type ImageSaveLayout = 'flat' | 'batch-folder'
@@ -119,6 +120,8 @@ export interface AppSettings {
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
+  agentApiConfigMode: AgentApiConfigMode
+  allowPromptRewrite: boolean
   assistantActions: AssistantActionPreferences
   adNegativeRuleProfiles: AdNegativeRuleProfile[]
   wordLibraryDerivativeRule?: string
@@ -493,6 +496,7 @@ export interface AgentRound {
 export interface AgentConversation {
   id: string
   title: string
+  order: number
   activeRoundId?: string | null
   createdAt: number
   updatedAt: number
