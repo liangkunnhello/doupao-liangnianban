@@ -2778,6 +2778,13 @@ describe('agent batch reference resolution', () => {
     await putImage(imageB)
     vi.mocked(callAgentResponsesApi).mockClear()
     vi.mocked(callBatchImageSingle).mockClear()
+    vi.mocked(callImageApi).mockReset()
+    vi.mocked(callImageApi).mockResolvedValue({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    })
     useStore.setState({
       settings: normalizeSettings({
         ...DEFAULT_SETTINGS,
@@ -3022,6 +3029,68 @@ describe('agent batch reference resolution', () => {
       { status: 'done', error: null },
     ])
     expect(peak).toBeLessThanOrEqual(2)
+  })
+
+  it('runs multiple fallback single-image function calls concurrently', async () => {
+    const concurrentProfile = { ...responsesProfile, maxConcurrent: 2, maxRetries: 0, streamImages: false }
+    useStore.setState((state) => ({
+      settings: normalizeSettings({
+        ...state.settings,
+        agentApiConfigMode: 'hybrid',
+        profiles: [concurrentProfile],
+        activeProfileId: concurrentProfile.id,
+      }),
+    }))
+    vi.mocked(callAgentResponsesApi)
+      .mockResolvedValueOnce({
+        text: '',
+        images: [],
+        outputItems: Array.from({ length: 4 }, (_, index) => ({
+          type: 'function_call',
+          name: 'generate_image',
+          call_id: `single-${index + 1}`,
+          arguments: JSON.stringify({ id: `image-${index + 1}`, prompt: `prompt-${index + 1}` }),
+        })),
+        responseId: 'response-1',
+      })
+      .mockResolvedValueOnce({
+        text: '瀹屾垚',
+        images: [],
+        outputItems: [{ type: 'message', content: [{ type: 'output_text', text: '瀹屾垚' }] }],
+        responseId: 'response-2',
+      })
+
+    let active = 0
+    let peak = 0
+    const pending: Array<() => void> = []
+    vi.mocked(callImageApi).mockImplementation(() => new Promise((resolve) => {
+      active++
+      peak = Math.max(peak, active)
+      pending.push(() => {
+        active--
+        resolve({
+          images: ['data:image/png;base64,c2luZ2xlLW91dHB1dA=='],
+          actualParams: {},
+          actualParamsList: [{}],
+          revisedPrompts: [],
+        })
+      })
+    }))
+
+    await submitAgentMessage()
+    await vi.waitFor(() => expect(pending).toHaveLength(2))
+    pending.shift()!()
+    await vi.waitFor(() => expect(vi.mocked(callImageApi).mock.calls).toHaveLength(3))
+    pending.shift()!()
+    await vi.waitFor(() => expect(vi.mocked(callImageApi).mock.calls).toHaveLength(4))
+    while (pending.length > 0) pending.shift()!()
+
+    await vi.waitFor(() => {
+      const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-a')
+      const latestRound = conversation?.rounds.find((round) => round.id === conversation.activeRoundId)
+      expect(latestRound?.status).toBe('done')
+    })
+    expect(peak).toBe(2)
   })
 
   it('resolves batch references to current round input images', async () => {

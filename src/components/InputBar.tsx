@@ -25,6 +25,7 @@ import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon, FolderOpenIcon } from './icons'
 import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
+import AgentBatchPlannerModal from './AgentBatchPlannerModal'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
 import { buildWordGroupName, resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
 import type { AssistantActionPreferences, AssistantWordEntryGroup } from '../features/assistantActions/types'
@@ -524,6 +525,7 @@ export default function InputBar() {
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
   const assistantFeedbackScopeId = activeWorkspaceTabId ?? '__default__'
   const [assistantFeedbackByScope, setAssistantFeedbackByScope] = useState<Record<string, AssistantActionFeedbackState>>({})
+  const [showAgentBatchPlanner, setShowAgentBatchPlanner] = useState(false)
   const assistantFeedback = assistantFeedbackByScope[assistantFeedbackScopeId] ?? { type: 'idle' }
   const setAssistantFeedbackForScope = useCallback((next: AssistantActionFeedbackState) => {
     const scopeId = assistantFeedbackScopeId
@@ -2847,6 +2849,17 @@ export default function InputBar() {
             </div>
           </div>
         )}
+        {appMode === 'agent' && (
+          <div className="mb-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowAgentBatchPlanner(true)}
+              className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+            >
+              导入批量任务
+            </button>
+          </div>
+        )}
         <AssistantActionBar
           prompt={prompt}
           inputImages={inputImages}
@@ -3365,6 +3378,10 @@ export default function InputBar() {
             </div>
           </form>
         </div>,
+        document.body,
+      )}
+      {showAgentBatchPlanner && createPortal(
+        <AgentBatchPlannerModal onClose={() => setShowAgentBatchPlanner(false)} />,
         document.body,
       )}
     </>

@@ -44,6 +44,8 @@ describe('callAgentResponsesApi', () => {
     expect(body.stream).toBe(true)
     expect(body.tools[0].partial_images).toBe(2)
     expect(body.instructions).toContain('Information-flow ad negative constraints')
+    expect(body.instructions).toContain('Whenever 2 or more images are ready to generate, call generate_image_batch exactly once')
+    expect(body.instructions).not.toContain('One image_generation call per distinct image')
     expect(body.instructions).toContain('不得生成色情裸露')
     expect(textDeltas).toEqual(['Hel', 'lo'])
     expect(result).toMatchObject({

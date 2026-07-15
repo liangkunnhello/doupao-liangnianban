@@ -4404,18 +4404,22 @@ export async function submitTaskWithData(
     targetTabId?: string | null
     scheduledOutputPath?: string
     scheduledOutputSubFolder?: string
+    apiProfileId?: string
   },
   options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {},
 ) {
   const { settings, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
-  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder } = data
+  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId } = data
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
+  if (apiProfileId) {
+    activeProfile = normalizedSettings.profiles.find((profile) => profile.id === apiProfileId) ?? activeProfile
+  }
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
-  if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
+  if (!apiProfileId && normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
     if (!reusedProfile) {
       if (options.useCurrentApiProfileWhenReusedMissing) {
@@ -6640,12 +6644,20 @@ async function executeAgentRound(
       // Collect function_call_output items for all function calls that need responses
       const functionCallOutputs: ResponsesOutputItem[] = []
 
-      for (const fc of singleImageFunctionCalls) {
-        const output = await executeSingleImageFunctionCall(fc)
+      const singleImageResults = await runWithConcurrencyAndRetry(
+        singleImageFunctionCalls,
+        imageProfile.maxConcurrent ?? 1,
+        0,
+        executeSingleImageFunctionCall,
+      )
+      for (let index = 0; index < singleImageFunctionCalls.length; index++) {
+        const fc = singleImageFunctionCalls[index]
+        const result = singleImageResults[index]
+        if (result.status === 'rejected') throw result.reason
         functionCallOutputs.push({
           type: 'function_call_output',
           call_id: fc.call_id,
-          output,
+          output: result.value,
         })
       }
 

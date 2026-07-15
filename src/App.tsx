@@ -32,6 +32,7 @@ const ManageCollectionsModal = React.lazy(() => import('./components/FavoriteCol
 const RandomPromptModal = React.lazy(() => import('./components/RandomPromptModal'))
 const ScheduleModal = React.lazy(() => import('./components/ScheduleModal'))
 const ScheduleRunner = React.lazy(() => import('./components/ScheduleRunner'))
+const AgentBatchQueueRunner = React.lazy(() => import('./components/AgentBatchQueueRunner'))
 const WorkspaceTabManagerModal = React.lazy(() => import('./components/WorkspaceTabManagerModal'))
 const UpdateReleaseNotesModal = React.lazy(() => import('./components/UpdateReleaseNotesModal'))
 import { useGlobalClickSuppression } from './lib/clickSuppression'
@@ -256,6 +257,7 @@ export default function App() {
       <RandomPromptModal />
       <ScheduleModal />
       <ScheduleRunner />
+      <AgentBatchQueueRunner />
       <WorkspaceTabManagerModal />
       <UpdateReleaseNotesModal />
       </React.Suspense>
