@@ -6,7 +6,7 @@ import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboar
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageEntries, downloadImageEntriesAsZip, getGeneratedImageDownloadEntries } from '../lib/downloadImages'
-import AgentImageGrid, { type AgentImageGridItem } from './AgentImageGrid'
+import AgentImageGrid, { AgentImagePreviewStrip, type AgentImageGridItem } from './AgentImageGrid'
 import ViewportTooltip from './ViewportTooltip'
 import MarkdownRenderer from './MarkdownRenderer'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon, DragHandleIcon, HistoryIcon, PlusIcon } from './icons'
@@ -365,6 +365,8 @@ export default function AgentWorkspace() {
   const conversation = conversations.find((item) => item.id === activeConversationId) ?? null
   const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null)
   const [editingConversationTitle, setEditingConversationTitle] = useState('')
+  const [collapsedAssistantMessageIds, setCollapsedAssistantMessageIds] = useState<Set<string>>(() => new Set())
+  const [expandedAssistantMessageIds, setExpandedAssistantMessageIds] = useState<Set<string>>(() => new Set())
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const bottomSentinelRef = useRef<HTMLDivElement>(null)
@@ -586,6 +588,16 @@ export default function AgentWorkspace() {
     }
     return messages
   }, [activeRounds, conversation, agentStreamingTexts])
+
+  const newestImageAssistantMessageId = useMemo(() => {
+    for (let index = activeMessages.length - 1; index >= 0; index -= 1) {
+      const message = activeMessages[index]
+      if (message.role !== 'assistant') continue
+      const round = conversation?.rounds.find((item) => item.id === message.roundId)
+      if (getRoundTaskSlots(round ?? null, tasks).some((slot) => (slot.task?.outputImages.length ?? 0) > 0)) return message.id
+    }
+    return null
+  }, [activeMessages, conversation?.rounds, tasks])
 
   useEffect(() => {
     const conversationId = conversation?.id ?? null
@@ -1121,6 +1133,11 @@ export default function AgentWorkspace() {
                 const assistantBlocks = isAssistant ? getAgentAssistantBlocks(round ?? null, taskSlotsForRound, tasks, Boolean(message.content.trim())) : []
                 const hasImageGrid = assistantBlocks.some((block) => block.type === 'image-grid')
                 const roundImageIds = tasksForRound.flatMap((task) => task.outputImages)
+                const canCollapseImageReply = isAssistant && !isStreamingAssistant && hasImageGrid && roundImageIds.length > 0
+                const collapsesByDefault = canCollapseImageReply && message.id !== newestImageAssistantMessageId
+                const isImageReplyCollapsed = canCollapseImageReply && (collapsesByDefault
+                  ? !expandedAssistantMessageIds.has(message.id)
+                  : collapsedAssistantMessageIds.has(message.id))
                 const inputImagesForRound = (round?.inputImageIds || []).map(id => ({ id, dataUrl: '' }))
                 const parts = getPromptMentionParts(message.content, inputImagesForRound)
                 return (
@@ -1158,7 +1175,28 @@ export default function AgentWorkspace() {
                       </div>
                     )}
 
-                    {round?.status === 'error' && isAssistant && message.content.startsWith('请求失败：') ? (
+                    {isImageReplyCollapsed ? (
+                      <div>
+                        <div className="rounded-xl border border-gray-200/80 bg-gray-50/80 px-3 py-2.5 dark:border-white/[0.08] dark:bg-black/15">
+                          <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">提示词</div>
+                          <div className="line-clamp-2 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-gray-800 dark:text-gray-100">
+                            {round?.prompt || '未记录提示词'}
+                          </div>
+                        </div>
+                        <AgentImagePreviewStrip
+                          items={taskSlotsForRound.map((slot) => ({ task: slot.task, taskId: slot.taskId }))}
+                          imageList={roundImageIds}
+                          onViewMore={() => {
+                            setExpandedAssistantMessageIds((ids) => new Set(ids).add(message.id))
+                            setCollapsedAssistantMessageIds((ids) => {
+                              const next = new Set(ids)
+                              next.delete(message.id)
+                              return next
+                            })
+                          }}
+                        />
+                      </div>
+                    ) : round?.status === 'error' && isAssistant && message.content.startsWith('请求失败：') ? (
                       <div
                         data-selectable-text
                         className="-m-2 flex cursor-copy select-text flex-col rounded-xl p-2 transition-colors hover:bg-red-50/60 dark:hover:bg-red-500/5"
@@ -1255,6 +1293,34 @@ export default function AgentWorkspace() {
                         )}
                         {isAssistant ? (
                           <>
+                            {canCollapseImageReply && (
+                              <AgentActionButton
+                                tooltip={isImageReplyCollapsed ? '展开图片回复' : '折叠图片回复'}
+                                className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors"
+                                onClick={() => {
+                                  if (isImageReplyCollapsed) {
+                                    setExpandedAssistantMessageIds((ids) => new Set(ids).add(message.id))
+                                    setCollapsedAssistantMessageIds((ids) => {
+                                      const next = new Set(ids)
+                                      next.delete(message.id)
+                                      return next
+                                    })
+                                    return
+                                  }
+                                  if (collapsesByDefault) {
+                                    setExpandedAssistantMessageIds((ids) => {
+                                      const next = new Set(ids)
+                                      next.delete(message.id)
+                                      return next
+                                    })
+                                    return
+                                  }
+                                  setCollapsedAssistantMessageIds((ids) => new Set(ids).add(message.id))
+                                }}
+                              >
+                                <ChevronDownIcon className={`w-4 h-4 transition-transform ${isImageReplyCollapsed ? '-rotate-90' : ''}`} />
+                              </AgentActionButton>
+                            )}
                             <AgentActionButton tooltip="复制输出文本" className={`p-1.5 rounded-md transition-colors ${message.content.trim() ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-200 dark:hover:bg-white/[0.06]' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!message.content.trim()} onClick={() => {
                               void handleCopyMessage(getAgentAssistantCopyContent(message.content, assistantBlocks), '输出文本已复制', '复制输出文本失败');
                             }}>

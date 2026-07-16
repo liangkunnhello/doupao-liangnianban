@@ -122,6 +122,87 @@ function AgentImageTile({ entry, imageList }: { entry: AgentImageGridEntry; imag
   )
 }
 
+function AgentImagePreviewTile({ entry, imageList }: { entry: AgentImageGridEntry; imageList: string[] }) {
+  const [thumbnailSrc, setThumbnailSrc] = useState('')
+  const setLightboxImageId = useStore((state) => state.setLightboxImageId)
+  const imageId = entry.imageId
+
+  useEffect(() => {
+    setThumbnailSrc('')
+    if (!imageId) return
+
+    let cancelled = false
+    const applyThumbnail = (thumbnail: { dataUrl: string }) => {
+      if (!cancelled) setThumbnailSrc(thumbnail.dataUrl)
+    }
+    const unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
+    ensureImageThumbnailCached(imageId)
+      .then((thumbnail) => {
+        if (thumbnail) applyThumbnail(thumbnail)
+      })
+      .catch(() => {
+        if (!cancelled) setThumbnailSrc('')
+      })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [imageId])
+
+  if (!imageId) return null
+
+  return (
+    <button
+      type="button"
+      aria-label={`查看第 ${entry.imageIndex + 1} 张生成图片`}
+      onClick={() => setLightboxImageId(imageId, imageList)}
+      className="group/image h-[200px] w-[200px] flex-none overflow-hidden rounded-xl border border-gray-200 bg-gray-100 text-left transition-[border-color,box-shadow] hover:border-blue-400/70 hover:shadow-lg dark:border-white/[0.08] dark:bg-black/20 dark:hover:border-blue-400/60"
+    >
+      {thumbnailSrc ? (
+        <img
+          src={thumbnailSrc}
+          data-image-id={imageId}
+          className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover/image:scale-[1.03]"
+          alt=""
+          loading="lazy"
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center text-xs text-gray-400 dark:text-gray-500">加载图片中…</span>
+      )}
+    </button>
+  )
+}
+
+export function AgentImagePreviewStrip({
+  items,
+  imageList,
+  onViewMore,
+}: {
+  items: AgentImageGridItem[]
+  imageList: string[]
+  onViewMore: () => void
+}) {
+  const entries = useMemo(() => getAgentImageGridEntries(items).filter((entry) => entry.imageId), [items])
+  if (entries.length === 0) return null
+
+  return (
+    <div className="mt-3 flex w-full gap-3 overflow-x-auto pb-1" onClick={(event) => event.stopPropagation()}>
+      {entries.map((entry) => (
+        <AgentImagePreviewTile key={entry.key} entry={entry} imageList={imageList} />
+      ))}
+      <button
+        type="button"
+        onClick={onViewMore}
+        className="flex h-[200px] w-[200px] flex-none flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-5 text-center text-sm font-medium text-gray-600 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600 dark:border-white/[0.16] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-blue-400 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+      >
+        <span className="text-2xl leading-none">+</span>
+        <span>查看更多</span>
+        <span className="text-xs font-normal text-gray-400 dark:text-gray-500">展开完整回复</span>
+      </button>
+    </div>
+  )
+}
+
 export default function AgentImageGrid({ items, imageList }: { items: AgentImageGridItem[]; imageList: string[] }) {
   const entries = useMemo(() => getAgentImageGridEntries(items), [items])
   if (entries.length === 0) return null
