@@ -85,7 +85,7 @@
           ]
         }
       ],
-      "icon": "public/app-icon.png",
+      "icon": "public/icon.ico",
       "signAndEditExecutable": false
     },
     "mac": {
