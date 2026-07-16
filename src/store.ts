@@ -5462,8 +5462,9 @@ function createAgentRecoveredToolOutputs(round: AgentRound, tasks: TaskRecord[])
     }
 
     if (item.name === 'generate_image_batch') {
-      const batchItems = parseBatchImageCallArguments(item.arguments ?? '')
-      if (!batchItems?.length) continue
+      const batchPlan = parseBatchImageCallArguments(item.arguments ?? '')
+      if (!batchPlan) continue
+      const batchItems = batchPlan.images
 
       const batchTasks = round.outputTaskIds
         .map((taskId) => tasks.find((task) => task.id === taskId))
@@ -6270,14 +6271,30 @@ async function executeAgentRound(
     }
 
     // Helper: execute a generate_image_batch function call concurrently
-    const executeBatchFunctionCall = async (functionCallItem: ResponsesOutputItem): Promise<string> => {
+    const executeBatchFunctionCall = async (functionCallItem: ResponsesOutputItem): Promise<{
+      output: string
+      finalizeAfterBatch: boolean
+      totalCount: number
+      successCount: number
+      failureCount: number
+    }> => {
       const callId = functionCallItem.call_id ?? ''
       const args = functionCallItem.arguments ?? ''
-      const batchItems = parseBatchImageCallArguments(args)
+      const batchPlan = parseBatchImageCallArguments(args)
 
-      if (!batchItems || batchItems.length === 0) {
-        return JSON.stringify({ error: 'Invalid or empty batch arguments' })
+      if (!batchPlan) {
+        return {
+          output: JSON.stringify({ error: 'Invalid batch arguments: requested_count must match a non-empty images array with unique ids and prompts' }),
+          finalizeAfterBatch: false,
+          totalCount: 0,
+          successCount: 0,
+          failureCount: 0,
+        }
       }
+      const batchItems = batchPlan.images.map((item) => ({
+        ...item,
+        prompt: [batchPlan.sharedPrompt, item.prompt].filter(Boolean).join('\n\n'),
+      }))
 
       // Create task cards in model-provided order before starting network calls.
       const batchExecutionItems = []
@@ -6358,7 +6375,7 @@ async function executeAgentRound(
             throw new Error(batchResult.error)
           }
 
-          if (!shouldStreamAssistantMessage && batchResult.image) {
+          if (batchResult.image) {
             await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
           }
 
@@ -6433,7 +6450,13 @@ async function executeAgentRound(
       const successCount = outputImages.filter((img) => img.status === 'done').length
       toolCallsUsed += successCount
 
-      return JSON.stringify({ images: outputImages })
+      return {
+        output: JSON.stringify({ images: outputImages }),
+        finalizeAfterBatch: batchPlan.finalizeAfterBatch,
+        totalCount: outputImages.length,
+        successCount,
+        failureCount: outputImages.length - successCount,
+      }
     }
 
     while (true) {
@@ -6661,13 +6684,15 @@ async function executeAgentRound(
         })
       }
 
+      const batchExecutionResults = []
       if (batchFunctionCalls.length > 0) {
         for (const fc of batchFunctionCalls) {
-          const output = await executeBatchFunctionCall(fc)
+          const batchExecution = await executeBatchFunctionCall(fc)
+          batchExecutionResults.push(batchExecution)
           functionCallOutputs.push({
             type: 'function_call_output',
             call_id: fc.call_id,
-            output,
+            output: batchExecution.output,
           })
         }
       }
@@ -6697,6 +6722,26 @@ async function executeAgentRound(
         updatedAt: Date.now(),
         rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseId: lastResponseId, responseOutput: accumulatedOutputItemsWithFunctionOutputs } : item),
       }))
+
+      const terminalBatch = batchExecutionResults.length === 1
+        && batchFunctionCalls.length === 1
+        && singleImageFunctionCalls.length === 0
+        && continueFunctionCalls.length === 0
+        && result.images.length === 0
+        && batchExecutionResults[0].finalizeAfterBatch
+        ? batchExecutionResults[0]
+        : null
+      if (terminalBatch) {
+        const summary = terminalBatch.failureCount === 0
+          ? `批量生成完成，共 ${terminalBatch.successCount} 张图片。`
+          : `批量生成完成：${terminalBatch.successCount} 张成功，${terminalBatch.failureCount} 张失败。`
+        const textToAppend = accumulatedText ? `\n\n${summary}` : summary
+        accumulatedText += textToAppend
+        textSegments.push(summary)
+        if (shouldStreamAssistantMessage) appendAgentAssistantMessageContent(conversationId, assistantMessageId, textToAppend)
+        accumulatedOutputItems = accumulatedOutputItemsWithFunctionOutputs
+        break
+      }
 
       if (toolCallsUsed >= maxToolCalls) {
         reachedToolLimit = true

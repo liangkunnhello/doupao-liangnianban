@@ -1,5 +1,6 @@
 export type BatchExecutionMode = 'balanced' | 'task-first'
 export type CopyMode = 'with-copy' | 'without-copy'
+export type BatchCopyChoice = 'without-copy' | 'with-copy' | 'derived-copy' | 'mixed'
 
 export interface BatchDirectionInput {
   name: string
@@ -7,6 +8,7 @@ export interface BatchDirectionInput {
   count?: number
   strategy?: string
   copyRatio?: number
+  copyChoice?: BatchCopyChoice
   referenceFolder?: string
 }
 
@@ -24,6 +26,7 @@ export interface BatchTaskInput {
   directions: BatchDirectionInput[]
   strategy?: string
   copyRatio?: number
+  copyChoice?: BatchCopyChoice
   referenceFolder?: string
   notes?: string
 }
@@ -151,15 +154,11 @@ export function allocateDirections(quantity: number, directions: BatchDirectionI
   return result
 }
 
-function buildReferenceFolder(task: BatchTaskInput, direction: BatchDirectionInput, options: BatchPlannerOptions) {
-  if (direction.referenceFolder) return direction.referenceFolder
-  if (task.referenceFolder) return joinPath([task.referenceFolder, sanitizePathPart(direction.name, 'direction')])
-  if (!options.referenceRoot) return undefined
-  return joinPath([
-    options.referenceRoot,
-    sanitizePathPart(task.sku, 'sku'),
-    sanitizePathPart(direction.name, 'direction'),
-  ])
+function buildReferenceFolder(options: BatchPlannerOptions) {
+  // Reference images are a workspace-level optional capability. A selected
+  // directory applies to the whole frozen plan, so row data cannot silently
+  // point a task at a different folder.
+  return options.referenceRoot?.trim() || undefined
 }
 
 function buildOutputFolder(task: BatchTaskInput, direction: string, copyMode: CopyMode, options: BatchPlannerOptions) {
@@ -194,10 +193,14 @@ function createUnitsForTask(task: BatchTaskInput, options: BatchPlannerOptions):
   task.directions.forEach((direction, directionIndex) => {
     const directionTarget = directionCounts[directionIndex]
     if (directionTarget <= 0) return
-    const copyRatio = clamp01(direction.copyRatio ?? task.copyRatio ?? options.defaultCopyRatio)
+    const copyRatio = task.copyChoice === 'without-copy' ? 0
+      : task.copyChoice === 'with-copy' || task.copyChoice === 'derived-copy' ? 1
+        : clamp01(direction.copyRatio ?? task.copyRatio ?? options.defaultCopyRatio)
     const copyCounts = allocateInteger(directionTarget, [copyRatio, 1 - copyRatio])
-    const strategy = direction.strategy?.trim() || task.strategy?.trim() || '参考图风格提取后做同风格差异化衍生'
-    const referenceFolder = buildReferenceFolder(task, direction, options)
+    const referenceFolder = buildReferenceFolder(options)
+    const strategy = direction.strategy?.trim() || task.strategy?.trim() || (referenceFolder
+      ? '参考图风格提取后做同风格差异化衍生'
+      : '根据产品、渠道、素材规格和创意方向生成差异化商业视觉素材')
     ;(['with-copy', 'without-copy'] as const).forEach((copyMode, copyIndex) => {
       const targetCount = copyCounts[copyIndex]
       if (targetCount <= 0) return
@@ -223,6 +226,21 @@ function createUnitsForTask(task: BatchTaskInput, options: BatchPlannerOptions):
     })
   })
   return units
+}
+
+function splitChoices(value: string) {
+  return value.split(/[、,，;；|]/).map((item) => item.trim()).filter(Boolean)
+}
+
+function expandTaskCombinations(task: BatchTaskInput) {
+  const channels = splitChoices(task.channel)
+  const specifications = splitChoices(task.specification)
+  return channels.flatMap((channel, channelIndex) => specifications.map((specification, specificationIndex) => ({
+    ...task,
+    sourceId: `${task.sourceId}-c${channelIndex + 1}-s${specificationIndex + 1}`,
+    channel,
+    specification,
+  })))
 }
 
 function splitUnitsByDailyLimit(units: PlannedBatchUnit[], options: BatchPlannerOptions) {
@@ -273,15 +291,22 @@ export function createAgentBatchPlan(tasks: BatchTaskInput[], options: BatchPlan
   if (!options.outputRoot.trim()) throw new Error('Output root is required')
   parseDateKey(options.startDate)
   const normalizedTasks = tasks.map((task, index) => {
-    if (!task.sku.trim() || !task.product.trim() || !task.channel.trim() || !task.specification.trim()) {
-      throw new Error(`Task ${index + 1} is missing SKU, product, channel, or specification`)
+    const missing = [
+      !task.sku.trim() ? 'SKU' : '',
+      !task.product.trim() ? '产品' : '',
+      !task.channel.trim() ? '渠道' : '',
+      !task.specification.trim() ? '素材规格' : '',
+    ].filter(Boolean)
+    if (missing.length > 0) throw new Error(`第 ${index + 1} 行缺少：${missing.join('、')}`)
+    if (!Number.isFinite(task.quantity) || task.quantity <= 0 || !Number.isInteger(task.quantity)) {
+      throw new Error(`第 ${index + 1} 行「数量」必须是大于 0 的整数`)
     }
-    if (!Number.isFinite(task.quantity) || task.quantity <= 0) throw new Error(`Task ${index + 1} has invalid quantity`)
-    if (task.directions.length === 0) throw new Error(`Task ${index + 1} has no directions`)
+    if (task.directions.length === 0) throw new Error(`第 ${index + 1} 行「方向」不能为空`)
     return { ...task, quantity: Math.trunc(task.quantity) }
   })
-  const units = normalizedTasks.flatMap((task) => createUnitsForTask(task, options))
-  const targetCount = normalizedTasks.reduce((sum, task) => sum + task.quantity, 0)
+  const expandedTasks = normalizedTasks.flatMap(expandTaskCombinations)
+  const units = expandedTasks.flatMap((task) => createUnitsForTask(task, options))
+  const targetCount = expandedTasks.reduce((sum, task) => sum + task.quantity, 0)
   const plannedTotal = targetCount + Math.ceil(targetCount * Math.max(0, options.redundancyRate))
   const plannedCounts = allocateInteger(plannedTotal, units.map((unit) => unit.targetCount))
   units.forEach((unit, index) => { unit.plannedCount = plannedCounts[index] })

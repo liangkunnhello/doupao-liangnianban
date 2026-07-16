@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { submitPlannedBatchUnit } from '../lib/agentBatchExecution'
-import { AGENT_BATCH_QUEUE_UPDATED_EVENT, getBatchQueueProgress, getDueBatchUnits, loadAgentBatchQueue, saveAgentBatchQueue } from '../lib/agentBatchQueue'
+import { AGENT_BATCH_QUEUE_UPDATED_EVENT, getBatchQueueProgress, getDueBatchUnits, loadAgentBatchQueues, saveAgentBatchQueues } from '../lib/agentBatchQueue'
 
 function todayKey() {
   const date = new Date()
@@ -17,34 +17,37 @@ export default function AgentBatchQueueRunner() {
   useEffect(() => {
     const run = async () => {
       if (runningRef.current) return
-      const queue = loadAgentBatchQueue()
-      if (!queue || queue.paused || getBatchQueueProgress(queue).completed) return
       const currentDate = todayKey()
-      if (queue.lastRunDate === currentDate) return
+      const queues = loadAgentBatchQueues()
+      const queue = queues.find((item) => item.status === 'waiting' && item.lastRunDate !== currentDate && !getBatchQueueProgress(item).completed)
+      if (!queue) return
       const dueUnits = getDueBatchUnits(queue, currentDate)
       if (dueUnits.length === 0) return
       runningRef.current = true
       try {
+        queue.status = 'running'
+        saveAgentBatchQueues(queues)
         for (const unit of dueUnits) {
           const state = useStore.getState()
           const taskId = await submitPlannedBatchUnit(unit, state.settings, state.params)
           if (!taskId) throw new Error('批量任务未成功提交，请检查 API 配置')
           queue.submitted[unit.id] = { taskId, submittedAt: Date.now(), plannedCount: unit.plannedCount }
           queue.lastError = undefined
-          saveAgentBatchQueue(queue)
+          saveAgentBatchQueues(queues)
         }
         queue.lastRunDate = currentDate
-        saveAgentBatchQueue(queue)
         const progress = getBatchQueueProgress(queue)
+        queue.status = progress.completed ? 'completed' : 'waiting'
+        saveAgentBatchQueues(queues)
         useStore.getState().showToast(
           progress.completed ? '自动批量队列已全部提交' : `自动批量队列已提交到 ${todayKey()}`,
           'success',
         )
       } catch (reason) {
-        queue.paused = true
+        queue.status = 'failed'
         queue.lastError = reason instanceof Error ? reason.message : String(reason)
-        saveAgentBatchQueue(queue)
-        useStore.getState().showToast(`自动批量队列已暂停：${queue.lastError}`, 'error')
+        saveAgentBatchQueues(queues)
+        useStore.getState().showToast(`自动批量队列失败：${queue.lastError}`, 'error')
       } finally {
         runningRef.current = false
       }

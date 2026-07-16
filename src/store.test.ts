@@ -145,11 +145,23 @@ vi.mock('./lib/agentApi', () => ({
   })),
   parseBatchImageCallArguments: vi.fn((args: string) => {
     try {
-      const parsed = JSON.parse(args) as { images?: Array<{ id?: string; prompt?: string }> }
-      return parsed.images?.map((item, index) => ({
+      const parsed = JSON.parse(args) as {
+        requested_count?: number
+        finalize_after_batch?: boolean
+        shared_prompt?: string
+        images?: Array<{ id?: string; prompt?: string }>
+      }
+      const images = parsed.images?.map((item, index) => ({
         id: item.id || `image_${index + 1}`,
         prompt: item.prompt || '',
       })) ?? null
+      if (!images || (parsed.requested_count != null && parsed.requested_count !== images.length)) return null
+      return {
+        requestedCount: parsed.requested_count ?? images.length,
+        finalizeAfterBatch: parsed.finalize_after_batch === true,
+        sharedPrompt: parsed.shared_prompt?.trim() ?? '',
+        images,
+      }
     } catch {
       return null
     }
@@ -3029,6 +3041,113 @@ describe('agent batch reference resolution', () => {
       { status: 'done', error: null },
     ])
     expect(peak).toBeLessThanOrEqual(2)
+  })
+
+  it('plans and executes a terminal 100-image batch with one Agent request', async () => {
+    const images = Array.from({ length: 100 }, (_, index) => ({
+      id: `image-${index + 1}`,
+      prompt: `主体 ${index + 1}`,
+    }))
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '正在生成 100 张图片。',
+      images: [],
+      outputItems: [{
+        type: 'function_call',
+        name: 'generate_image_batch',
+        call_id: 'terminal-batch-100',
+        arguments: JSON.stringify({
+          requested_count: 100,
+          finalize_after_batch: true,
+          shared_prompt: '统一商业摄影风格',
+          images,
+        }),
+      }],
+      responseId: 'response-terminal',
+    })
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-a')
+      const latestRound = conversation?.rounds.find((round) => round.id === conversation.activeRoundId)
+      expect(latestRound?.status).toBe('done')
+    })
+
+    expect(callAgentResponsesApi).toHaveBeenCalledTimes(1)
+    expect(callBatchImageSingle).toHaveBeenCalledTimes(100)
+    expect(vi.mocked(callBatchImageSingle).mock.calls[0][0].prompt).toMatch(/^统一商业摄影风格\n\n主体 1\n\n/)
+    expect(vi.mocked(callBatchImageSingle).mock.calls[99][0].prompt).toContain('主体 100')
+
+    const conversation = useStore.getState().agentConversations.find((item) => item.id === 'conversation-a')!
+    const latestRound = conversation.rounds.find((round) => round.id === conversation.activeRoundId)!
+    const assistantMessage = conversation.messages.find((message) => message.id === latestRound.assistantMessageId)
+    expect(latestRound.outputTaskIds).toHaveLength(100)
+    expect(assistantMessage?.content).toContain('批量生成完成，共 100 张图片。')
+  })
+
+  it('stores successful hybrid batch images when Agent streaming is enabled', async () => {
+    const agentProfile = createDefaultOpenAIProfile({
+      id: 'agent-streaming-profile',
+      apiKey: 'agent-key',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+      streamImages: true,
+    })
+    const imageProfile = createDefaultOpenAIProfile({
+      id: 'hybrid-image-profile',
+      apiKey: 'image-key',
+      apiMode: 'images',
+      streamImages: true,
+    })
+    useStore.setState((state) => ({
+      settings: normalizeSettings({
+        ...state.settings,
+        agentApiConfigMode: 'hybrid',
+        agentUseCustomProfile: true,
+        agentProfile,
+        profiles: [imageProfile],
+        activeProfileId: imageProfile.id,
+      }),
+    }))
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '',
+      images: [],
+      outputItems: [{
+        type: 'function_call',
+        name: 'generate_image_batch',
+        call_id: 'hybrid-streaming-batch',
+        arguments: JSON.stringify({
+          requested_count: 2,
+          finalize_after_batch: true,
+          shared_prompt: '',
+          images: [
+            { id: 'image-1', prompt: '第一张' },
+            { id: 'image-2', prompt: '第二张' },
+          ],
+        }),
+      }],
+      responseId: 'response-hybrid-batch',
+    })
+    vi.mocked(callImageApi).mockResolvedValue({
+      images: ['data:image/png;base64,aHlicmlkLWJhdGNo'],
+      actualParams: {},
+      actualParamsList: [{}],
+      revisedPrompts: [],
+    })
+
+    await submitAgentMessage()
+
+    await vi.waitFor(() => {
+      const state = useStore.getState()
+      const conversation = state.agentConversations.find((item) => item.id === 'conversation-a')!
+      const round = conversation.rounds.find((item) => item.id === conversation.activeRoundId)!
+      const tasks = round.outputTaskIds.map((id) => state.tasks.find((task) => task.id === id)!)
+      expect(round.status).toBe('done')
+      expect(tasks).toHaveLength(2)
+      expect(tasks.every((task) => task.status === 'done')).toBe(true)
+      expect(tasks.every((task) => task.error === null)).toBe(true)
+      expect(tasks.every((task) => task.outputImages.length === 1)).toBe(true)
+    })
   })
 
   it('runs multiple fallback single-image function calls concurrently', async () => {

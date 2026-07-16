@@ -60,6 +60,18 @@ describe('agentBatchPlanner', () => {
     expect(allUnits.some((unit) => unit.copyMode === 'with-copy')).toBe(true)
     expect(allUnits.some((unit) => unit.copyMode === 'without-copy')).toBe(true)
     expect(allUnits.every((unit) => unit.outputFolder.startsWith('D:\\Outputs\\APP-能力中心'))).toBe(true)
-    expect(allUnits.find((unit) => unit.direction === '美食教程')?.referenceFolder).toBe('D:\\References\\APP-能力中心\\美食教程')
+    expect(allUnits.find((unit) => unit.direction === '美食教程')?.referenceFolder).toBe('D:\\References')
+  })
+
+  it('uses text-to-image defaults when no workspace reference directory is selected', () => {
+    const input = [{ sourceId: '1', sku: 'SKU', product: '产品', channel: '渠道', specification: '1:1', quantity: 1, directions: [{ name: '主视觉' }] }]
+    const result = createAgentBatchPlan(input, { startDate: '2026-07-16', dailyLimit: 10, redundancyRate: 0, defaultCopyRatio: 0, executionMode: 'task-first', outputRoot: 'D:\\Outputs' })
+    expect(result.days[0].units[0].referenceFolder).toBeUndefined()
+    expect(result.days[0].units[0].strategy).toContain('根据产品')
+  })
+
+  it('generates the entered quantity for every channel and specification combination', () => {
+    const result = createAgentBatchPlan([{ sourceId: '1', sku: 'SKU', product: '产品', channel: '抖音、快手', specification: '1:1、9:16', quantity: 100, directions: [{ name: '主视觉' }] }], { startDate: '2026-07-16', dailyLimit: 1000, redundancyRate: 0, defaultCopyRatio: 0, executionMode: 'task-first', outputRoot: 'D:\\Outputs' })
+    expect(result.targetCount).toBe(400)
   })
 })

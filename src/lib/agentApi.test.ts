@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
-import { callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries } from './agentApi'
+import { callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments } from './agentApi'
 
 describe('callAgentResponsesApi', () => {
   afterEach(() => {
@@ -45,8 +45,17 @@ describe('callAgentResponsesApi', () => {
     expect(body.tools[0].partial_images).toBe(2)
     expect(body.instructions).toContain('Information-flow ad negative constraints')
     expect(body.instructions).toContain('Whenever 2 or more images are ready to generate, call generate_image_batch exactly once')
+    expect(body.instructions).toContain('Set requested_count to the exact number of images')
     expect(body.instructions).not.toContain('One image_generation call per distinct image')
     expect(body.instructions).toContain('不得生成色情裸露')
+    expect(body.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'generate_image_batch',
+        parameters: expect.objectContaining({
+          required: ['requested_count', 'finalize_after_batch', 'shared_prompt', 'images'],
+        }),
+      }),
+    ]))
     expect(textDeltas).toEqual(['Hel', 'lo'])
     expect(result).toMatchObject({
       responseId: 'resp_1',
@@ -533,5 +542,41 @@ describe('generateDerivedWordEntries', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     await assertion
+  })
+})
+
+describe('parseBatchImageCallArguments', () => {
+  it('parses a validated terminal batch plan', () => {
+    expect(parseBatchImageCallArguments(JSON.stringify({
+      requested_count: 2,
+      finalize_after_batch: true,
+      shared_prompt: '  shared style  ',
+      images: [
+        { id: 'first', prompt: ' first prompt ' },
+        { id: 'second', prompt: 'second prompt' },
+      ],
+    }))).toEqual({
+      requestedCount: 2,
+      finalizeAfterBatch: true,
+      sharedPrompt: 'shared style',
+      images: [
+        { id: 'first', prompt: 'first prompt' },
+        { id: 'second', prompt: 'second prompt' },
+      ],
+    })
+  })
+
+  it('rejects count mismatches and duplicate ids', () => {
+    expect(parseBatchImageCallArguments(JSON.stringify({
+      requested_count: 2,
+      images: [{ id: 'only', prompt: 'prompt' }],
+    }))).toBeNull()
+    expect(parseBatchImageCallArguments(JSON.stringify({
+      requested_count: 2,
+      images: [
+        { id: 'duplicate', prompt: 'first' },
+        { id: 'duplicate', prompt: 'second' },
+      ],
+    }))).toBeNull()
   })
 })

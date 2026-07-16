@@ -39,6 +39,8 @@ const AGENT_IMAGE_INSTRUCTIONS = [
   '  2. **Batch Remaining Tasks:** Once the base reference is available, list all remaining images to be generated. The app will generate them concurrently for you. In your descriptions, explicitly instruct to reference the base image to maintain consistency.',
   '  3. **Independent Images:** If the requested images are completely independent (e.g. "3 different cats"), generate them together in ONE response. Do NOT generate them one by one across multiple responses.',
   '  4. **Mandatory Batch Tool:** Whenever 2 or more images are ready to generate, call generate_image_batch exactly once with every ready image. Never emit multiple image_generation or generate_image calls for a multi-image request.',
+  '  5. **Complete Large Batches:** For large independent requests, plan every requested image in that single generate_image_batch call. Set requested_count to the exact number of images, and set finalize_after_batch to true when this batch fully completes the user request.',
+  '  6. **Shared Prompt:** Put visual requirements common to every image in shared_prompt. Keep each item prompt focused on that image\'s unique subject, composition, and variations. The app will combine them before generation.',
   'As the turn continues, output a brief progress note before each tool call.',
   'For single-image requests, generate directly without any listing.',
   '',
@@ -165,12 +167,28 @@ function createAgentTools(params: TaskParams, profile: ApiProfile, settings: App
       settings.agentApiConfigMode === 'hybrid'
         ? 'For single images or prerequisite/base images, use generate_image instead.'
         : 'For single images or prerequisite/base images, use the built-in image_generation tool instead.',
-      'Each image prompt must be self-contained and include full visual style descriptions.',
+      'Each item prompt must fully describe that image\'s unique subject and composition. Put repeated visual style requirements in shared_prompt.',
       'If an image needs to match a previously generated image, include the corresponding XML tag (e.g. <ref id="round-1-image-1" />) inside that image prompt so the app can attach the reference image automatically.',
+      'Set requested_count to exactly the number of items in images.',
+      'Set finalize_after_batch to true only when this batch fully completes the user request and no generated image needs to be inspected before another generation step.',
+      'Use shared_prompt for requirements common to every image; the app appends it to each item prompt before generation.',
     ].join(' '),
     parameters: {
       type: 'object',
       properties: {
+        requested_count: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Exact number of images in this batch. Must equal images.length.',
+        },
+        finalize_after_batch: {
+          type: 'boolean',
+          description: 'True only when this batch fully completes the user request, allowing the app to finish locally without another Agent call.',
+        },
+        shared_prompt: {
+          type: 'string',
+          description: 'Visual requirements shared by every image. Use an empty string when there are no shared requirements.',
+        },
         images: {
           type: 'array',
           description: 'Array of images to generate concurrently.',
@@ -191,7 +209,7 @@ function createAgentTools(params: TaskParams, profile: ApiProfile, settings: App
           },
         },
       },
-      required: ['images'],
+      required: ['requested_count', 'finalize_after_batch', 'shared_prompt', 'images'],
       additionalProperties: false,
     },
     strict: true,
@@ -1119,21 +1137,51 @@ export async function callBatchImageSingle(opts: {
   }
 }
 
-/** Parse the arguments of a generate_image_batch function call */
-export function parseBatchImageCallArguments(args: string): Array<{ id: string; prompt: string }> | null {
+export interface BatchImageCallArguments {
+  requestedCount: number
+  finalizeAfterBatch: boolean
+  sharedPrompt: string
+  images: Array<{ id: string; prompt: string }>
+}
+
+/** Parse and validate the arguments of a generate_image_batch function call. */
+export function parseBatchImageCallArguments(args: string): BatchImageCallArguments | null {
   try {
-    const parsed = JSON.parse(args) as { images?: unknown }
+    const parsed = JSON.parse(args) as {
+      requested_count?: unknown
+      finalize_after_batch?: unknown
+      shared_prompt?: unknown
+      images?: unknown
+    }
     if (!parsed || !Array.isArray(parsed.images)) return null
     const items: Array<{ id: string; prompt: string }> = []
+    const ids = new Set<string>()
     for (const raw of parsed.images) {
-      if (!raw || typeof raw !== 'object') continue
+      if (!raw || typeof raw !== 'object') return null
       const item = raw as Record<string, unknown>
       const id = typeof item.id === 'string' ? item.id.trim() : ''
       const prompt = typeof item.prompt === 'string' ? item.prompt.trim() : ''
-      if (!prompt) continue
-      items.push({ id: id || `image_${items.length + 1}`, prompt })
+      if (!prompt) return null
+      const normalizedId = id || `image_${items.length + 1}`
+      if (ids.has(normalizedId)) return null
+      ids.add(normalizedId)
+      items.push({ id: normalizedId, prompt })
     }
-    return items.length > 0 ? items : null
+    if (items.length === 0) return null
+
+    const requestedCount = parsed.requested_count == null
+      ? items.length
+      : typeof parsed.requested_count === 'number' && Number.isInteger(parsed.requested_count) && parsed.requested_count > 0
+        ? parsed.requested_count
+        : 0
+    if (requestedCount !== items.length) return null
+
+    return {
+      requestedCount,
+      finalizeAfterBatch: parsed.finalize_after_batch === true,
+      sharedPrompt: typeof parsed.shared_prompt === 'string' ? parsed.shared_prompt.trim() : '',
+      images: items,
+    }
   } catch {
     return null
   }

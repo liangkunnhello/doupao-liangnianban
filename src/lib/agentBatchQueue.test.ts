@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAgentBatchQueue, getBatchQueueProgress, getDueBatchUnits, loadAgentBatchQueue, saveAgentBatchQueue } from './agentBatchQueue'
+import { createAgentBatchQueue, getBatchQueueProgress, getDueBatchUnits, loadAgentBatchQueue, loadAgentBatchQueues, saveAgentBatchQueue } from './agentBatchQueue'
 import type { AgentBatchPlan } from './agentBatchPlanner'
 
 function plan(): AgentBatchPlan {
@@ -41,5 +41,13 @@ describe('agentBatchQueue', () => {
   it('returns only one planned day when catching up', () => {
     const queue = createAgentBatchQueue(plan())
     expect(getDueBatchUnits(queue, '2026-07-20').map((unit) => unit.id)).toEqual(['a'])
+  })
+
+  it('keeps multiple queue receipts instead of replacing the previous queue', () => {
+    const memory = new Map<string, string>()
+    const storage = { getItem: (key: string) => memory.get(key) ?? null, setItem: (key: string, value: string) => { memory.set(key, value) }, removeItem: (key: string) => { memory.delete(key) } }
+    saveAgentBatchQueue(createAgentBatchQueue(plan(), 1), storage)
+    saveAgentBatchQueue(createAgentBatchQueue(plan(), 2), storage)
+    expect(loadAgentBatchQueues(storage).map((queue) => queue.id)).toEqual(['agent-batch-1', 'agent-batch-2'])
   })
 })
