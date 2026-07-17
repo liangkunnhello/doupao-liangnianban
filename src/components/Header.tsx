@@ -211,7 +211,7 @@ export default function Header() {
                     rel="noopener noreferrer"
                     className="hidden items-center gap-2 text-lg font-bold tracking-tight text-gray-800 transition-colors hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300 sm:inline-flex"
                   >
-                    <img src="/app-icon.png" alt="" className="h-6 w-6 rounded-full" />
+                    <img src="./app-icon.png" alt="" className="h-6 w-6 rounded-full" />
                     豆泡
                   </a>
                 </>
@@ -222,7 +222,7 @@ export default function Header() {
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-[17px] font-bold tracking-tight text-gray-800 transition-colors hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300 sm:text-lg"
                 >
-                  <img src="/app-icon.png" alt="" className="h-6 w-6 rounded-full" />
+                  <img src="./app-icon.png" alt="" className="h-6 w-6 rounded-full" />
                   豆泡
                 </a>
               )}

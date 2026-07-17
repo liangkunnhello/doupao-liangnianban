@@ -60,6 +60,7 @@
     "directories": {
       "output": "release"
     },
+    "icon": "public/icon.ico",
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
@@ -85,20 +86,17 @@
           ]
         }
       ],
-      "icon": "public/icon.ico",
       "signAndEditExecutable": false
     },
     "mac": {
       "target": [
         "dmg"
-      ],
-      "icon": "public/app-icon.png"
+      ]
     },
     "linux": {
       "target": [
         "AppImage"
-      ],
-      "icon": "public/app-icon.png"
+      ]
     },
     "nsis": {
       "oneClick": false,

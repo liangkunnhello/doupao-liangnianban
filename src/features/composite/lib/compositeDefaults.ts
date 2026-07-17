@@ -85,7 +85,7 @@ export function createCompositeLogoLayer(id = createId('logo')): CompositeImageL
     opacity: 1,
     sourcePath: '',
     sourceName: 'Logo',
-    sourceDataUrl: '/app-icon.png',
+    sourceDataUrl: './app-icon.png',
     style: createDefaultCompositeLayerStyle('#ffffff'),
     mirrorX: false,
     mirrorY: false,

@@ -87,7 +87,7 @@ const defaultTemplates: WatermarkTemplate[] = [
     anchor: 'bottom-right',
     scalePercent: 10,
     marginPercent: 4,
-    logoUrl: '/app-icon.png',
+    logoUrl: './app-icon.png',
   },
   {
     id: 'tpl-default-text',

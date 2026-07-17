@@ -39,7 +39,7 @@ type DistributionRoute = {
   status: 'idle' | 'ready' | 'done'
 }
 
-const DEFAULT_LOGO = '/app-icon.png'
+const DEFAULT_LOGO = './app-icon.png'
 
 function createDefaultLayers(): WatermarkLayer[] {
   return [
