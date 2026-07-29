@@ -1,0 +1,103 @@
+/* 暗夜（深邃靛蓝） */
+:root[data-skin='midnight'] {
+  /* 旧变量兼容桥 */
+  --background: 245 22% 96%;
+  --foreground: 245 20% 14%;
+  --muted: 245 16% 93%;
+  --muted-foreground: 245 12% 38%;
+  --border: 245 15% 88%;
+  --input: 245 15% 88%;
+  --primary: 245 80% 60%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar: 245 16% 94%;
+  --sidebar-foreground: 245 20% 14%;
+  /* 品牌色板（深邃靛蓝，锚定暗夜主色） */
+  --skin-blue-50: 245 80% 85%;
+  --skin-blue-100: 245 80% 83%;
+  --skin-blue-200: 245 80% 77%;
+  --skin-blue-300: 245 80% 68%;
+  --skin-blue-400: 245 80% 62%;
+  --skin-blue-500: 245 80% 60%;
+  --skin-blue-600: 245 80% 52%;
+  --skin-blue-700: 245 80% 47%;
+  --skin-blue-800: 245 80% 39%;
+  --skin-blue-900: 245 80% 32%;
+  --skin-blue-950: 245 80% 23%;
+  /* 中性色 / 背景 / 卡片 */
+  --ds-color-canvas: 245 22% 96%;
+  --ds-color-surface: 245 24% 98%;
+  --ds-color-surface-subtle: 245 16% 93%;
+  --ds-color-surface-raised: 245 26% 99%;
+  --ds-color-text: 245 20% 14%;
+  --ds-color-text-muted: 245 12% 38%;
+  --ds-color-text-subtle: 245 10% 52%;
+  --ds-color-text-inverse: 0 0% 100%;
+  --ds-color-border: 245 15% 88%;
+  --ds-color-border-strong: 245 10% 77%;
+  /* 品牌主色 + 强调渐变 */
+  --ds-color-primary: 245 80% 60%;
+  --ds-color-primary-hover: 245 80% 53%;
+  --ds-color-primary-subtle: 245 80% 95%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(245 80% 66%) 0%, hsl(245 80% 54%) 100%);
+  --ds-color-focus: 245 80% 60%;
+  /* 语义状态色 */
+  --ds-color-success: 142 71% 45%;
+  --ds-color-success-subtle: 142 45% 95%;
+  --ds-color-warning: 36 100% 50%;
+  --ds-color-warning-subtle: 38 60% 95%;
+  --ds-color-danger: 1 100% 59%;
+  --ds-color-danger-hover: 1 100% 64%;
+  --ds-color-danger-subtle: 1 60% 96%;
+  --ds-color-info: 199 95% 62%;
+  --ds-color-info-subtle: 199 60% 95%;
+  --ds-color-selection-surface: 245 80% 95%;
+  --ds-color-selection-border: 245 55% 80%;
+  --ds-color-selection-text: 245 20% 14%;
+  /* 组件表面：主按钮使用强调渐变 */
+  --ds-button-primary-background: var(--ds-color-primary-gradient);
+  --ds-button-primary-background-hover: var(--ds-color-primary-gradient);
+  --ds-button-primary-hover-filter: brightness(1.05);
+}
+
+:root[data-skin='midnight'].dark {
+  --background: 245 22% 8%;
+  --foreground: 245 16% 95%;
+  --muted: 245 14% 15%;
+  --muted-foreground: 245 12% 68%;
+  --border: 245 14% 21%;
+  --input: 245 14% 21%;
+  --primary: 245 80% 68%;
+  --primary-foreground: 245 16% 12%;
+  --sidebar: 245 14% 12%;
+  --sidebar-foreground: 245 16% 95%;
+  --skin-blue-400: 245 80% 74%;
+  --skin-blue-500: 245 80% 68%;
+  --skin-blue-600: 245 80% 62%;
+  --ds-color-canvas: 245 22% 8%;
+  --ds-color-surface: 245 16% 13%;
+  --ds-color-surface-subtle: 245 14% 15%;
+  --ds-color-surface-raised: 245 18% 14%;
+  --ds-color-text: 245 16% 95%;
+  --ds-color-text-muted: 245 8% 70%;
+  --ds-color-text-subtle: 245 7% 58%;
+  --ds-color-text-inverse: 245 16% 12%;
+  --ds-color-border: 245 14% 21%;
+  --ds-color-border-strong: 245 8% 38%;
+  --ds-color-primary: 245 80% 68%;
+  --ds-color-primary-hover: 245 80% 74%;
+  --ds-color-primary-subtle: 245 80% 20%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(245 80% 74%) 0%, hsl(245 80% 64%) 100%);
+  --ds-color-focus: 245 80% 68%;
+  --ds-color-success: 142 73% 47%;
+  --ds-color-success-subtle: 142 40% 22%;
+  --ds-color-warning: 54 100% 52%;
+  --ds-color-warning-subtle: 54 50% 22%;
+  --ds-color-danger: 1 100% 60%;
+  --ds-color-danger-hover: 1 100% 66%;
+  --ds-color-danger-subtle: 1 50% 24%;
+  --ds-color-info: 199 100% 68%;
+  --ds-color-info-subtle: 199 55% 22%;
+  --ds-color-selection-surface: 245 80% 20%;
+  --ds-color-selection-border: 245 60% 42%;
+  --ds-color-selection-text: 245 16% 95%;
+}

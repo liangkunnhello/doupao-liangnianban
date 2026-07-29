@@ -1,49 +1,23 @@
-import type { ColorScheme, ThemeMode } from '../types'
+/**
+ * 兼容桥：旧的 theme 工具已迁移到 src/theme/（registry.ts + appearance.ts）。
+ * 请新代码直接从 '../theme/registry' 与 '../theme/appearance' 导入。
+ */
 
-export const COLOR_SCHEME_VALUES: ColorScheme[] = [
-  'default',
-  'apple',
-  'xiaomi',
-  'rose',
-  'lake',
-  'sunset',
-  'lavender',
-  'midnight',
-]
+import { SKIN_IDS, normalizeSkinId, type SkinId } from '../theme/registry'
 
-export function normalizeColorScheme(value: unknown): ColorScheme {
-  return COLOR_SCHEME_VALUES.includes(value as ColorScheme) ? (value as ColorScheme) : 'default'
-}
+export {
+  applyAppearance,
+  applyThemeMode,
+  normalizeThemeMode,
+  THEME_TRANSITION_CLASS,
+  THEME_TRANSITION_DURATION_MS,
+} from '../theme/appearance'
 
-export const THEME_TRANSITION_CLASS = 'theme-transitioning'
-export const THEME_TRANSITION_DURATION_MS = 220
+export { normalizeSkinId, isSkinId, DEFAULT_SKIN_ID, SKIN_IDS } from '../theme/registry'
+export type { SkinId } from '../theme/registry'
 
-interface ApplyThemeModeOptions {
-  transition?: boolean
-  schedule?: (callback: () => void, delay: number) => void
-}
+/** @deprecated 使用 normalizeSkinId */
+export const normalizeColorScheme = normalizeSkinId
 
-export function normalizeThemeMode(value: unknown): ThemeMode {
-  return value === 'dark' ? 'dark' : 'light'
-}
-
-export function applyThemeMode(
-  themeMode: ThemeMode,
-  root: HTMLElement = document.documentElement,
-  options: ApplyThemeModeOptions = {},
-) {
-  if (options.transition) {
-    root.classList.add(THEME_TRANSITION_CLASS)
-    const schedule = options.schedule ?? ((callback: () => void, delay: number) => window.setTimeout(callback, delay))
-    schedule(() => root.classList.remove(THEME_TRANSITION_CLASS), THEME_TRANSITION_DURATION_MS)
-  }
-  root.classList.toggle('dark', themeMode === 'dark')
-  root.style.colorScheme = themeMode
-}
-
-export function applyColorScheme(
-  colorScheme: ColorScheme,
-  root: HTMLElement = document.documentElement,
-) {
-  root.setAttribute('data-color-scheme', colorScheme)
-}
+/** @deprecated 使用 SKIN_IDS（由注册表推导） */
+export const COLOR_SCHEME_VALUES: SkinId[] = SKIN_IDS

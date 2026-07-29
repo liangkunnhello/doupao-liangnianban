@@ -5,7 +5,7 @@ import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams 
 import { mergeImportedSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
 import { isElectron as isElectronEnv, getDesktopPath, getBackupList, restoreFromBackupFile, checkBackupHasData } from './lib/localSave'
-import { applyThemeMode, applyColorScheme } from './lib/theme'
+import { applyAppearance, writeAppearanceSnapshot } from './theme/appearance'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
@@ -49,7 +49,7 @@ export default function App() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const themeMode = useStore((s) => s.settings.themeMode)
-  const colorScheme = useStore((s) => s.settings.colorScheme)
+  const skinId = useStore((s) => s.settings.skinId)
   const themeAppliedRef = useRef(false)
   const [startupSafeMode, setStartupSafeMode] = useState(false)
   useGlobalClickSuppression()
@@ -66,10 +66,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    applyThemeMode(themeMode, document.documentElement, { transition: themeAppliedRef.current })
-    applyColorScheme(colorScheme, document.documentElement)
+    // Zustand 正式设置为准：应用外观并重写首屏快照
+    applyAppearance({ skinId, themeMode }, document.documentElement, { transition: themeAppliedRef.current })
+    writeAppearanceSnapshot({ skinId, themeMode })
     themeAppliedRef.current = true
-  }, [themeMode, colorScheme])
+  }, [themeMode, skinId])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)

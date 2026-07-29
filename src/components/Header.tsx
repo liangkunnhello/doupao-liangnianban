@@ -11,7 +11,8 @@ import {
   type GenerationStatsRange,
   type GenerationStatsTabCount,
 } from '../lib/generationStats'
-import type { AppMode, ColorScheme } from '../types'
+import type { AppMode } from '../types'
+import { SKIN_IDS, SKIN_REGISTRY, type SkinId } from '../theme/registry'
 import { SegmentedControl } from '../design-system'
 import ViewportTooltip from './ViewportTooltip'
 import HelpModal from './HelpModal'
@@ -145,7 +146,7 @@ export default function Header() {
   const appMode = useStore((s) => s.appMode)
   const setAppMode = useStore((s) => s.setAppMode)
   const themeMode = useStore((s) => s.settings.themeMode)
-  const colorScheme = useStore((s) => s.settings.colorScheme)
+  const skinId = useStore((s) => s.settings.skinId)
   const setSettings = useStore((s) => s.setSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -207,28 +208,13 @@ export default function Header() {
   const schemeTooltip = useTooltip()
   const nextThemeMode = themeMode === 'dark' ? 'light' : 'dark'
   const themeTooltipText = nextThemeMode === 'dark' ? '切换深色主题' : '切换浅色主题'
-  const schemeOrder: ColorScheme[] = [
-    'default',
-    'apple',
-    'xiaomi',
-    'rose',
-    'lake',
-    'sunset',
-    'lavender',
-    'midnight',
-  ]
-  const schemeLabels: Record<ColorScheme, string> = {
-    default: '默认',
-    apple: 'Apple',
-    xiaomi: '小米',
-    rose: '玫瑰花园',
-    lake: '湖光',
-    sunset: '日落霞光',
-    lavender: '薰衣草梦',
-    midnight: '暗夜',
-  }
-  const nextScheme = schemeOrder[(schemeOrder.indexOf(colorScheme) + 1) % schemeOrder.length]
-  const schemeTooltipText = `配色：${schemeLabels[colorScheme]}（点击切换为 ${schemeLabels[nextScheme]}）`
+  const schemeOrder: SkinId[] = SKIN_IDS
+  const schemeLabels: Record<SkinId, string> = schemeOrder.reduce((acc, id) => {
+    acc[id] = SKIN_REGISTRY[id].label
+    return acc
+  }, {} as Record<SkinId, string>)
+  const nextScheme = schemeOrder[(schemeOrder.indexOf(skinId) + 1) % schemeOrder.length]
+  const schemeTooltipText = `配色：${schemeLabels[skinId]}（点击切换为 ${schemeLabels[nextScheme]}）`
 
   return (
     <>
@@ -322,7 +308,7 @@ export default function Header() {
               <button
                 onClick={() => {
                   dismissAllTooltips()
-                  setSettings({ colorScheme: nextScheme })
+                  setSettings({ skinId: nextScheme })
                 }}
                 className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
                 aria-label={schemeTooltipText}

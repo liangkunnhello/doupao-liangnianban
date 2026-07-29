@@ -1,0 +1,103 @@
+/* 玫瑰花园（浪漫暖粉） */
+:root[data-skin='rose'] {
+  /* 旧变量兼容桥 */
+  --background: 340 24% 96%;
+  --foreground: 340 20% 14%;
+  --muted: 340 18% 93%;
+  --muted-foreground: 340 12% 38%;
+  --border: 340 18% 88%;
+  --input: 340 18% 88%;
+  --primary: 340 90% 55%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar: 340 18% 94%;
+  --sidebar-foreground: 340 20% 14%;
+  /* 品牌色板（暖调粉，锚定玫瑰主色） */
+  --skin-blue-50: 340 90% 85%;
+  --skin-blue-100: 340 90% 83%;
+  --skin-blue-200: 340 90% 77%;
+  --skin-blue-300: 340 90% 68%;
+  --skin-blue-400: 340 90% 58%;
+  --skin-blue-500: 340 90% 55%;
+  --skin-blue-600: 340 90% 47%;
+  --skin-blue-700: 340 90% 42%;
+  --skin-blue-800: 340 90% 34%;
+  --skin-blue-900: 340 90% 27%;
+  --skin-blue-950: 340 90% 18%;
+  /* 中性色 / 背景 / 卡片 */
+  --ds-color-canvas: 340 24% 96%;
+  --ds-color-surface: 340 24% 98%;
+  --ds-color-surface-subtle: 340 18% 93%;
+  --ds-color-surface-raised: 340 26% 99%;
+  --ds-color-text: 340 20% 14%;
+  --ds-color-text-muted: 340 12% 38%;
+  --ds-color-text-subtle: 340 10% 52%;
+  --ds-color-text-inverse: 0 0% 100%;
+  --ds-color-border: 340 18% 88%;
+  --ds-color-border-strong: 340 10% 77%;
+  /* 品牌主色 + 强调渐变 */
+  --ds-color-primary: 340 90% 55%;
+  --ds-color-primary-hover: 340 90% 47%;
+  --ds-color-primary-subtle: 340 90% 95%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(340 90% 62%) 0%, hsl(340 90% 48%) 100%);
+  --ds-color-focus: 340 90% 55%;
+  /* 语义状态色 */
+  --ds-color-success: 142 71% 45%;
+  --ds-color-success-subtle: 142 45% 95%;
+  --ds-color-warning: 36 100% 50%;
+  --ds-color-warning-subtle: 38 60% 95%;
+  --ds-color-danger: 1 100% 59%;
+  --ds-color-danger-hover: 1 100% 64%;
+  --ds-color-danger-subtle: 1 60% 96%;
+  --ds-color-info: 199 95% 62%;
+  --ds-color-info-subtle: 199 60% 95%;
+  --ds-color-selection-surface: 340 90% 95%;
+  --ds-color-selection-border: 340 55% 80%;
+  --ds-color-selection-text: 340 20% 14%;
+  /* 组件表面：主按钮使用强调渐变 */
+  --ds-button-primary-background: var(--ds-color-primary-gradient);
+  --ds-button-primary-background-hover: var(--ds-color-primary-gradient);
+  --ds-button-primary-hover-filter: brightness(1.05);
+}
+
+:root[data-skin='rose'].dark {
+  --background: 340 18% 8%;
+  --foreground: 340 12% 95%;
+  --muted: 340 12% 15%;
+  --muted-foreground: 340 9% 68%;
+  --border: 340 12% 21%;
+  --input: 340 12% 21%;
+  --primary: 340 90% 65%;
+  --primary-foreground: 340 16% 12%;
+  --sidebar: 340 12% 12%;
+  --sidebar-foreground: 340 12% 95%;
+  --skin-blue-400: 340 90% 72%;
+  --skin-blue-500: 340 90% 65%;
+  --skin-blue-600: 340 90% 58%;
+  --ds-color-canvas: 340 18% 8%;
+  --ds-color-surface: 340 16% 13%;
+  --ds-color-surface-subtle: 340 14% 15%;
+  --ds-color-surface-raised: 340 18% 14%;
+  --ds-color-text: 340 12% 95%;
+  --ds-color-text-muted: 340 8% 70%;
+  --ds-color-text-subtle: 340 7% 58%;
+  --ds-color-text-inverse: 340 16% 12%;
+  --ds-color-border: 340 12% 21%;
+  --ds-color-border-strong: 340 8% 38%;
+  --ds-color-primary: 340 90% 65%;
+  --ds-color-primary-hover: 340 90% 68%;
+  --ds-color-primary-subtle: 340 80% 20%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(340 90% 70%) 0%, hsl(340 90% 60%) 100%);
+  --ds-color-focus: 340 90% 65%;
+  --ds-color-success: 142 73% 47%;
+  --ds-color-success-subtle: 142 40% 22%;
+  --ds-color-warning: 54 100% 52%;
+  --ds-color-warning-subtle: 54 50% 22%;
+  --ds-color-danger: 1 100% 60%;
+  --ds-color-danger-hover: 1 100% 66%;
+  --ds-color-danger-subtle: 1 50% 24%;
+  --ds-color-info: 199 100% 68%;
+  --ds-color-info-subtle: 199 55% 22%;
+  --ds-color-selection-surface: 340 80% 20%;
+  --ds-color-selection-border: 340 60% 42%;
+  --ds-color-selection-text: 340 12% 95%;
+}

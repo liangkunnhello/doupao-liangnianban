@@ -1590,8 +1590,8 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">配色预设</span>
                   </div>
                   <ColorPresetGrid
-                    value={draft.colorScheme}
-                    onChange={(val) => commitSettings({ ...draft, colorScheme: val })}
+                    value={draft.skinId}
+                    onChange={(val) => commitSettings({ ...draft, skinId: val })}
                     columns={4}
                   />
                   <div data-selectable-text className="mt-2 text-xs text-gray-500 dark:text-gray-500">

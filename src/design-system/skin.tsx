@@ -1,4 +1,5 @@
 import type { ColorScheme } from '../types'
+import { SKIN_IDS, SKIN_REGISTRY } from '../theme/registry'
 import { SegmentedControl } from './forms'
 
 export type ColorSchemeValue = ColorScheme
@@ -13,65 +14,17 @@ export interface ColorSchemeOption {
   description?: string
 }
 
-/** 皮肤（配色方案）选项，与 src/types.ts 的 ColorScheme 一一对应。 */
-export const COLOR_SCHEME_OPTIONS: ColorSchemeOption[] = [
-  {
-    value: 'default',
-    label: '默认',
-    swatch: 'hsl(218 42% 46%)',
-    gradient: 'linear-gradient(135deg, hsl(218 42% 46%), hsl(216 48% 72%))',
-    description: '原始蓝灰主题',
-  },
-  {
-    value: 'apple',
-    label: 'Apple',
-    swatch: 'hsl(211 100% 50%)',
-    gradient: 'linear-gradient(135deg, hsl(211 100% 50%), hsl(199 95% 62%))',
-    description: 'iOS / macOS 系统蓝',
-  },
-  {
-    value: 'xiaomi',
-    label: '小米',
-    swatch: 'hsl(24 100% 50%)',
-    gradient: 'linear-gradient(135deg, hsl(24 100% 50%), hsl(41 100% 50%))',
-    description: 'HyperOS 品牌橙',
-  },
-  {
-    value: 'rose',
-    label: '玫瑰花园',
-    swatch: 'hsl(340 90% 55%)',
-    gradient: 'linear-gradient(135deg, hsl(340 90% 55%), hsl(330 90% 70%))',
-    description: '浪漫暖粉',
-  },
-  {
-    value: 'lake',
-    label: '湖光',
-    swatch: 'hsl(170 80% 42%)',
-    gradient: 'linear-gradient(135deg, hsl(170 80% 42%), hsl(190 80% 55%))',
-    description: '清新青绿',
-  },
-  {
-    value: 'sunset',
-    label: '日落霞光',
-    swatch: 'hsl(15 100% 55%)',
-    gradient: 'linear-gradient(135deg, hsl(15 100% 55%), hsl(340 90% 60%))',
-    description: '活力橙红',
-  },
-  {
-    value: 'lavender',
-    label: '薰衣草梦',
-    swatch: 'hsl(260 85% 65%)',
-    gradient: 'linear-gradient(135deg, hsl(260 85% 65%), hsl(290 85% 75%))',
-    description: '柔和紫韵',
-  },
-  {
-    value: 'midnight',
-    label: '暗夜',
-    swatch: 'hsl(245 80% 60%)',
-    gradient: 'linear-gradient(135deg, hsl(245 80% 60%), hsl(220 80% 55%))',
-    description: '深邃靛蓝',
-  },
-]
+/** 皮肤（配色方案）选项，由 src/theme/registry.ts 注册表自动推导（单一来源）。 */
+export const COLOR_SCHEME_OPTIONS: ColorSchemeOption[] = SKIN_IDS.map((id) => {
+  const def = SKIN_REGISTRY[id]
+  return {
+    value: id,
+    label: def.label,
+    swatch: def.swatch,
+    gradient: def.preview,
+    description: def.description,
+  }
+})
 
 export interface ColorSchemeSwitcherProps {
   value: ColorSchemeValue
@@ -82,7 +35,7 @@ export interface ColorSchemeSwitcherProps {
 }
 
 /**
- * 皮肤（配色方案）切换器：在 默认 / Apple / 小米 三套整体视觉之间切换。
+ * 皮肤（配色方案）切换器：在注册表驱动的全部整体视觉预设之间切换。
  * 基于 SegmentedControl 实现，选项带主色色板预览，颜色不作为唯一信息信号。
  */
 export function ColorSchemeSwitcher({

@@ -10,24 +10,18 @@ import {
   ImageIcon,
   Loader2Icon as Loader2,
   PaletteIcon as Palette,
-  PencilIcon as Pencil,
   PlusIcon as Plus,
   RotateCcwIcon as RotateCcw,
-  SettingsIcon,
   SparklesIcon as Sparkles,
   TagsIcon as Tags,
   ThumbsUpIcon as ThumbsUp,
-  TrashIcon as Trash2,
-  TypeIcon as Type,
   Wand2Icon as Wand2,
 } from '../../design-system/icons'
 import { buildAssistantInputContext } from './context'
 import {
   buildCustomSkillFromDraft,
-  buildCustomSkillContract,
   getRecommendedAssistantActions,
   getMoreAssistantActions,
-  getWhenByTrigger,
   isAssistantActionRunnable,
   normalizeAssistantActionPreferences,
   resolveWordEntryApplySettings,
@@ -42,9 +36,7 @@ import type {
   AssistantActionPreferences,
   AssistantActionResult,
   AssistantCustomSkill,
-  AssistantInputContext,
   AssistantWordEntryGroup,
-  VisualIdentity,
   WordDeriveActionSettings,
   WordDeriveSaveStrategy,
   WordEntryConfig,
@@ -342,8 +334,8 @@ export default function AssistantActionBar({
                 onClick={() => runAction(action)}
                 className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-sm font-medium transition ${
                   isRunning
-                    ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-950 dark:text-blue-200'
-                    : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
+                    ? 'border-[hsl(var(--ds-color-primary)/0.3)] bg-[hsl(var(--ds-color-primary-subtle))] text-[hsl(var(--ds-color-primary))]'
+                    : 'border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] text-[hsl(var(--ds-color-text))] hover:bg-[hsl(var(--ds-color-surface-subtle))]'
                 }`}
                 title={!isAssistantActionRunnable(action, context) ? '当前输入不满足该技能要求；右键可打开设置' : `${action.instruction || action.name}；右键打开设置`}
               >
@@ -352,11 +344,11 @@ export default function AssistantActionBar({
               </button>
               {hoveredSkill?.action.id === action.id && !isBusy && (
                 <div
-                  className="absolute left-0 top-full z-20 mt-1 w-40 rounded-xl border border-gray-200 bg-white p-1 text-xs shadow-lg dark:border-white/[0.08] dark:bg-gray-900"
+                  className="absolute left-0 top-full z-20 mt-1 w-40 rounded-xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] p-1 text-xs shadow-lg"
                 >
                   <button
                     type="button"
-                    className="block w-full rounded-lg px-2 py-1.5 text-left text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+                    className="block w-full rounded-lg px-2 py-1.5 text-left text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))]"
                     onClick={() => openSettings(action)}
                   >
                     设置
@@ -365,14 +357,14 @@ export default function AssistantActionBar({
                     <>
                       <button
                         type="button"
-                        className="block w-full rounded-lg px-2 py-1.5 text-left text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+                        className="block w-full rounded-lg px-2 py-1.5 text-left text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))]"
                         onClick={() => setEditorState({ mode: 'edit', skill: action })}
                       >
                         编辑
                       </button>
                       <button
                         type="button"
-                        className="block w-full rounded-lg px-2 py-1.5 text-left text-red-500 hover:bg-gray-50 dark:hover:bg-white/[0.06]"
+                        className="block w-full rounded-lg px-2 py-1.5 text-left text-[hsl(var(--ds-color-danger))] hover:bg-[hsl(var(--ds-color-surface-subtle))]"
                         onClick={() => removeCustomSkill(action.id)}
                       >
                         删除
@@ -381,7 +373,7 @@ export default function AssistantActionBar({
                   ) : (
                     <button
                       type="button"
-                      className="block w-full rounded-lg px-2 py-1.5 text-left text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+                      className="block w-full rounded-lg px-2 py-1.5 text-left text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))]"
                       onClick={() => duplicateAsCustom(action)}
                     >
                       复制为自定义技能
@@ -396,7 +388,7 @@ export default function AssistantActionBar({
           type="button"
           disabled={isBusy}
           onClick={() => setEditorState({ mode: 'create', skill: null })}
-          className="flex shrink-0 items-center gap-1 rounded-xl border border-dashed border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-50 dark:border-white/[0.12] dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800"
+          className="flex shrink-0 items-center gap-1 rounded-xl border border-dashed border-[hsl(var(--ds-color-border-strong))] bg-[hsl(var(--ds-color-surface))] px-3 py-1.5 text-sm font-medium text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))]"
           title="添加自定义技能"
         >
           <Plus className="h-4 w-4" />
@@ -405,7 +397,7 @@ export default function AssistantActionBar({
       </div>
 
       {recommendedActions.length === 0 && moreActions.length === 0 && (
-        <p className="mt-1 text-xs text-gray-400">当前输入暂无可运行的技能。</p>
+        <p className="mt-1 text-xs text-[hsl(var(--ds-color-text-subtle))]">当前输入暂无可运行的技能。</p>
       )}
 
       {settingsAction && (
@@ -434,13 +426,13 @@ export default function AssistantActionBar({
 
       {feedback.type === 'loading' && <AssistantLoadingPanel feedback={feedback} elapsedLabel={elapsedLabel ?? '0s'} onCancel={cancelRunningAction} />}
       {feedback.type === 'error' && (
-        <div className="mt-2 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+        <div className="mt-2 flex items-start gap-2 rounded-xl border border-[hsl(var(--ds-color-danger)/0.3)] bg-[hsl(var(--ds-color-danger-subtle))] px-3 py-2 text-sm text-[hsl(var(--ds-color-danger))]">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1">{feedback.message}</span>
           <button
             type="button"
             onClick={() => onFeedbackChange({ type: 'idle' })}
-            className="-mr-1 rounded-lg p-1 text-red-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-200"
+            className="-mr-1 rounded-lg p-1 text-[hsl(var(--ds-color-danger)/0.7)] hover:bg-[hsl(var(--ds-color-danger)/0.12)] hover:text-[hsl(var(--ds-color-danger))]"
             title="关闭"
           >
             <X className="h-4 w-4" />
@@ -519,10 +511,10 @@ function AssistantActionSettingsPanel({
 
 function SettingsPanelShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
+    <div className="mt-2 rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] p-3 text-sm shadow-sm">
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-medium text-gray-700 dark:text-gray-200">{title} · 设置</span>
-        <button type="button" onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]">
+        <span className="font-medium text-[hsl(var(--ds-color-text))]">{title} · 设置</span>
+        <button type="button" onClick={onClose} className="rounded-lg p-1 text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))]">
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -554,7 +546,7 @@ function SuperDeriveSettingsPanel({
             allowCustom={false}
             onChange={(conceptCategories) => update({ conceptCategories })}
           />
-          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+          <div className="mt-1 text-[11px] text-[hsl(var(--ds-color-text-subtle))]">所有技能统一使用；文案默认关闭。</div>
         </Field>
         <Field label="变量词维度">
           <VariableSelector
@@ -562,7 +554,7 @@ function SuperDeriveSettingsPanel({
             options={INFORMATION_FLOW_AD_VARIABLE_CATEGORIES}
             onChange={(categories) => update({ wordEntries: { ...settings.wordEntries, categories } })}
           />
-          <div className="mt-1 text-[11px] text-gray-400">点击维度可启用或关闭；文案默认关闭。</div>
+          <div className="mt-1 text-[11px] text-[hsl(var(--ds-color-text-subtle))]">点击维度可启用或关闭；文案默认关闭。</div>
         </Field>
         <Field label="变量词数量">
           <VariableCountControl
@@ -606,7 +598,7 @@ function WildDeriveSettingsPanel({
             allowCustom={false}
             onChange={(conceptCategories) => update({ conceptCategories })}
           />
-          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+          <div className="mt-1 text-[11px] text-[hsl(var(--ds-color-text-subtle))]">所有技能统一使用；文案默认关闭。</div>
         </Field>
         <Field label="变量选择">
           <VariableSelector
@@ -623,7 +615,7 @@ function WildDeriveSettingsPanel({
             onChange={(value) => update({ wordEntries: { ...settings.wordEntries, count: Number(value) } })}
           />
         </Field>
-        <div className="text-xs text-gray-400">采用方向套装策略，每个变量词都是完整、连贯的创意方向。</div>
+        <div className="text-xs text-[hsl(var(--ds-color-text-subtle))]">采用方向套装策略，每个变量词都是完整、连贯的创意方向。</div>
         <SkillToggleRow label="自动保存词条" value={settings.autoSave} onChange={(autoSave) => update({ autoSave })} />
         <SaveLocationField
           targetGroupMode={settings.targetGroupMode}
@@ -667,7 +659,7 @@ function DefaultVariableSettingsPanel({
             allowCustom={false}
             onChange={(conceptCategories) => update({ conceptCategories })}
           />
-          <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+          <div className="mt-1 text-[11px] text-[hsl(var(--ds-color-text-subtle))]">所有技能统一使用；文案默认关闭。</div>
         </Field>
         {settings.wordEntries.enabled && (
           <>
@@ -954,7 +946,6 @@ function AssistantSkillEditor({
   profile,
   params,
   onChange,
-  onCreateWordGroup,
   onClose,
 }: {
   mode: 'create' | 'edit'
@@ -1151,7 +1142,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
           allowCustom={false}
           onChange={(conceptCategories) => update({ conceptCategories })}
         />
-        <div className="mt-1 text-[11px] text-gray-400">所有技能统一使用；文案默认关闭。</div>
+        <div className="mt-1 text-[11px] text-[hsl(var(--ds-color-text-subtle))]">所有技能统一使用；文案默认关闭。</div>
       </Field>
 
       <Field label="词条">

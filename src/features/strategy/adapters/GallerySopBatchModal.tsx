@@ -60,7 +60,7 @@ type PromptDraft = {
 }
 
 type PersistedSopPromptRun = {
-  version?: 2 | 3
+  version?: 2 | 3 | 4
   activeRunId?: string
   selectedSopId: string
   promptCount: number
@@ -69,6 +69,7 @@ type PersistedSopPromptRun = {
   quantity?: number
   brief: string
   autoGenerate?: boolean
+  secondReference?: boolean
   sources?: SourceRun[]
   prompts?: PromptDraft[]
 }
@@ -141,6 +142,7 @@ export default function GallerySopBatchModal({
   initialImagesPerPrompt = 1,
   initialBrief = '',
   initialAutoGenerate = false,
+  initialSecondReference = false,
   autoStart = false,
   workspaceTabId,
   visible = true,
@@ -154,6 +156,7 @@ export default function GallerySopBatchModal({
   initialImagesPerPrompt?: number
   initialBrief?: string
   initialAutoGenerate?: boolean
+  initialSecondReference?: boolean
   autoStart?: boolean
   workspaceTabId?: string | null
   visible?: boolean
@@ -176,6 +179,7 @@ export default function GallerySopBatchModal({
   const [imagesPerPrompt, setImagesPerPrompt] = useState(initialImagesPerPrompt)
   const [brief, setBrief] = useState(initialBrief)
   const [autoGenerate, setAutoGenerate] = useState(initialAutoGenerate)
+  const [secondReference, setSecondReference] = useState(initialSecondReference)
   const [sources, setSources] = useState<SourceRun[]>([])
   const [prompts, setPrompts] = useState<PromptDraft[]>([])
   const [status, setStatus] = useState<BatchStatus>('idle')
@@ -187,6 +191,7 @@ export default function GallerySopBatchModal({
   const [restoreComplete, setRestoreComplete] = useState(false)
   const autoStartRef = useRef(false)
   const autoGenerateRef = useRef(initialAutoGenerate)
+  const secondReferenceRef = useRef(initialSecondReference)
   const activeRunIdRef = useRef(activeRunId)
   const activeRunSubmittedRef = useRef(false)
   const pendingSnapshotRef = useRef<SopBatchSnapshot | null>(null)
@@ -250,9 +255,10 @@ export default function GallerySopBatchModal({
     nextBrief = brief,
     nextPromptCount = targetCount,
     nextImagesPerPrompt = targetImagesPerPrompt,
+    nextSecondReference = secondReferenceRef.current,
   ) => {
     window.localStorage.setItem(promptRunStorageKey, JSON.stringify({
-      version: 3,
+      version: 4,
       activeRunId: runId,
       selectedSopId,
       promptCount: nextPromptCount,
@@ -260,6 +266,7 @@ export default function GallerySopBatchModal({
       availablePrompts: nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length,
       brief: nextBrief,
       autoGenerate: nextAutoGenerate,
+      secondReference: nextSecondReference,
     } satisfies PersistedSopPromptRun))
   }
 
@@ -427,6 +434,10 @@ export default function GallerySopBatchModal({
             autoGenerateRef.current = persisted.autoGenerate
             setAutoGenerate(persisted.autoGenerate)
           }
+          if (typeof persisted.secondReference === 'boolean') {
+            secondReferenceRef.current = persisted.secondReference
+            setSecondReference(persisted.secondReference)
+          }
           await applyPromptRun(storedRun, `已恢复上次 SOP 提示词列表，当前可用 ${storedRun.prompts.filter((item) => !item.deleted && item.text.trim()).length} 条`)
           if (active) setRestoreComplete(true)
           return
@@ -446,6 +457,10 @@ export default function GallerySopBatchModal({
         if (typeof persisted?.autoGenerate === 'boolean') {
           autoGenerateRef.current = persisted.autoGenerate
           setAutoGenerate(persisted.autoGenerate)
+        }
+        if (typeof persisted?.secondReference === 'boolean') {
+          secondReferenceRef.current = persisted.secondReference
+          setSecondReference(persisted.secondReference)
         }
         setSources(legacySources)
         setPrompts(legacyPrompts)
@@ -496,6 +511,20 @@ export default function GallerySopBatchModal({
     setAutoGenerate(nextAutoGenerate)
     if (prompts.length > 0) persistPromptRun(prompts, sources, nextAutoGenerate)
     else writeRunPointer(activeRunIdRef.current, prompts, nextAutoGenerate)
+  }
+
+  const toggleSecondReference = (nextSecondReference: boolean) => {
+    secondReferenceRef.current = nextSecondReference
+    setSecondReference(nextSecondReference)
+    writeRunPointer(
+      activeRunIdRef.current,
+      prompts,
+      autoGenerateRef.current,
+      brief,
+      targetCount,
+      targetImagesPerPrompt,
+      nextSecondReference,
+    )
   }
 
   const closeSafely = () => {
@@ -579,11 +608,6 @@ export default function GallerySopBatchModal({
       return
     }
     const requestedImageCount = usablePrompts.length * targetImagesPerPrompt
-    if (requestedImageCount >= SOP_HIGH_VOLUME_WARNING_THRESHOLD && !window.confirm(`本次将生成 ${requestedImageCount} 张图片，可能产生较高费用。确认继续提交吗？`)) {
-      setStatus('ready')
-      setStatusMessage('已取消高数量生图提交')
-      return
-    }
     setStatus('submitting')
     setError('')
     setStatusMessage(`正在提交 ${usablePrompts.length} 条提示词，预计生成 ${requestedImageCount} 张图片`)
@@ -592,7 +616,7 @@ export default function GallerySopBatchModal({
     let promptInputImages: InputImage[]
     let submittingSnapshot: SopBatchSnapshot | null = null
     try {
-      promptInputImages = await loadSharedInputImages()
+      promptInputImages = secondReferenceRef.current ? await loadSharedInputImages() : []
       await flushPromptRunSnapshot()
       const existingSnapshot = await getSopBatchSnapshot(snapshotId)
       submittingSnapshot = buildPromptRunSnapshot(snapshotId, itemsToSubmit, sources, 'ready', {
@@ -600,7 +624,6 @@ export default function GallerySopBatchModal({
         batchIds: [...new Set([...(existingSnapshot?.batchIds ?? (existingSnapshot?.batchId ? [existingSnapshot.batchId] : [])), batchId])],
         taskIds: existingSnapshot?.taskIds ?? [],
         pinned: existingSnapshot?.pinned ?? false,
-        referenceImageIds: promptInputImages.map((image) => image.id),
       })
       await flushPromptRunSnapshot(submittingSnapshot)
     } catch (cause) {
@@ -848,6 +871,15 @@ export default function GallerySopBatchModal({
                   disabled={running}
                   aria-label="提示词生成完成后自动生图"
                   label={<span className="whitespace-nowrap text-xs">自动生图</span>}
+                  className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
+                />
+                <Switch
+                  checked={secondReference}
+                  onCheckedChange={toggleSecondReference}
+                  disabled={running}
+                  aria-label="实际生图时再次使用输入区参考图"
+                  title="开启后，参考图先用于生成提示词，并在实际生图时再次传入"
+                  label={<span className="whitespace-nowrap text-xs">二次参考</span>}
                   className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
                 />
                 <button type="button" aria-label={`生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`} onClick={() => void submitPromptList()} disabled={running || visiblePrompts.length === 0 || missingCount > 0} className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-violet-600 bg-violet-600 px-3 text-xs font-medium text-white transition hover:border-violet-700 hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:border-violet-200 disabled:bg-violet-50 disabled:text-violet-300 dark:disabled:border-violet-500/20 dark:disabled:bg-violet-500/10 dark:disabled:text-violet-400/60"><Send size={14} />生成 {visiblePrompts.length * targetImagesPerPrompt} 张图片</button>

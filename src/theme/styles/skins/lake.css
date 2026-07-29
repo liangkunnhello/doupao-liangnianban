@@ -1,0 +1,103 @@
+/* 湖光（清新青绿） */
+:root[data-skin='lake'] {
+  /* 旧变量兼容桥 */
+  --background: 165 22% 96%;
+  --foreground: 165 18% 13%;
+  --muted: 165 16% 93%;
+  --muted-foreground: 165 12% 38%;
+  --border: 165 15% 88%;
+  --input: 165 15% 88%;
+  --primary: 170 80% 42%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar: 165 16% 94%;
+  --sidebar-foreground: 165 18% 13%;
+  /* 品牌色板（青绿，锚定湖光主色） */
+  --skin-blue-50: 170 80% 85%;
+  --skin-blue-100: 170 80% 83%;
+  --skin-blue-200: 170 80% 77%;
+  --skin-blue-300: 170 80% 68%;
+  --skin-blue-400: 170 80% 58%;
+  --skin-blue-500: 170 80% 52%;
+  --skin-blue-600: 170 80% 45%;
+  --skin-blue-700: 170 80% 40%;
+  --skin-blue-800: 170 80% 32%;
+  --skin-blue-900: 170 80% 25%;
+  --skin-blue-950: 170 80% 16%;
+  /* 中性色 / 背景 / 卡片 */
+  --ds-color-canvas: 165 22% 96%;
+  --ds-color-surface: 165 24% 98%;
+  --ds-color-surface-subtle: 165 16% 93%;
+  --ds-color-surface-raised: 165 26% 99%;
+  --ds-color-text: 165 18% 13%;
+  --ds-color-text-muted: 165 12% 38%;
+  --ds-color-text-subtle: 165 10% 52%;
+  --ds-color-text-inverse: 0 0% 100%;
+  --ds-color-border: 165 15% 88%;
+  --ds-color-border-strong: 170 10% 77%;
+  /* 品牌主色 + 强调渐变 */
+  --ds-color-primary: 170 80% 42%;
+  --ds-color-primary-hover: 170 80% 38%;
+  --ds-color-primary-subtle: 170 80% 95%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(170 80% 50%) 0%, hsl(170 80% 38%) 100%);
+  --ds-color-focus: 170 80% 42%;
+  /* 语义状态色 */
+  --ds-color-success: 142 71% 45%;
+  --ds-color-success-subtle: 142 45% 95%;
+  --ds-color-warning: 36 100% 50%;
+  --ds-color-warning-subtle: 38 60% 95%;
+  --ds-color-danger: 1 100% 59%;
+  --ds-color-danger-hover: 1 100% 64%;
+  --ds-color-danger-subtle: 1 60% 96%;
+  --ds-color-info: 199 95% 62%;
+  --ds-color-info-subtle: 199 60% 95%;
+  --ds-color-selection-surface: 170 80% 95%;
+  --ds-color-selection-border: 170 55% 80%;
+  --ds-color-selection-text: 165 18% 13%;
+  /* 组件表面：主按钮使用强调渐变 */
+  --ds-button-primary-background: var(--ds-color-primary-gradient);
+  --ds-button-primary-background-hover: var(--ds-color-primary-gradient);
+  --ds-button-primary-hover-filter: brightness(1.05);
+}
+
+:root[data-skin='lake'].dark {
+  --background: 165 18% 7%;
+  --foreground: 165 12% 94%;
+  --muted: 165 12% 14%;
+  --muted-foreground: 165 9% 66%;
+  --border: 165 12% 20%;
+  --input: 165 12% 20%;
+  --primary: 170 80% 52%;
+  --primary-foreground: 170 16% 12%;
+  --sidebar: 165 12% 11%;
+  --sidebar-foreground: 165 12% 94%;
+  --skin-blue-400: 170 80% 68%;
+  --skin-blue-500: 170 80% 62%;
+  --skin-blue-600: 170 80% 55%;
+  --ds-color-canvas: 165 18% 7%;
+  --ds-color-surface: 165 16% 13%;
+  --ds-color-surface-subtle: 165 14% 15%;
+  --ds-color-surface-raised: 165 18% 14%;
+  --ds-color-text: 165 12% 94%;
+  --ds-color-text-muted: 170 8% 70%;
+  --ds-color-text-subtle: 170 7% 58%;
+  --ds-color-text-inverse: 170 16% 12%;
+  --ds-color-border: 165 12% 20%;
+  --ds-color-border-strong: 170 8% 38%;
+  --ds-color-primary: 170 80% 52%;
+  --ds-color-primary-hover: 170 80% 58%;
+  --ds-color-primary-subtle: 170 80% 20%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(170 80% 64%) 0%, hsl(170 80% 54%) 100%);
+  --ds-color-focus: 170 80% 52%;
+  --ds-color-success: 142 73% 47%;
+  --ds-color-success-subtle: 142 40% 22%;
+  --ds-color-warning: 54 100% 52%;
+  --ds-color-warning-subtle: 54 50% 22%;
+  --ds-color-danger: 1 100% 60%;
+  --ds-color-danger-hover: 1 100% 66%;
+  --ds-color-danger-subtle: 1 50% 24%;
+  --ds-color-info: 199 100% 68%;
+  --ds-color-info-subtle: 199 55% 22%;
+  --ds-color-selection-surface: 170 80% 20%;
+  --ds-color-selection-border: 170 60% 42%;
+  --ds-color-selection-text: 165 12% 94%;
+}

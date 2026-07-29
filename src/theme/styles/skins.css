@@ -1,0 +1,17 @@
+/*
+ * 皮肤样式单一入口。
+ * 每套皮肤一个文件：:root[data-skin="<id>"]（浅色） + :root[data-skin="<id>"].dark（深色）。
+ * 皮肤只允许覆盖颜色 / 字体 / 圆角 / 阴影 / 组件表面 Token，禁止覆盖布局 Token
+ * （--ds-space-*、--ds-control-*、--ds-content-*、--ds-z-*、--safe-area-*、--app-header-offset）。
+ *
+ * 新增皮肤：复制 skins/_template.css，填写 Token，在此追加 @import，并在
+ * src/theme/registry.ts 注册。
+ */
+@import './skins/default.css';
+@import './skins/apple.css';
+@import './skins/xiaomi.css';
+@import './skins/rose.css';
+@import './skins/lake.css';
+@import './skins/sunset.css';
+@import './skins/lavender.css';
+@import './skins/midnight.css';

@@ -895,6 +895,13 @@ export function migratePersistedState(persistedState: unknown): unknown {
     ...persistedState,
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
+  // v4：外观设置 colorScheme -> skinId（非法值由 normalizeSettings 回退默认皮肤）
+  if (isRecord(persistedState.settings)) {
+    const settings = persistedState.settings as Record<string, unknown>
+    if (settings.skinId === undefined && settings.colorScheme !== undefined) {
+      migrated.settings = { ...settings, skinId: settings.colorScheme }
+    }
+  }
   // Migrate old data without workspaceTabs or with empty workspaceTabs: create a default tab from galleryInputDraft or current input state
   const hasWorkspaceTabsField = Array.isArray((persistedState as Record<string, unknown>).workspaceTabs)
   const hasValidWorkspaceTabs = hasWorkspaceTabsField && ((persistedState as Record<string, unknown>).workspaceTabs as unknown[]).length > 0
@@ -3386,7 +3393,7 @@ export const useStore = create<AppState>()(
     }),
     {
       name: 'gpt-image-playground',
-      version: 3,
+      version: 4,
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
       merge: mergePersistedState,
@@ -4148,12 +4155,12 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
       }
     })
     
-    // 找出所有画廊任务中没有被任何标签页认领的“孤儿任务”
+    // 找出所有画廊任务中没有被任何标签页认领的"孤儿任务"
     // 这些任务可能是因为版本升级、HMR 热更新导致 localStorage 保存失败、或者旧版本残留导致的
     const orphanTasks = galleryTasks.filter(t => !claimedTaskIds.has(t.id))
     
     if (orphanTasks.length > 0) {
-      // 为了不打乱用户当前的标签页，我们把这些丢失的任务放进一个专门的“恢复的历史任务”标签页
+      // 为了不打乱用户当前的标签页，我们把这些丢失的任务放进一个专门的"恢复的历史任务"标签页
       let recoveryTab = updatedTabs.find((t: any) => t.name === '恢复的历史任务')
       if (recoveryTab) {
         recoveryTab.tasks = [...orphanTasks, ...recoveryTab.tasks]

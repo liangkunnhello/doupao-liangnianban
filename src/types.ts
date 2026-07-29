@@ -9,16 +9,10 @@ export type AgentTextProtocol = 'responses' | 'chat-completions'
 export type ApiTransportMode = 'auto' | 'renderer'
 export type AppMode = 'gallery' | 'strategy' | 'ordering' | 'agent' | 'postprocess'
 export type ThemeMode = 'light' | 'dark'
-/** 配色方案（皮肤）：整体视觉预设，不影响布局 */
-export type ColorScheme =
-  | 'default'
-  | 'apple'
-  | 'xiaomi'
-  | 'rose'
-  | 'lake'
-  | 'sunset'
-  | 'lavender'
-  | 'midnight'
+/** 皮肤 ID：由 src/theme/registry.ts 注册表自动推导，不再手写联合类型 */
+export type { SkinId } from './theme/registry'
+/** @deprecated 使用 SkinId（保留用于旧代码/导入兼容） */
+export type ColorScheme = import('./theme/registry').SkinId
 export type ImageSaveLayout = 'flat' | 'batch-folder'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -106,8 +100,8 @@ export interface ApiProfile {
 export interface AppSettings {
   /** 界面主题：手动浅色 / 深色 */
   themeMode: ThemeMode
-  /** 配色方案（皮肤）：默认 / Apple / 小米，仅改变主色调 */
-  colorScheme: ColorScheme
+  /** 皮肤：由注册表驱动的整体视觉预设，仅改变颜色/字体/圆角/阴影，不影响布局 */
+  skinId: import('./theme/registry').SkinId
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
   apiKey: string

@@ -87,7 +87,7 @@ describe('GallerySopBatchModal background generation', () => {
     })
 
     const persisted = JSON.parse(window.localStorage.getItem(getGallerySopPromptRunStorageKey('tab-a')) ?? '{}')
-    expect(persisted).toMatchObject({ version: 3, selectedSopId: 'sop-1', availablePrompts: 1 })
+    expect(persisted).toMatchObject({ version: 4, selectedSopId: 'sop-1', availablePrompts: 1 })
     expect(persisted.activeRunId).toMatch(/^sop-run-/)
     expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -105,11 +105,11 @@ describe('GallerySopBatchModal background generation', () => {
     })
     mountedRenderers.push(renderer!)
 
-    const toggle = renderer!.root.findAllByType('input').find((input) => input.props.role === 'switch')
+    const toggle = renderer!.root.findAllByType('input').find((input) => input.props['aria-label'] === '提示词生成完成后自动生图')
     expect(toggle!.props.checked).toBe(false)
     act(() => toggle!.props.onChange({ target: { checked: true } }))
 
-    expect(renderer!.root.findAllByType('input').find((input) => input.props.role === 'switch')!.props.checked).toBe(true)
+    expect(renderer!.root.findAllByType('input').find((input) => input.props['aria-label'] === '提示词生成完成后自动生图')!.props.checked).toBe(true)
     const persisted = JSON.parse(window.localStorage.getItem(getGallerySopPromptRunStorageKey('tab-a')) ?? '{}')
     expect(persisted.autoGenerate).toBe(true)
   })
@@ -225,6 +225,7 @@ describe('GallerySopBatchModal background generation', () => {
           initialPromptCount={1}
           initialImagesPerPrompt={2}
           initialBrief="夏日清爽，不要人物"
+          initialSecondReference
           autoStart
           onClose={vi.fn()}
         />,
@@ -270,5 +271,78 @@ describe('GallerySopBatchModal background generation', () => {
         params: expect.objectContaining({ n: 2, reference_mode: 'all' }),
       }),
     )
+  })
+
+  it('uses references for prompt generation only when second reference is off', async () => {
+    storeState.inputImages = [{ id: 'image-1', dataUrl: 'data:image/png;base64,one' }]
+    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['仅提示词阶段参考'])
+    storeMocks.submitTaskWithData.mockResolvedValue('task-1')
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          autoStart
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sop-1' }),
+      1,
+      '',
+      expect.objectContaining({
+        referenceImages: [{ name: '图1', dataUrl: 'data:image/png;base64,one' }],
+      }),
+    )
+
+    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 1 张图片')
+    await act(async () => {
+      startButton!.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledWith(
+      expect.objectContaining({ inputImages: [] }),
+      { silentSuccess: true },
+    )
+  })
+
+  it('submits a high-volume SOP batch without a confirmation popup', async () => {
+    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['高数量提示词'])
+    storeMocks.submitTaskWithData.mockResolvedValue('task-1')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          initialImagesPerPrompt={20}
+          autoStart
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 20 张图片')
+    await act(async () => {
+      startButton!.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledOnce()
+    confirmSpy.mockRestore()
   })
 })

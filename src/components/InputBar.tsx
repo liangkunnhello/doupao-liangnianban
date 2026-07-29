@@ -551,6 +551,7 @@ export default function InputBar() {
   const [gallerySopPromptCountsByTab, setGallerySopPromptCountsByTab] = useState<Record<string, number>>({})
   const [gallerySopImagesPerPromptByTab, setGallerySopImagesPerPromptByTab] = useState<Record<string, number>>({})
   const [gallerySopAutoGenerateByTab, setGallerySopAutoGenerateByTab] = useState<Record<string, boolean>>({})
+  const [gallerySopSecondReferenceByTab, setGallerySopSecondReferenceByTab] = useState<Record<string, boolean>>({})
   const [gallerySopRunStatusByTab, setGallerySopRunStatusByTab] = useState<Record<string, GallerySopRunStatus>>({})
   const [taskMoveMenuOpen, setTaskMoveMenuOpen] = useState(false)
   const taskMoveMenuRef = useRef<HTMLDivElement>(null)
@@ -604,6 +605,7 @@ export default function InputBar() {
   const gallerySopPromptCount = gallerySopPromptCountsByTab[gallerySopScopeId] ?? 5
   const gallerySopImagesPerPrompt = gallerySopImagesPerPromptByTab[gallerySopScopeId] ?? 1
   const gallerySopAutoGenerate = gallerySopAutoGenerateByTab[gallerySopScopeId] ?? false
+  const gallerySopSecondReference = gallerySopSecondReferenceByTab[gallerySopScopeId] ?? false
   const gallerySopTotalImages = getSopTotalImageCount(gallerySopPromptCount, gallerySopImagesPerPrompt)
   const gallerySopRunStatus = gallerySopRunStatusByTab[gallerySopScopeId]
   const setGallerySopId = useCallback((id: string) => {
@@ -619,6 +621,9 @@ export default function InputBar() {
   }, [gallerySopPromptCount, gallerySopScopeId])
   const setGallerySopAutoGenerate = useCallback((value: boolean) => {
     setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: value }))
+  }, [gallerySopScopeId])
+  const setGallerySopSecondReference = useCallback((value: boolean) => {
+    setGallerySopSecondReferenceByTab((current) => ({ ...current, [gallerySopScopeId]: value }))
   }, [gallerySopScopeId])
   const activeGallerySop = useMemo(
     () => sopItems.find((item) => item.id === gallerySopId) ?? null,
@@ -649,6 +654,7 @@ export default function InputBar() {
         quantity?: number
         imagesPerPrompt?: number
         autoGenerate?: boolean
+        secondReference?: boolean
         availablePrompts?: number
         prompts?: Array<{ deleted?: boolean; promptText?: unknown }>
       }
@@ -661,6 +667,9 @@ export default function InputBar() {
       setGallerySopImagesPerPromptByTab((current) => ({ ...current, [gallerySopScopeId]: restoredCounts.imagesPerPrompt }))
       if (typeof parsed.autoGenerate === 'boolean') {
         setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: parsed.autoGenerate! }))
+      }
+      if (typeof parsed.secondReference === 'boolean') {
+        setGallerySopSecondReferenceByTab((current) => ({ ...current, [gallerySopScopeId]: parsed.secondReference! }))
       }
     } catch {
       setSavedSopPromptCount(0)
@@ -2958,6 +2967,23 @@ export default function InputBar() {
             自动生图
             <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${gallerySopAutoGenerate ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}><span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${gallerySopAutoGenerate ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
           </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gallerySopSecondReference}
+            aria-label="实际生图时再次使用输入区参考图"
+            title="开启后，参考图先用于生成提示词，并在实际生图时再次传入"
+            disabled={gallerySopIsRunning}
+            onClick={() => setGallerySopSecondReference(!gallerySopSecondReference)}
+            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${
+              gallerySopSecondReference
+                ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200'
+                : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
+            }`}
+          >
+            二次参考
+            <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${gallerySopSecondReference ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}><span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${gallerySopSecondReference ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
+          </button>
         </>}
         <button
           type="button"
@@ -3794,6 +3820,7 @@ export default function InputBar() {
           initialImagesPerPrompt={gallerySopImagesPerPromptByTab[tabId] ?? 1}
           initialBrief={prompt}
           initialAutoGenerate={gallerySopAutoGenerateByTab[tabId] ?? false}
+          initialSecondReference={gallerySopSecondReferenceByTab[tabId] ?? false}
           autoStart={gallerySopAutoStart && visibleGallerySopBatchTabId === tabId}
           onStatusChange={handleGallerySopRunStatusChange}
           onBackground={() => {

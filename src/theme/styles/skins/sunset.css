@@ -1,0 +1,103 @@
+/* 日落霞光（活力橙红） */
+:root[data-skin='sunset'] {
+  /* 旧变量兼容桥 */
+  --background: 18 26% 96%;
+  --foreground: 18 20% 13%;
+  --muted: 18 18% 93%;
+  --muted-foreground: 18 12% 38%;
+  --border: 18 18% 88%;
+  --input: 18 18% 88%;
+  --primary: 15 100% 55%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar: 18 18% 94%;
+  --sidebar-foreground: 18 20% 13%;
+  /* 品牌色板（橙红，锚定日落主色） */
+  --skin-blue-50: 15 100% 85%;
+  --skin-blue-100: 15 100% 83%;
+  --skin-blue-200: 15 100% 77%;
+  --skin-blue-300: 15 100% 68%;
+  --skin-blue-400: 15 100% 58%;
+  --skin-blue-500: 15 100% 55%;
+  --skin-blue-600: 15 100% 47%;
+  --skin-blue-700: 15 100% 42%;
+  --skin-blue-800: 15 100% 34%;
+  --skin-blue-900: 15 100% 27%;
+  --skin-blue-950: 15 100% 18%;
+  /* 中性色 / 背景 / 卡片 */
+  --ds-color-canvas: 18 26% 96%;
+  --ds-color-surface: 18 26% 98%;
+  --ds-color-surface-subtle: 18 18% 93%;
+  --ds-color-surface-raised: 18 28% 99%;
+  --ds-color-text: 18 20% 13%;
+  --ds-color-text-muted: 18 12% 38%;
+  --ds-color-text-subtle: 18 10% 52%;
+  --ds-color-text-inverse: 0 0% 100%;
+  --ds-color-border: 18 18% 88%;
+  --ds-color-border-strong: 15 10% 77%;
+  /* 品牌主色 + 强调渐变 */
+  --ds-color-primary: 15 100% 55%;
+  --ds-color-primary-hover: 15 100% 47%;
+  --ds-color-primary-subtle: 15 100% 95%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(15 100% 62%) 0%, hsl(15 100% 48%) 100%);
+  --ds-color-focus: 15 100% 55%;
+  /* 语义状态色 */
+  --ds-color-success: 142 71% 45%;
+  --ds-color-success-subtle: 142 45% 95%;
+  --ds-color-warning: 36 100% 50%;
+  --ds-color-warning-subtle: 38 60% 95%;
+  --ds-color-danger: 1 100% 59%;
+  --ds-color-danger-hover: 1 100% 64%;
+  --ds-color-danger-subtle: 1 60% 96%;
+  --ds-color-info: 199 95% 62%;
+  --ds-color-info-subtle: 199 60% 95%;
+  --ds-color-selection-surface: 15 100% 95%;
+  --ds-color-selection-border: 15 55% 80%;
+  --ds-color-selection-text: 18 20% 13%;
+  /* 组件表面：主按钮使用强调渐变 */
+  --ds-button-primary-background: var(--ds-color-primary-gradient);
+  --ds-button-primary-background-hover: var(--ds-color-primary-gradient);
+  --ds-button-primary-hover-filter: brightness(1.05);
+}
+
+:root[data-skin='sunset'].dark {
+  --background: 18 20% 8%;
+  --foreground: 18 14% 95%;
+  --muted: 18 14% 15%;
+  --muted-foreground: 18 10% 68%;
+  --border: 18 14% 21%;
+  --input: 18 14% 21%;
+  --primary: 15 100% 62%;
+  --primary-foreground: 15 16% 12%;
+  --sidebar: 18 14% 12%;
+  --sidebar-foreground: 18 14% 95%;
+  --skin-blue-400: 15 100% 72%;
+  --skin-blue-500: 15 100% 65%;
+  --skin-blue-600: 15 100% 58%;
+  --ds-color-canvas: 18 20% 8%;
+  --ds-color-surface: 18 18% 13%;
+  --ds-color-surface-subtle: 18 14% 15%;
+  --ds-color-surface-raised: 18 20% 14%;
+  --ds-color-text: 18 14% 95%;
+  --ds-color-text-muted: 15 8% 70%;
+  --ds-color-text-subtle: 15 7% 58%;
+  --ds-color-text-inverse: 15 16% 12%;
+  --ds-color-border: 18 14% 21%;
+  --ds-color-border-strong: 15 8% 38%;
+  --ds-color-primary: 15 100% 62%;
+  --ds-color-primary-hover: 15 100% 66%;
+  --ds-color-primary-subtle: 15 80% 20%;
+  --ds-color-primary-gradient: linear-gradient(180deg, hsl(15 100% 70%) 0%, hsl(15 100% 58%) 100%);
+  --ds-color-focus: 15 100% 62%;
+  --ds-color-success: 142 73% 47%;
+  --ds-color-success-subtle: 142 40% 22%;
+  --ds-color-warning: 54 100% 52%;
+  --ds-color-warning-subtle: 54 50% 22%;
+  --ds-color-danger: 1 100% 60%;
+  --ds-color-danger-hover: 1 100% 66%;
+  --ds-color-danger-subtle: 1 50% 24%;
+  --ds-color-info: 199 100% 68%;
+  --ds-color-info-subtle: 199 55% 22%;
+  --ds-color-selection-surface: 15 80% 20%;
+  --ds-color-selection-border: 15 60% 42%;
+  --ds-color-selection-text: 18 14% 95%;
+}
