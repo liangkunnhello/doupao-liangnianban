@@ -734,7 +734,7 @@ function CustomSkillSettingsPanel({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{label}</div>
+      <div className="mb-1 text-xs font-medium text-[hsl(var(--ds-color-text-subtle))] dark:text-[hsl(var(--ds-color-text-subtle))]">{label}</div>
       {children}
     </div>
   )
@@ -762,8 +762,8 @@ function SegmentedControl({
             onClick={() => onChange(optionValue)}
             className={`rounded-lg border px-2.5 py-1 text-xs ${
               active
-                ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300'
-                : 'border-gray-200 text-gray-500 dark:border-white/[0.08] dark:text-gray-400'
+                ? 'border-[hsl(var(--ds-color-primary)/0.3)] bg-[hsl(var(--ds-color-primary-subtle))] text-[hsl(var(--ds-color-primary))] dark:border-[hsl(var(--ds-color-primary)/0.3)] dark:bg-[hsl(var(--ds-color-primary-subtle))] dark:text-[hsl(var(--ds-color-primary))]'
+                : 'border-[hsl(var(--ds-color-border))] text-[hsl(var(--ds-color-text-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-subtle))]'
             }`}
           >
             {optionLabel}
@@ -779,14 +779,14 @@ function SkillToggleRow({ label, hint, value, onChange }: { label: string; hint?
     <button
       type="button"
       onClick={() => onChange(!value)}
-      className="flex w-full items-center justify-between rounded-xl border border-gray-200 px-3 py-2 text-left text-xs dark:border-white/[0.08]"
+      className="flex w-full items-center justify-between rounded-xl border border-[hsl(var(--ds-color-border))] px-3 py-2 text-left text-xs dark:border-[hsl(var(--ds-color-border))]"
     >
       <span>
-        <span className="font-medium text-gray-700 dark:text-gray-200">{label}</span>
-        {hint && <span className="ml-2 text-gray-400">{hint}</span>}
+        <span className="font-medium text-[hsl(var(--ds-color-text))] dark:text-[hsl(var(--ds-color-text))]">{label}</span>
+        {hint && <span className="ml-2 text-[hsl(var(--ds-color-text-subtle))]">{hint}</span>}
       </span>
-      <span className={`flex h-4 w-7 items-center rounded-full px-0.5 ${value ? 'bg-blue-500' : 'bg-gray-300 dark:bg-white/20'}`}>
-        <span className={`h-3 w-3 rounded-full bg-white transition ${value ? 'translate-x-3' : ''}`} />
+      <span className={`flex h-4 w-7 items-center rounded-full px-0.5 ${value ? 'bg-[hsl(var(--ds-color-primary))]' : 'bg-[hsl(var(--ds-color-border-strong))] dark:bg-[hsl(var(--ds-color-border-strong))]'}`}>
+        <span className={`h-3 w-3 rounded-full bg-[hsl(var(--ds-color-surface))] transition ${value ? 'translate-x-3' : ''}`} />
       </span>
     </button>
   )
@@ -814,7 +814,7 @@ function VariableCountControl({
           const count = Number(event.target.value)
           if (Number.isFinite(count) && count >= 1 && count <= 50) onChange(String(Math.round(count)))
         }}
-        className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+        className="w-20 rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs dark:border-[hsl(var(--ds-color-border))] dark:bg-transparent"
       />
     </div>
   )
@@ -861,8 +861,8 @@ function VariableSelector({
               }}
               className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${
                 selected
-                  ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300'
-                  : 'border-gray-200 text-gray-500 dark:border-white/[0.08] dark:text-gray-400'
+                  ? 'border-[hsl(var(--ds-color-primary)/0.3)] bg-[hsl(var(--ds-color-primary-subtle))] text-[hsl(var(--ds-color-primary))] dark:border-[hsl(var(--ds-color-primary)/0.3)] dark:bg-[hsl(var(--ds-color-primary-subtle))] dark:text-[hsl(var(--ds-color-primary))]'
+                  : 'border-[hsl(var(--ds-color-border))] text-[hsl(var(--ds-color-text-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-subtle))]'
               }`}
             >
               {selected && <Check className="h-3 w-3" />}
@@ -877,7 +877,7 @@ function VariableSelector({
           onChange={(event) => setDraft(event.target.value)}
           placeholder="输入自定义变量"
           aria-label="自定义变量"
-          className="flex-1 rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+          className="flex-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs dark:border-[hsl(var(--ds-color-border))] dark:bg-transparent"
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
@@ -889,7 +889,7 @@ function VariableSelector({
           type="button"
           onClick={addCustomVariable}
           disabled={!draft.trim() || variables.includes(draft.trim())}
-          className="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-500 dark:border-white/[0.08]"
+          className="rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs text-[hsl(var(--ds-color-text-subtle))] dark:border-[hsl(var(--ds-color-border))]"
         >
           添加
         </button>
@@ -1010,28 +1010,28 @@ function AssistantSkillEditor({
   }
 
   return (
-    <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
+    <div className="mt-2 rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] p-3 text-sm shadow-sm dark:border-[hsl(var(--ds-color-border))] dark:bg-[hsl(var(--ds-color-surface))]">
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-medium text-gray-700 dark:text-gray-200">{mode === 'edit' ? '编辑自定义技能' : '新建自定义技能'}</span>
-        <button type="button" onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]">
+        <span className="font-medium text-[hsl(var(--ds-color-text))] dark:text-[hsl(var(--ds-color-text))]">{mode === 'edit' ? '编辑自定义技能' : '新建自定义技能'}</span>
+        <button type="button" onClick={onClose} className="rounded-lg p-1 text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {mode === 'create' && (
-        <div className="mb-3 rounded-xl border border-gray-200 p-2 dark:border-white/[0.08]">
-          <div className="mb-1 text-xs text-gray-400">用自然语言描述技能，AI 生成草稿后可审阅修改。</div>
+        <div className="mb-3 rounded-xl border border-[hsl(var(--ds-color-border))] p-2 dark:border-[hsl(var(--ds-color-border))]">
+          <div className="mb-1 text-xs text-[hsl(var(--ds-color-text-subtle))]">用自然语言描述技能，AI 生成草稿后可审阅修改。</div>
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             placeholder="例如：把产品图变成蒸汽朋克风格，生成可替换词条"
-            className="h-16 w-full resize-none rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+            className="h-16 w-full resize-none rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs dark:border-[hsl(var(--ds-color-border))] dark:bg-transparent"
           />
           <button
             type="button"
             disabled={drafting || !description.trim()}
             onClick={startDraft}
-            className="mt-1.5 rounded-lg bg-blue-500 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+            className="mt-1.5 rounded-lg bg-[hsl(var(--ds-color-primary))] px-3 py-1 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] disabled:opacity-50"
           >
             {drafting ? '生成草稿中…' : 'AI 生成草稿'}
           </button>
@@ -1041,21 +1041,21 @@ function AssistantSkillEditor({
       <VisualSkillForm value={form} onChange={setForm} />
 
       {editorError && (
-        <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300" role="alert">
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-[hsl(var(--ds-color-danger)/0.3)] bg-[hsl(var(--ds-color-danger-subtle))] px-3 py-2 text-xs text-[hsl(var(--ds-color-danger))] dark:border-[hsl(var(--ds-color-danger)/0.3)] dark:bg-[hsl(var(--ds-color-danger-subtle))] dark:text-[hsl(var(--ds-color-danger))]" role="alert">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{editorError}</span>
         </div>
       )}
 
       <div className="mt-3 flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-500 dark:border-white/[0.08]">
+        <button type="button" onClick={onClose} className="rounded-lg border border-[hsl(var(--ds-color-border))] px-3 py-1.5 text-xs text-[hsl(var(--ds-color-text-subtle))] dark:border-[hsl(var(--ds-color-border))]">
           取消
         </button>
         <button
           type="button"
           disabled={!form.name.trim() || !form.instruction.trim()}
           onClick={save}
-          className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          className="rounded-lg bg-[hsl(var(--ds-color-primary))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] disabled:opacity-50"
         >
           {mode === 'edit' ? '保存修改' : '添加技能'}
         </button>
@@ -1093,7 +1093,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
             value={value.name}
             onChange={(event) => update({ name: event.target.value })}
             placeholder="技能名称"
-            className="w-full rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+            className="w-full rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs dark:border-[hsl(var(--ds-color-border))] dark:bg-transparent"
           />
           <div className="flex flex-wrap gap-1.5">
             {icons.map((icon) => {
@@ -1103,7 +1103,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
                   key={icon}
                   type="button"
                   onClick={() => update({ icon })}
-                  className={`rounded-lg border p-1.5 ${value.icon === icon ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300' : 'border-gray-200 text-gray-500 dark:border-white/[0.08]'}`}
+                  className={`rounded-lg border p-1.5 ${value.icon === icon ? 'border-[hsl(var(--ds-color-primary)/0.3)] bg-[hsl(var(--ds-color-primary-subtle))] text-[hsl(var(--ds-color-primary))] dark:border-[hsl(var(--ds-color-primary)/0.3)] dark:bg-[hsl(var(--ds-color-primary-subtle))] dark:text-[hsl(var(--ds-color-primary))]' : 'border-[hsl(var(--ds-color-border))] text-[hsl(var(--ds-color-text-subtle))] dark:border-[hsl(var(--ds-color-border))]'}`}
                 >
                   <Icon className="h-4 w-4" />
                 </button>
@@ -1114,7 +1114,7 @@ function VisualSkillForm({ value, onChange }: { value: VisualSkillFormValue; onC
             value={value.instruction}
             onChange={(event) => update({ instruction: event.target.value })}
             placeholder="技能说明：给模型执行的完整中文指令"
-            className="h-20 w-full resize-none rounded-lg border border-gray-200 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-transparent"
+            className="h-20 w-full resize-none rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs dark:border-[hsl(var(--ds-color-border))] dark:bg-transparent"
           />
         </div>
       </Field>
@@ -1198,23 +1198,23 @@ function AssistantLoadingPanel({
 }) {
   const phase = feedback.phases[feedback.phaseIndex] ?? feedback.phases[feedback.phases.length - 1]
   return (
-    <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm dark:border-white/[0.08] dark:bg-gray-900">
-      <div className="mb-2 flex items-center justify-between gap-3 text-gray-600 dark:text-gray-300">
+    <div className="mt-2 rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] p-3 text-sm dark:border-[hsl(var(--ds-color-border))] dark:bg-[hsl(var(--ds-color-surface))]">
+      <div className="mb-2 flex items-center justify-between gap-3 text-[hsl(var(--ds-color-text-muted))] dark:text-[hsl(var(--ds-color-text-muted))]">
         <div className="flex min-w-0 items-center gap-2">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
           <span className="truncate font-medium">{feedback.action.name}</span>
-          <span className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-300">{elapsedLabel}</span>
-          <span className="truncate text-xs text-gray-400">{phase?.label}</span>
+          <span className="shrink-0 rounded-full bg-[hsl(var(--ds-color-surface-subtle))] px-1.5 py-0.5 font-mono text-[11px] text-[hsl(var(--ds-color-text-subtle))] dark:bg-[hsl(var(--ds-color-surface-subtle))] dark:text-[hsl(var(--ds-color-text-muted))]">{elapsedLabel}</span>
+          <span className="truncate text-xs text-[hsl(var(--ds-color-text-subtle))]">{phase?.label}</span>
         </div>
         <button
           type="button"
           onClick={onCancel}
-          className="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          className="shrink-0 rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]"
         >
           取消
         </button>
       </div>
-      {feedback.detail && <p className="text-xs text-gray-400">{feedback.detail}</p>}
+      {feedback.detail && <p className="text-xs text-[hsl(var(--ds-color-text-subtle))]">{feedback.detail}</p>}
     </div>
   )
 }
@@ -1261,26 +1261,26 @@ function AssistantResultPanel({
   const totalEntries = wordEntries?.reduce((sum, group) => sum + group.entries.length, 0) ?? 0
 
   return (
-    <div className="mt-2 rounded-2xl border border-gray-200 bg-white p-3 text-sm shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
+    <div className="mt-2 rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] p-3 text-sm shadow-sm dark:border-[hsl(var(--ds-color-border))] dark:bg-[hsl(var(--ds-color-surface))]">
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-gray-700 dark:text-gray-200">{action.name}</span>
+          <span className="font-medium text-[hsl(var(--ds-color-text))] dark:text-[hsl(var(--ds-color-text))]">{action.name}</span>
           {result.qualityState === 'repaired' && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-600 dark:bg-amber-500/15 dark:text-amber-300">已修复</span>
+            <span className="rounded-full bg-[hsl(var(--ds-color-success-subtle))] px-2 py-0.5 text-xs text-[hsl(var(--ds-color-success))] dark:bg-[hsl(var(--ds-color-success-subtle))] dark:text-[hsl(var(--ds-color-success))]">已修复</span>
           )}
           {result.qualityState === 'insufficient-data' && (
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">信息不足</span>
+            <span className="rounded-full bg-[hsl(var(--ds-color-surface-subtle))] px-2 py-0.5 text-xs text-[hsl(var(--ds-color-text-subtle))]">信息不足</span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          <button type="button" onClick={onRegenerate} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 dark:border-white/[0.08] dark:hover:bg-white/[0.06]">
+          <button type="button" onClick={onRegenerate} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2 py-1 text-xs text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
             <RotateCcw className="h-3.5 w-3.5" />
             重新生成
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-gray-400 hover:bg-gray-50 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+            className="rounded-lg p-1 text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:hover:text-[hsl(var(--ds-color-text))]"
             title="关闭"
           >
             <X className="h-4 w-4" />
@@ -1288,27 +1288,27 @@ function AssistantResultPanel({
         </div>
       </div>
 
-      {result.qualityNote && <p className="mb-2 text-xs text-amber-500">{result.qualityNote}</p>}
+      {result.qualityNote && <p className="mb-2 text-xs text-[hsl(var(--ds-color-warning))]">{result.qualityNote}</p>}
 
-      {alternativePrompt && <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">准确描述</div>}
-      <pre className="whitespace-pre-wrap rounded-xl bg-gray-50 p-2 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.04] dark:text-gray-200">{mainPrompt}</pre>
+      {alternativePrompt && <div className="mb-1 text-xs font-medium text-[hsl(var(--ds-color-text-subtle))] dark:text-[hsl(var(--ds-color-text-subtle))]">准确描述</div>}
+      <pre className="whitespace-pre-wrap rounded-xl bg-[hsl(var(--ds-color-surface-subtle))] p-2 text-xs leading-relaxed text-[hsl(var(--ds-color-text))] dark:bg-[hsl(var(--ds-color-surface-subtle))] dark:text-[hsl(var(--ds-color-text))]">{mainPrompt}</pre>
 
       <div className="mt-2 flex flex-wrap gap-1.5">
         <button type="button" onClick={() => {
           if (wordEntries?.length && onApplyWordPrompt) onApplyWordPrompt(wordEntries, mainPrompt, { ...applyOptions, promptMode: 'replace' })
           else onInsert(mainPrompt, 'replace')
-        }} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        }} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
           <ArrowUp className="h-3.5 w-3.5" />
           替换
         </button>
         <button type="button" onClick={() => {
           if (wordEntries?.length && onApplyWordPrompt) onApplyWordPrompt(wordEntries, mainPrompt, { ...applyOptions, promptMode: 'append' })
           else onInsert(mainPrompt, 'append')
-        }} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        }} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
           <ArrowDown className="h-3.5 w-3.5" />
           追加
         </button>
-        <button type="button" onClick={() => copyPrompt(mainPrompt, 'primary')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        <button type="button" onClick={() => copyPrompt(mainPrompt, 'primary')} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
           <Copy className="h-3.5 w-3.5" />
           {copied === 'primary' ? '已复制' : '复制'}
         </button>
@@ -1316,18 +1316,18 @@ function AssistantResultPanel({
 
       {alternativePrompt && (
         <div className="mt-3">
-          <div className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">上位概念备选</div>
-          <pre className="whitespace-pre-wrap rounded-xl bg-blue-50/60 p-2 text-xs leading-relaxed text-gray-700 dark:bg-blue-500/[0.06] dark:text-gray-200">{alternativePrompt}</pre>
+          <div className="mb-1 text-xs font-medium text-[hsl(var(--ds-color-text-subtle))] dark:text-[hsl(var(--ds-color-text-subtle))]">上位概念备选</div>
+          <pre className="whitespace-pre-wrap rounded-xl bg-[hsl(var(--ds-color-primary-subtle))] p-2 text-xs leading-relaxed text-[hsl(var(--ds-color-text))] dark:bg-[hsl(var(--ds-color-primary-subtle))] dark:text-[hsl(var(--ds-color-text))]">{alternativePrompt}</pre>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <button type="button" onClick={() => onInsert(alternativePrompt, 'replace')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+            <button type="button" onClick={() => onInsert(alternativePrompt, 'replace')} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
               <ArrowUp className="h-3.5 w-3.5" />
               替换
             </button>
-            <button type="button" onClick={() => onInsert(alternativePrompt, 'append')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+            <button type="button" onClick={() => onInsert(alternativePrompt, 'append')} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
               <ArrowDown className="h-3.5 w-3.5" />
               追加
             </button>
-            <button type="button" onClick={() => copyPrompt(alternativePrompt, 'alternative')} className="flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+            <button type="button" onClick={() => copyPrompt(alternativePrompt, 'alternative')} className="flex items-center gap-1 rounded-lg border border-[hsl(var(--ds-color-border))] px-2.5 py-1 text-xs text-[hsl(var(--ds-color-text-muted))] hover:bg-[hsl(var(--ds-color-surface-subtle))] dark:border-[hsl(var(--ds-color-border))] dark:text-[hsl(var(--ds-color-text-muted))] dark:hover:bg-[hsl(var(--ds-color-surface-subtle))]">
               <Copy className="h-3.5 w-3.5" />
               {copied === 'alternative' ? '已复制' : '复制'}
             </button>
@@ -1336,23 +1336,23 @@ function AssistantResultPanel({
       )}
 
       {wordEntries && wordEntries.length > 0 && (
-        <div className="mt-3 rounded-xl border border-gray-200 p-2 dark:border-white/[0.08]">
+        <div className="mt-3 rounded-xl border border-[hsl(var(--ds-color-border))] p-2 dark:border-[hsl(var(--ds-color-border))]">
           <button
             type="button"
             onClick={() => setWordOpen((open) => !open)}
-            className="flex w-full items-center justify-between text-xs font-medium text-gray-600 dark:text-gray-300"
+            className="flex w-full items-center justify-between text-xs font-medium text-[hsl(var(--ds-color-text-muted))] dark:text-[hsl(var(--ds-color-text-muted))]"
           >
             <span>变量词条：{wordEntries.length}类 / {totalEntries}条</span>
-            <span className="text-gray-400">{wordOpen ? '收起' : '展开'}</span>
+            <span className="text-[hsl(var(--ds-color-text-subtle))]">{wordOpen ? '收起' : '展开'}</span>
           </button>
           {wordOpen && (
             <ul className="mt-2 space-y-1.5">
               {wordEntries.map((group) => (
                 <li key={group.category}>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">{group.category}</div>
+                  <div className="text-xs text-[hsl(var(--ds-color-text-subtle))] dark:text-[hsl(var(--ds-color-text-subtle))]">{group.category}</div>
                   <div className="mt-0.5 flex flex-wrap gap-1">
                     {group.entries.map((entry) => (
-                      <span key={entry} className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">{entry}</span>
+                      <span key={entry} className="rounded bg-[hsl(var(--ds-color-surface-subtle))] px-1.5 py-0.5 text-[11px] text-[hsl(var(--ds-color-text-muted))] dark:bg-[hsl(var(--ds-color-surface-subtle))] dark:text-[hsl(var(--ds-color-text-muted))]">{entry}</span>
                     ))}
                   </div>
                 </li>
@@ -1363,7 +1363,7 @@ function AssistantResultPanel({
             <button
               type="button"
               onClick={() => onSaveWordEntries(wordEntries, applyOptions)}
-              className="mt-2 rounded-lg bg-blue-500 px-3 py-1 text-xs font-medium text-white"
+              className="mt-2 rounded-lg bg-[hsl(var(--ds-color-primary))] px-3 py-1 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))]"
             >
               保存词条
             </button>
