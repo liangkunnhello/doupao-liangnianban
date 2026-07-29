@@ -1,6 +1,42 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+type ApiFetchEvent = { id: string; type: 'chunk' | 'done' | 'error'; data?: Uint8Array; error?: string }
+type ApiFetchRequest = { id: string }
+const apiFetchListeners = new Map<string, (_event: Electron.IpcRendererEvent, payload: unknown) => void>()
+
+async function apiFetch(request: ApiFetchRequest, onEvent: (event: ApiFetchEvent) => void) {
+  const previous = apiFetchListeners.get(request.id)
+  if (previous) ipcRenderer.removeListener('api:fetch:event', previous)
+  const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+    const event = payload as ApiFetchEvent
+    if (!event || event.id !== request.id) return
+    onEvent(event)
+    if (event.type === 'done' || event.type === 'error') {
+      ipcRenderer.removeListener('api:fetch:event', handler)
+      apiFetchListeners.delete(request.id)
+    }
+  }
+  apiFetchListeners.set(request.id, handler)
+  ipcRenderer.on('api:fetch:event', handler)
+  try {
+    return await ipcRenderer.invoke('api:fetch', request)
+  } catch (error) {
+    ipcRenderer.removeListener('api:fetch:event', handler)
+    apiFetchListeners.delete(request.id)
+    throw error
+  }
+}
+
+function cancelApiFetch(id: string) {
+  ipcRenderer.send('api:fetch:abort', id)
+  const handler = apiFetchListeners.get(id)
+  if (handler) ipcRenderer.removeListener('api:fetch:event', handler)
+  apiFetchListeners.delete(id)
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  apiFetch,
+  cancelApiFetch,
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
   selectFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-file', { filters }),
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-files', { filters }),

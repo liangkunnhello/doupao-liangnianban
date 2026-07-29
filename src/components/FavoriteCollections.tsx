@@ -18,6 +18,7 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { useDragSelect } from '../hooks/useDragSelect'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
+import { useDialogFocusTrap } from '../design-system'
 import { Checkbox } from './Checkbox'
 import { EditIcon, FavoriteIcon, PlusIcon, TrashIcon, CloseIcon, DragHandleIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
@@ -591,7 +592,7 @@ export function FavoriteCollectionsView() {
       )}
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
+          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[var(--ds-z-dropdown)]"
           style={{
             left: Math.min(selectionBox!.startPageX, selectionBox!.currentPageX) - window.scrollX,
             top: Math.min(selectionBox!.startPageY, selectionBox!.currentPageY) - window.scrollY,
@@ -648,6 +649,7 @@ export function FavoriteCollectionPickerModal() {
 
   useCloseOnEscape(open, closePicker)
   usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
 
   useEffect(() => {
     if (!touchDragPreview) return
@@ -899,14 +901,14 @@ export function FavoriteCollectionPickerModal() {
   }
 
   return createPortal(
-    <div data-no-drag-select className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-0" onClick={closePicker}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-overlay-in" />
-      <div ref={modalRef} className="relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 dark:border-[#333] dark:bg-[#1c1c1e] animate-modal-in" onClick={(e) => e.stopPropagation()}>
+    <div data-no-drag-select className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 sm:p-0" onClick={closePicker}>
+      <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="favorite-picker-title" className="ds-modal-surface relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border animate-modal-in motion-reduce:animate-none" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 shrink-0 relative border-b border-gray-100 dark:border-[#333]">
           <FavoriteActionButton tooltip="关闭" onClick={closePicker} wrapperClassName="absolute right-5 top-5 inline-flex" className="shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200">
             <CloseIcon className="h-5 w-5" />
           </FavoriteActionButton>
-          <h2 className="mb-2 pr-8 flex items-center gap-2.5 text-lg font-semibold text-gray-800 dark:text-gray-100 leading-snug">
+          <h2 id="favorite-picker-title" className="mb-2 pr-8 flex items-center gap-2.5 text-lg font-semibold text-gray-800 dark:text-gray-100 leading-snug">
             <FavoriteIcon filled className="h-5 w-5 shrink-0 text-yellow-500" />
             保存到收藏夹
           </h2>
@@ -986,7 +988,7 @@ export function FavoriteCollectionPickerModal() {
                     <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-gray-700 dark:text-gray-200" title={collection.name}>{collection.name}</span>
                   )}
                 </div>
-                <div className={`flex shrink-0 items-center justify-end gap-2 overflow-hidden pr-4 transition-all duration-150 ${editingId === collection.id ? 'w-12' : 'w-28'}`}>
+                <div className={`flex shrink-0 items-center justify-end gap-2 overflow-hidden pr-4 transition duration-150 ${editingId === collection.id ? 'w-12' : 'w-28'}`}>
                     {editingId === collection.id ? (
                       <FavoriteActionButton
                         tooltip="确认"
@@ -1085,6 +1087,7 @@ export function ManageCollectionsModal() {
 
   useCloseOnEscape(open, closeManage)
   usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
 
   useEffect(() => {
     if (!open) return
@@ -1333,14 +1336,14 @@ export function ManageCollectionsModal() {
   }
 
   return createPortal(
-    <div data-no-drag-select className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-0" onClick={closeManage}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-overlay-in" />
-      <div ref={modalRef} className="relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 dark:border-[#333] dark:bg-[#1c1c1e] animate-modal-in" onClick={(e) => e.stopPropagation()}>
+    <div data-no-drag-select className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 sm:p-0" onClick={closeManage}>
+      <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="favorite-manage-title" className="ds-modal-surface relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-2xl border animate-modal-in motion-reduce:animate-none" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 shrink-0 relative border-b border-gray-100 dark:border-[#333]">
           <FavoriteActionButton tooltip="关闭" onClick={closeManage} wrapperClassName="absolute right-5 top-5 inline-flex" className="shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200">
             <CloseIcon className="h-5 w-5" />
           </FavoriteActionButton>
-          <h2 className="mb-2 pr-8 flex items-center gap-2.5 text-lg font-semibold text-gray-800 dark:text-gray-100 leading-snug">
+          <h2 id="favorite-manage-title" className="mb-2 pr-8 flex items-center gap-2.5 text-lg font-semibold text-gray-800 dark:text-gray-100 leading-snug">
             管理收藏夹
           </h2>
           <p className="text-[13px] text-gray-500 dark:text-gray-400 leading-relaxed">
@@ -1399,7 +1402,7 @@ export function ManageCollectionsModal() {
                     <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-gray-700 dark:text-gray-200" title={collection.name}>{collection.name}</span>
                   )}
                 </div>
-                <div className={`flex shrink-0 items-center justify-end gap-2 overflow-hidden pr-4 transition-all duration-150 ${editingId === collection.id ? 'w-12' : 'w-28'}`}>
+                <div className={`flex shrink-0 items-center justify-end gap-2 overflow-hidden pr-4 transition duration-150 ${editingId === collection.id ? 'w-12' : 'w-28'}`}>
                     {editingId === collection.id ? (
                       <FavoriteActionButton
                         tooltip="确认"

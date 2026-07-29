@@ -1,4 +1,10 @@
-import { Plus, X, Edit2, Check, Trash2 } from 'lucide-react'
+import {
+  CheckIcon as Check,
+  CloseIcon as X,
+  Edit2Icon as Edit2,
+  PlusIcon as Plus,
+  TrashIcon as Trash2,
+} from '../../../design-system/icons'
 import { useState } from 'react'
 import { useCompositeV2Store } from '../storeV2'
 import type { CompositeV2OutputRuleGroup, CompositeV2OutputSizeRule } from '../lib/compositeV2Types'

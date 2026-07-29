@@ -1,9 +1,9 @@
-import type { AgentConversation, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordGenerationBatch, WordLibraryEntry, WordLibraryGroup } from '../types'
+import type { AgentConversation, SopBatchSnapshot, TaskRecord, StoredCompositeAsset, StoredImage, StoredImageThumbnail, WordGenerationBatch, WordLibraryEntry, WordLibraryGroup } from '../types'
 import { deleteRawCacheImages, isElectron, saveRawCacheImageToLocal } from './localSave'
 import type { MigrationJournal } from './migrations/registry'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 6
+const DB_VERSION = 7
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
@@ -11,6 +11,7 @@ const STORE_AGENT_CONVERSATIONS = 'agentConversations'
 const STORE_WORD_LIBRARY = 'wordLibrary'
 const STORE_COMPOSITE_ASSETS = 'compositeAssets'
 const STORE_META = 'meta'
+const STORE_SOP_BATCH_SNAPSHOTS = 'sopBatchSnapshots'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
@@ -42,6 +43,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_META)) {
         db.createObjectStore(STORE_META, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_SOP_BATCH_SNAPSHOTS)) {
+        db.createObjectStore(STORE_SOP_BATCH_SNAPSHOTS, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -125,6 +129,28 @@ export function deleteTask(id: string): Promise<undefined> {
 
 export function clearTasks(): Promise<undefined> {
   return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.clear())
+}
+
+// ===== SOP batch snapshots =====
+
+export function getSopBatchSnapshot(id: string): Promise<SopBatchSnapshot | undefined> {
+  return dbTransaction(STORE_SOP_BATCH_SNAPSHOTS, 'readonly', (store) => store.get(id))
+}
+
+export function getAllSopBatchSnapshots(): Promise<SopBatchSnapshot[]> {
+  return dbTransaction(STORE_SOP_BATCH_SNAPSHOTS, 'readonly', (store) => store.getAll())
+}
+
+export function putSopBatchSnapshot(snapshot: SopBatchSnapshot): Promise<IDBValidKey> {
+  return dbTransaction(STORE_SOP_BATCH_SNAPSHOTS, 'readwrite', (store) => store.put(snapshot))
+}
+
+export function deleteSopBatchSnapshot(id: string): Promise<undefined> {
+  return dbTransaction(STORE_SOP_BATCH_SNAPSHOTS, 'readwrite', (store) => store.delete(id))
+}
+
+export function clearSopBatchSnapshots(): Promise<undefined> {
+  return dbTransaction(STORE_SOP_BATCH_SNAPSHOTS, 'readwrite', (store) => store.clear())
 }
 
 // ===== Agent conversations =====

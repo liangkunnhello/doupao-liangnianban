@@ -3,6 +3,22 @@ import type { UpdateStatus } from '../hooks/useAutoUpdate'
 import { sanitizeGeneratedImageFilenamePart } from './generatedImageFilename'
 
 type ElectronAPI = {
+  apiFetch?: (
+    request: {
+      id: string
+      url: string
+      method: string
+      headers: Array<[string, string]>
+      body?: ArrayBuffer
+      redirect: RequestRedirect
+    },
+    onEvent: (event:
+      | { id: string; type: 'chunk'; data: Uint8Array | ArrayBuffer }
+      | { id: string; type: 'done' }
+      | { id: string; type: 'error'; error: string }
+    ) => void,
+  ) => Promise<{ status: number; statusText: string; headers: Array<[string, string]> }>
+  cancelApiFetch?: (id: string) => void
   selectDirectory: () => Promise<string | null>
   selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<string[] | null>

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -23,13 +23,20 @@ import { storeImage, hashDataUrl } from '../lib/db'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
-import { CloseIcon, FolderOpenIcon } from './icons'
+import { CloseIcon, FolderOpenIcon, TagsIcon } from './icons'
 import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
 import AgentBatchPlannerModal from './AgentBatchPlannerModal'
+import GallerySopBatchModal, { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/GallerySopBatchModal'
+import GallerySopManagementCenter from '../features/strategy/adapters/GallerySopManagementCenter'
+import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_BATCH_PROMPTS, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
+import { useRequirementPrototype } from '../features/requirementPrototype/store'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
 import { buildWordGroupName, resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
 import type { AssistantActionPreferences, AssistantWordEntryGroup } from '../features/assistantActions/types'
 import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../lib/promptVariableEditor'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 
 
 function getMentionTagTextLength(el: Element) {
@@ -389,11 +396,15 @@ function BatchActionButton({
   tooltip,
   className,
   onClick,
+  expanded,
+  controls,
   children,
 }: {
   tooltip: string
   className: string
   onClick: () => void | Promise<void>
+  expanded?: boolean
+  controls?: string
   children: ReactNode
 }) {
   const tooltipState = useTooltip()
@@ -408,6 +419,9 @@ function BatchActionButton({
         }}
         className={className}
         aria-label={tooltip}
+        aria-expanded={expanded}
+        aria-controls={controls}
+        aria-haspopup={controls ? 'dialog' : undefined}
       >
         {children}
       </button>
@@ -523,9 +537,29 @@ export default function InputBar() {
   const createWordGenerationBatch = useStore((s) => s.createWordGenerationBatch)
   const setWordLibraryEditEntryId = useStore((s) => s.setWordLibraryEditEntryId)
   const setWordLibraryPromptSelectedVarName = useStore((s) => s.setWordLibraryPromptSelectedVarName)
+  const sopItems = useRequirementPrototype((s) => s.sopLibrary)
   const assistantFeedbackScopeId = activeWorkspaceTabId ?? '__default__'
   const [assistantFeedbackByScope, setAssistantFeedbackByScope] = useState<Record<string, AssistantActionFeedbackState>>({})
   const [showAgentBatchPlanner, setShowAgentBatchPlanner] = useState(false)
+  const [showGallerySopBatch, setShowGallerySopBatch] = useState(false)
+  const [gallerySopBatchTabIds, setGallerySopBatchTabIds] = useState<string[]>([])
+  const [visibleGallerySopBatchTabId, setVisibleGallerySopBatchTabId] = useState<string | null>(null)
+  const [showGallerySopManagement, setShowGallerySopManagement] = useState(false)
+  const [gallerySopAutoStart, setGallerySopAutoStart] = useState(false)
+  const [gallerySopIdsByTab, setGallerySopIdsByTab] = useState<Record<string, string>>({})
+  const [savedSopPromptCount, setSavedSopPromptCount] = useState(0)
+  const [gallerySopPromptCountsByTab, setGallerySopPromptCountsByTab] = useState<Record<string, number>>({})
+  const [gallerySopImagesPerPromptByTab, setGallerySopImagesPerPromptByTab] = useState<Record<string, number>>({})
+  const [gallerySopAutoGenerateByTab, setGallerySopAutoGenerateByTab] = useState<Record<string, boolean>>({})
+  const [gallerySopRunStatusByTab, setGallerySopRunStatusByTab] = useState<Record<string, GallerySopRunStatus>>({})
+  const [taskMoveMenuOpen, setTaskMoveMenuOpen] = useState(false)
+  const taskMoveMenuRef = useRef<HTMLDivElement>(null)
+  const taskMoveDestinations = useMemo(
+    () => workspaceTabs
+      .filter((tab) => tab.id !== activeWorkspaceTabId)
+      .sort((left, right) => left.order - right.order),
+    [activeWorkspaceTabId, workspaceTabs],
+  )
   const assistantFeedback = assistantFeedbackByScope[assistantFeedbackScopeId] ?? { type: 'idle' }
   const setAssistantFeedbackForScope = useCallback((next: AssistantActionFeedbackState) => {
     const scopeId = assistantFeedbackScopeId
@@ -534,6 +568,23 @@ export default function InputBar() {
       [scopeId]: next,
     }))
   }, [assistantFeedbackScopeId])
+
+  useCloseOnEscape(taskMoveMenuOpen, () => setTaskMoveMenuOpen(false))
+
+  useEffect(() => {
+    if (!taskMoveMenuOpen) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!taskMoveMenuRef.current?.contains(event.target as Node)) {
+        setTaskMoveMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick)
+  }, [taskMoveMenuOpen])
+
+  useEffect(() => {
+    if (selectedTaskIds.length === 0) setTaskMoveMenuOpen(false)
+  }, [selectedTaskIds.length])
 
   const VAR_COLOR_MAP = useMemo(() => {
     const sorted = [...wordLibraryEntries].filter((e) => e.deletedAt == null).sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
@@ -548,6 +599,90 @@ export default function InputBar() {
     () => wordLibraryEntries.filter((e) => e.deletedAt == null).map((entry) => entry.key),
     [wordLibraryEntries],
   )
+  const gallerySopScopeId = activeWorkspaceTabId ?? '__default__'
+  const gallerySopId = gallerySopIdsByTab[gallerySopScopeId] ?? ''
+  const gallerySopPromptCount = gallerySopPromptCountsByTab[gallerySopScopeId] ?? 5
+  const gallerySopImagesPerPrompt = gallerySopImagesPerPromptByTab[gallerySopScopeId] ?? 1
+  const gallerySopAutoGenerate = gallerySopAutoGenerateByTab[gallerySopScopeId] ?? false
+  const gallerySopTotalImages = getSopTotalImageCount(gallerySopPromptCount, gallerySopImagesPerPrompt)
+  const gallerySopRunStatus = gallerySopRunStatusByTab[gallerySopScopeId]
+  const setGallerySopId = useCallback((id: string) => {
+    setGallerySopIdsByTab((current) => ({ ...current, [gallerySopScopeId]: id }))
+  }, [gallerySopScopeId])
+  const setGallerySopPromptCount = useCallback((value: number) => {
+    const normalized = getSopRunCounts(value, gallerySopImagesPerPrompt).promptCount
+    setGallerySopPromptCountsByTab((current) => ({ ...current, [gallerySopScopeId]: normalized }))
+  }, [gallerySopImagesPerPrompt, gallerySopScopeId])
+  const setGallerySopImagesPerPrompt = useCallback((value: number) => {
+    const normalized = getSopRunCounts(gallerySopPromptCount, value).imagesPerPrompt
+    setGallerySopImagesPerPromptByTab((current) => ({ ...current, [gallerySopScopeId]: normalized }))
+  }, [gallerySopPromptCount, gallerySopScopeId])
+  const setGallerySopAutoGenerate = useCallback((value: boolean) => {
+    setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: value }))
+  }, [gallerySopScopeId])
+  const activeGallerySop = useMemo(
+    () => sopItems.find((item) => item.id === gallerySopId) ?? null,
+    [gallerySopId, sopItems],
+  )
+
+  const openGallerySopBatch = useCallback((autoStart: boolean) => {
+    setGallerySopBatchTabIds((current) => current.includes(gallerySopScopeId) ? current : [...current, gallerySopScopeId])
+    setGallerySopAutoStart(autoStart)
+    setVisibleGallerySopBatchTabId(gallerySopScopeId)
+    setShowGallerySopBatch(true)
+  }, [gallerySopScopeId])
+
+  const handleGallerySopRunStatusChange = useCallback((nextStatus: GallerySopRunStatus) => {
+    const scopeId = nextStatus.workspaceTabId ?? '__default__'
+    setGallerySopRunStatusByTab((current) => ({ ...current, [scopeId]: nextStatus }))
+  }, [])
+
+  const refreshSavedSopPromptCount = useCallback(() => {
+    try {
+      const raw = window.localStorage.getItem(getGallerySopPromptRunStorageKey(activeWorkspaceTabId))
+      if (!raw) {
+        setSavedSopPromptCount(0)
+        return
+      }
+      const parsed = JSON.parse(raw) as {
+        promptCount?: number
+        quantity?: number
+        imagesPerPrompt?: number
+        autoGenerate?: boolean
+        availablePrompts?: number
+        prompts?: Array<{ deleted?: boolean; promptText?: unknown }>
+      }
+      const count = Array.isArray(parsed.prompts)
+        ? parsed.prompts.filter((item) => !item.deleted && typeof item.promptText === 'string' && item.promptText.trim()).length
+        : typeof parsed.availablePrompts === 'number' ? parsed.availablePrompts : 0
+      setSavedSopPromptCount(count)
+      const restoredCounts = getSopRunCounts(parsed.promptCount ?? parsed.quantity ?? 5, parsed.imagesPerPrompt ?? 1)
+      setGallerySopPromptCountsByTab((current) => ({ ...current, [gallerySopScopeId]: restoredCounts.promptCount }))
+      setGallerySopImagesPerPromptByTab((current) => ({ ...current, [gallerySopScopeId]: restoredCounts.imagesPerPrompt }))
+      if (typeof parsed.autoGenerate === 'boolean') {
+        setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: parsed.autoGenerate! }))
+      }
+    } catch {
+      setSavedSopPromptCount(0)
+    }
+  }, [activeWorkspaceTabId, gallerySopScopeId])
+
+  useEffect(() => {
+    if (gallerySopId && !sopItems.some((item) => item.id === gallerySopId)) {
+      setGallerySopId('')
+    }
+  }, [gallerySopId, sopItems])
+
+  useEffect(() => {
+    refreshSavedSopPromptCount()
+  }, [refreshSavedSopPromptCount, showGallerySopBatch])
+
+  useEffect(() => {
+    if (visibleGallerySopBatchTabId && visibleGallerySopBatchTabId !== gallerySopScopeId) {
+      setVisibleGallerySopBatchTabId(null)
+      setShowGallerySopBatch(false)
+    }
+  }, [gallerySopScopeId, visibleGallerySopBatchTabId])
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -769,6 +904,10 @@ export default function InputBar() {
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
   const [showCustomAdRuleDialog, setShowCustomAdRuleDialog] = useState(false)
+  const customAdRuleDialogRef = useRef<HTMLFormElement>(null)
+  useCloseOnEscape(showCustomAdRuleDialog, () => setShowCustomAdRuleDialog(false))
+  usePreventBackgroundScroll(showCustomAdRuleDialog, customAdRuleDialogRef)
+  useDialogFocusTrap(showCustomAdRuleDialog, customAdRuleDialogRef)
   const [customAdRuleName, setCustomAdRuleName] = useState('')
   const [customAdRuleContent, setCustomAdRuleContent] = useState('')
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
@@ -826,9 +965,6 @@ export default function InputBar() {
     }
   }, [updateInputBarClearance])
   const imageHintTimerRef = useRef<number | null>(null)
-  const [outputCompressionInput, setOutputCompressionInput] = useState(
-    params.output_compression == null ? '' : String(params.output_compression),
-  )
   const [postprocessMaxSizeInput, setPostprocessMaxSizeInput] = useState(
     params.postprocess_max_size_kb == null ? '' : String(params.postprocess_max_size_kb),
   )
@@ -855,21 +991,62 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
+  const gallerySopModeActive = appMode === 'gallery' && Boolean(activeGallerySop)
+  const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'submitting'
+  const gallerySopAvailablePromptCount = gallerySopRunStatus?.availablePrompts ?? savedSopPromptCount
+  const gallerySopHasPromptList = gallerySopAvailablePromptCount > 0
+  const canSubmit = gallerySopModeActive
+    ? Boolean(activeGallerySop && !activeAgentIsRunning)
+    : Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
+    : gallerySopModeActive
+    ? gallerySopIsRunning
+      ? '查看 SOP 提示词生成进度'
+      : gallerySopHasPromptList
+        ? `查看 ${gallerySopAvailablePromptCount} 条 SOP 提示词`
+        : gallerySopAutoGenerate
+          ? `生成 ${gallerySopPromptCount} 条提示词并自动生成 ${gallerySopTotalImages} 张图片`
+          : `生成 ${gallerySopPromptCount} 条 SOP 提示词`
     : hasSubmitApiConfig
     ? maskDraft ? '遮罩编辑' : '生成图像'
     : '请先配置 API'
-  const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
-  const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
+  const submitButtonText = activeAgentIsRunning
+    ? '停止'
+    : gallerySopModeActive
+    ? gallerySopIsRunning
+      ? '查看提示词进度'
+      : gallerySopHasPromptList
+        ? `查看提示词列表 · ${gallerySopAvailablePromptCount}`
+        : gallerySopAutoGenerate
+          ? `自动生成 ${gallerySopTotalImages} 张`
+          : `生成 ${gallerySopPromptCount} 条提示词`
+    : maskDraft ? '遮罩编辑' : '生成图像'
+  const submitTooltipText = activeAgentIsRunning
+    ? '停止生成'
+    : gallerySopModeActive
+    ? submitButtonAriaLabel
+    : '尚未完成 API 配置，请在右上角设置中进行'
+  const showSubmitTooltip = submitHover && (
+    activeAgentIsRunning ||
+    (gallerySopModeActive ? true : !hasSubmitApiConfig)
+  )
+  const promptPlaceholder = gallerySopModeActive
+    ? '本次生成要求（可选）：补充本批次的主题、内容和限制；留空则完全按 SOP 执行'
+    : '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
+    } else if (gallerySopModeActive) {
+      if (!activeGallerySop) {
+        showToast('请先选择 SOP 预设', 'error')
+        return
+      }
+      openGallerySopBatch(!gallerySopIsRunning && !gallerySopHasPromptList)
     } else {
       void submitTask()
     }
-  }, [appMode])
+  }, [activeGallerySop, appMode, gallerySopHasPromptList, gallerySopIsRunning, gallerySopModeActive, openGallerySopBatch])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -992,7 +1169,6 @@ export default function InputBar() {
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const agentAutoImageCount = appMode === 'agent' && activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses'
-  const compressionDisabled = params.output_format === 'png' || isFalProvider
   const nLimitHintText = agentAutoImageCount
     ? 'Agent 模式下数量由模型根据提示词自动决定'
     : '可生成任意数量图片（最大并发 20）'
@@ -1026,7 +1202,6 @@ export default function InputBar() {
       ]
   const atImageLimit = !inputImageFolder && inputImages.length >= MAX_DIRECT_INPUT_IMAGES
   const uploadImageTooltipText = inputImageFolder ? '已选择图片文件夹' : atImageLimit ? `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张），无法继续添加` : '选择图片文件夹'
-  const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
@@ -1253,10 +1428,10 @@ export default function InputBar() {
   }, [setPrompt])
 
   useEffect(() => {
-    setOutputCompressionInput(
-      params.output_compression == null ? '' : String(params.output_compression),
-    )
-  }, [params.output_compression])
+    if (params.output_compression != null) {
+      setParams({ output_compression: null })
+    }
+  }, [params.output_compression, setParams])
 
   useEffect(() => {
     setPostprocessMaxSizeInput(
@@ -1296,23 +1471,6 @@ export default function InputBar() {
       cancelled = true
     }
   }, [maskDraft, maskTargetImage?.id, maskTargetImage?.dataUrl])
-
-  const commitOutputCompression = useCallback(() => {
-    if (outputCompressionInput.trim() === '') {
-      setOutputCompressionInput('')
-      setParams({ output_compression: null })
-      return
-    }
-
-    const nextValue = Number(outputCompressionInput)
-    if (Number.isNaN(nextValue)) {
-      setOutputCompressionInput(params.output_compression == null ? '' : String(params.output_compression))
-      return
-    }
-
-    setOutputCompressionInput(String(nextValue))
-    setParams({ output_compression: nextValue })
-  }, [outputCompressionInput, params.output_compression, setParams])
 
   const commitPostprocessMaxSize = useCallback(() => {
     if (postprocessMaxSizeInput.trim() === '') {
@@ -1590,11 +1748,23 @@ export default function InputBar() {
   const handlePickOutputPath = async () => {
     try {
       const dir = await selectLocalSaveDirectory()
-      if (dir) setCustomOutputPath(dir)
+      if (dir) {
+        setCustomOutputPath(dir)
+        showToast('已切换为自定义输出', 'success')
+      }
     } catch (err) {
       showToast(`选择输出目录失败：${err instanceof Error ? err.message : String(err)}`, 'error')
     }
   }
+
+  const handleToggleOutputPath = useCallback(() => {
+    if (customOutputPath.trim()) {
+      setCustomOutputPath('')
+      showToast('已切回默认输出', 'success')
+      return
+    }
+    void handlePickOutputPath()
+  }, [customOutputPath, handlePickOutputPath, setCustomOutputPath, showToast])
 
   const handleValidateOutputPath = async (path: string) => {
     // 简化验证，避免误报
@@ -1997,7 +2167,7 @@ export default function InputBar() {
     }
   }, [])
 
-  const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
+  const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition duration-200 shadow-sm'
 
   const getTouchDropIndex = (touch: React.Touch) => {
     const target = document
@@ -2308,7 +2478,7 @@ export default function InputBar() {
           action: () => clearInputImages(),
         })
       }
-      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition-all cursor-pointer flex-shrink-0"
+      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition cursor-pointer flex-shrink-0"
       title={maskTargetImage ? '清空遮罩主图、参考图和遮罩' : '清空全部参考图'}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2407,7 +2577,7 @@ export default function InputBar() {
         </div>
         {touchDragPreview?.src && createPortal(
           <div
-            className="fixed z-[140] h-[52px] w-[52px] overflow-hidden rounded-xl shadow-xl pointer-events-none opacity-90"
+            className="fixed z-[var(--ds-z-tooltip)] h-[52px] w-[52px] overflow-hidden rounded-xl shadow-xl pointer-events-none opacity-90"
             style={{ left: touchDragPreview.x, top: touchDragPreview.y, transform: 'translate(-50%, -50%)' }}
           >
             <img src={touchDragPreview.src} className="h-full w-full object-cover" alt="" />
@@ -2514,7 +2684,7 @@ export default function InputBar() {
           options={qualityOptions}
           disabled={settings.codexCli}
           className={settings.codexCli
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
+            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
@@ -2526,43 +2696,13 @@ export default function InputBar() {
         <span className="text-gray-400 dark:text-gray-500 ml-1">格式</span>
         <Select
           value={params.output_format}
-          onChange={(val) => setParams({ output_format: val as any })}
+          onChange={(val) => setParams({ output_format: val as any, output_compression: null })}
           options={[
             { label: 'PNG', value: 'png' },
             { label: 'JPEG', value: 'jpeg' },
             { label: 'WebP', value: 'webp' },
           ]}
           className={selectClass}
-        />
-      </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={compressionHint.show}
-        onMouseLeave={compressionHint.hide}
-        onTouchStart={compressionHint.startTouch}
-        onTouchEnd={compressionHint.clearTimer}
-        onTouchCancel={compressionHint.hide}
-        onClick={compressionHint.show}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">压缩率</span>
-        <input
-          value={outputCompressionInput}
-          onChange={(e) => setOutputCompressionInput(e.target.value)}
-          onBlur={commitOutputCompression}
-          disabled={compressionDisabled}
-          type="number"
-          min={0}
-          max={100}
-          placeholder="0-100"
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-            compressionDisabled
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-            }`}
-        />
-        <ButtonTooltip
-          visible={compressionHint.visible}
-          text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
         />
       </label>
       <label className="flex flex-col gap-0.5">
@@ -2619,7 +2759,7 @@ export default function InputBar() {
           disabled={agentAutoImageCount}
           type={agentAutoImageCount ? 'text' : 'number'}
           min={agentAutoImageCount ? undefined : 1}
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
+          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition duration-200 shadow-sm ${
             agentAutoImageCount
               ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
               : 'bg-white/50 dark:bg-white/[0.03]'
@@ -2638,10 +2778,205 @@ export default function InputBar() {
             onDoubleClick={handlePickOutputPath}
             placeholder={customOutputPath ? "" : "留空按标签页文件夹"}
             title="双击选择文件夹"
-            className="min-w-0 flex-1 px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm focus:ring-1 focus:ring-blue-500/40"
+            className="min-w-0 flex-1 px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition duration-200 shadow-sm focus:ring-1 focus:ring-blue-500/40"
           />
         </div>
       </label>
+    </div>
+  )
+
+  const renderParamSummary = () => {
+    const sizeLabel = quickSizeValue === 'auto' ? '自动尺寸' : quickSizeValue
+    const outputLabel = customOutputPath.trim() ? '自定义输出' : '默认输出'
+    const pillClass = 'inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-600 shadow-sm outline-none transition-[background-color,transform,border-color] duration-150 hover:border-blue-200 hover:bg-white active:scale-[0.97] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-blue-500/30'
+    const valueClass = 'ml-1 font-semibold text-gray-800 dark:text-gray-100'
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setShowSizePicker(true)}
+          className={pillClass}
+        >
+          <span className="text-gray-400">尺寸</span>
+          <span className={valueClass}>{sizeLabel}</span>
+        </button>
+        <label className={`${pillClass} flex items-center gap-1`}>
+          <span className="text-gray-400">质量</span>
+          <select
+            value={settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
+            onChange={(event) => {
+              if (!settings.codexCli) setParams({ quality: event.target.value as any })
+            }}
+            disabled={settings.codexCli}
+            className="max-w-20 cursor-pointer bg-transparent font-semibold text-gray-800 outline-none disabled:cursor-not-allowed dark:text-gray-100"
+            aria-label="编辑质量"
+          >
+            {qualityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label className={`${pillClass} flex items-center gap-1`}>
+          <span className="text-gray-400">格式</span>
+          <select
+            value={params.output_format}
+            onChange={(event) => setParams({ output_format: event.target.value as any, output_compression: null })}
+            className="max-w-20 cursor-pointer bg-transparent font-semibold uppercase text-gray-800 outline-none dark:text-gray-100"
+            aria-label="编辑格式"
+          >
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </label>
+        {!gallerySopModeActive && <label className={`${pillClass} flex items-center gap-1`}>
+          <span className="text-gray-400">数量</span>
+          <input
+            value={nInput}
+            onChange={(event) => handleNInputChange(event.target.value)}
+            onFocus={() => setNInputFocused(true)}
+            onBlur={() => {
+              setNInputFocused(false)
+              commitN()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'ArrowUp') handleNLimitIncreaseAttempt(() => event.preventDefault())
+            }}
+            onWheel={(event) => {
+              if (event.deltaY < 0) handleNLimitIncreaseAttempt(() => event.preventDefault())
+            }}
+            disabled={agentAutoImageCount}
+            type={agentAutoImageCount ? 'text' : 'number'}
+            min={agentAutoImageCount ? undefined : 1}
+            className="w-12 bg-transparent font-semibold text-gray-800 outline-none disabled:cursor-not-allowed dark:text-gray-100"
+            aria-label="编辑数量"
+          />
+        </label>}
+        <button
+          type="button"
+          onClick={handleToggleOutputPath}
+          className={`${pillClass} max-w-[170px] truncate`}
+          title={customOutputPath.trim() ? `${customOutputPath.trim()}（点击切回默认输出）` : '默认输出（点击选择自定义目录）'}
+        >
+          <span className="text-gray-400">输出</span>
+          <span className={valueClass}>{outputLabel}</span>
+        </button>
+      </>
+    )
+  }
+
+  const renderSopContextControls = () => {
+    if (appMode !== 'gallery') return null
+    const hasSopSelection = Boolean(activeGallerySop)
+    const sharedReferenceCount = inputImages.length || inputImageFolder?.imageIds.length || 0
+    const progressLabel = gallerySopRunStatus
+      ? gallerySopRunStatus.phase === 'generating'
+        ? `提示词 ${gallerySopRunStatus.availablePrompts}/${gallerySopRunStatus.promptCount}`
+        : gallerySopRunStatus.phase === 'submitting'
+          ? `正在提交 ${gallerySopRunStatus.totalImages} 张`
+          : gallerySopRunStatus.phase === 'error'
+            ? `部分失败 ${gallerySopRunStatus.failed}`
+            : gallerySopRunStatus.phase === 'success'
+              ? `已提交 ${gallerySopRunStatus.totalImages} 张`
+              : `提示词 ${gallerySopRunStatus.availablePrompts}`
+      : `提示词 ${savedSopPromptCount}`
+    const promptListActionLabel = gallerySopIsRunning
+      ? '查看提示词进度'
+      : gallerySopHasPromptList
+        ? `查看提示词列表 · ${gallerySopAvailablePromptCount}`
+        : '生成提示词'
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setShowGallerySopManagement(true)}
+          aria-label={hasSopSelection ? `SOP 已启用：${activeGallerySop?.name}` : 'SOP 未启用'}
+          title={hasSopSelection ? `SOP 已启用：${activeGallerySop?.name}` : 'SOP 未启用'}
+          className={`flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-semibold transition-[background-color,transform] duration-150 active:scale-[0.97] ${
+            hasSopSelection
+              ? 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-500/15 dark:text-violet-200 dark:hover:bg-violet-500/25'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1]'
+          }`}
+        >
+          <span className="text-violet-600 dark:text-violet-300">SOP</span>
+          <span className="max-w-40 truncate font-semibold text-gray-800 dark:text-gray-100">
+            {hasSopSelection ? activeGallerySop?.name : '未启用'}
+          </span>
+        </button>
+        {hasSopSelection && <button
+          type="button"
+          onClick={() => { setGallerySopId(''); setGallerySopAutoStart(false) }}
+          disabled={gallerySopIsRunning}
+          aria-label="取消当前 SOP，改为直接生图"
+          title="不使用 SOP"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-[background-color,transform] duration-150 hover:bg-gray-200 hover:text-gray-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1] dark:hover:text-gray-200"
+        >
+          <CloseIcon className="h-3.5 w-3.5" />
+        </button>}
+        {hasSopSelection && <>
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span>提示词</span>
+            <input
+              type="number"
+              min={1}
+              max={MAX_SOP_BATCH_PROMPTS}
+              disabled={gallerySopIsRunning}
+              value={gallerySopPromptCount}
+              onChange={(event) => event.target.value && setGallerySopPromptCount(Number(event.target.value))}
+              aria-label="SOP 提示词数量"
+              className="w-9 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
+            />
+          </label>
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span>每条</span>
+            <input
+              type="number"
+              min={1}
+              max={MAX_SOP_IMAGES_PER_PROMPT}
+              disabled={gallerySopIsRunning}
+              value={gallerySopImagesPerPrompt}
+              onChange={(event) => event.target.value && setGallerySopImagesPerPrompt(Number(event.target.value))}
+              aria-label="每条提示词生成图片数"
+              className="w-9 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
+            />
+            <span>张</span>
+          </label>
+          <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-violet-50 px-3 text-xs font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-200" title={`${gallerySopPromptCount} 条提示词 × 每条 ${gallerySopImagesPerPrompt} 张`}>
+            预计 {gallerySopTotalImages} 张
+          </span>
+          <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-gray-100 px-3 text-xs font-medium text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">
+            共同参考 · {sharedReferenceCount} 张
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gallerySopAutoGenerate}
+            aria-label="提示词完成后自动生图"
+            disabled={gallerySopIsRunning}
+            onClick={() => setGallerySopAutoGenerate(!gallerySopAutoGenerate)}
+            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${gallerySopAutoGenerate ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'}`}
+          >
+            自动生图
+            <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${gallerySopAutoGenerate ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}><span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${gallerySopAutoGenerate ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
+          </button>
+        </>}
+        <button
+          type="button"
+          onClick={() => openGallerySopBatch(!gallerySopIsRunning && !gallerySopHasPromptList)}
+          aria-label={`${promptListActionLabel}，${progressLabel}`}
+          title={`${promptListActionLabel}，${progressLabel}`}
+          className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs font-semibold text-gray-700 transition-[background-color,transform,box-shadow] duration-150 hover:bg-white active:scale-[0.97] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+        >
+          {gallerySopIsRunning && <span className="h-2 w-2 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none" />}
+          {promptListActionLabel}
+        </button>
+      </>
+    )
+  }
+
+  const renderInputContextControls = () => (
+    <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex">
+      {renderSopContextControls()}
+      {renderParamSummary()}
     </div>
   )
 
@@ -2652,7 +2987,7 @@ export default function InputBar() {
     <>
       {/* 全屏拖拽遮罩 */}
       {isDragging && (
-        <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-gray-900/60 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
+        <div className="fixed inset-0 z-[var(--ds-z-toast)] bg-white/60 dark:bg-gray-900/60 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-4 p-8 rounded-3xl">
             <div className={`w-20 h-20 rounded-full border-2 border-dashed flex items-center justify-center ${
               atImageLimit ? 'bg-red-50 dark:bg-red-500/10 border-red-300' : 'bg-blue-50 dark:bg-blue-500/10 border-blue-400'
@@ -2720,7 +3055,7 @@ export default function InputBar() {
         />
       )}
 
-      <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
+      <div data-input-bar className="fixed bottom-4 z-30 transition duration-300 sm:bottom-6">
         {showFavoriteCollectionBatchBar && (
           <div className="flex justify-center mb-3">
             <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
@@ -2810,6 +3145,59 @@ export default function InputBar() {
                   <path d="M8 12h8M13 9l3 3-3 3" />
                 </svg>
               </BatchActionButton>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+              <div ref={taskMoveMenuRef} className="relative inline-flex">
+                <BatchActionButton
+                  onClick={() => {
+                    if (taskMoveDestinations.length === 0) {
+                      showToast('请先创建其他标签', 'info')
+                      return
+                    }
+                    setTaskMoveMenuOpen((open) => !open)
+                  }}
+                  className="p-2 text-cyan-500 transition-colors hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300"
+                  tooltip="移动到标签"
+                  expanded={taskMoveMenuOpen}
+                  controls="task-move-destination-picker"
+                >
+                  <TagsIcon className="h-5 w-5" />
+                </BatchActionButton>
+                {taskMoveMenuOpen && (
+                  <div
+                    id="task-move-destination-picker"
+                    role="dialog"
+                    aria-label="选择目标标签"
+                    className="absolute bottom-full left-1/2 z-50 mb-3 w-60 -translate-x-1/2 overflow-hidden rounded-xl border border-gray-200/80 bg-white p-1.5 text-left shadow-[0_16px_40px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-gray-800"
+                  >
+                    <div className="border-b border-gray-100 px-2.5 py-2 dark:border-white/10">
+                      <p className="text-xs font-medium text-gray-900 dark:text-white">
+                        移动 {selectedTaskIds.length} 个任务到
+                      </p>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto py-1">
+                      {taskMoveDestinations.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            const moved = moveTasksToWorkspaceTab(
+                              selectedTaskIds,
+                              tab.id,
+                              filterFavorite ? undefined : activeWorkspaceTabId ?? undefined,
+                            )
+                            if (moved) setTaskMoveMenuOpen(false)
+                          }}
+                          className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-2.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 hover:text-cyan-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 dark:text-gray-200 dark:hover:bg-white/5 dark:hover:text-cyan-200"
+                        >
+                          <TagsIcon className="h-4 w-4 shrink-0 text-cyan-500 dark:text-cyan-400" />
+                          <span className="min-w-0 flex-1 truncate">{tab.name}</span>
+                          <span className="shrink-0 text-xs tabular-nums text-gray-400 dark:text-gray-500">{tab.tasks.length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <BatchActionButton
                 onClick={handleToggleFavorite}
@@ -2947,10 +3335,10 @@ export default function InputBar() {
             )
           )}
 
-          {!(inputImages.length > 4 && !imageThumbsExpanded) && renderReferenceModeControl()}
+          {isMobile && !(inputImages.length > 4 && !imageThumbsExpanded) && renderReferenceModeControl()}
 
           {/* 输入框 */}
-          <div className="relative grid">
+          <div className="relative grid rounded-2xl border border-gray-200/70 bg-white/55 shadow-sm transition-[border-color,box-shadow] duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100/70 dark:border-white/[0.08] dark:bg-white/[0.03] dark:focus-within:border-blue-500/40 dark:focus-within:ring-blue-500/10">
             {showAtImageMenu && (
               <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
@@ -3077,10 +3465,10 @@ export default function InputBar() {
                 syncMentionTagSelection(el)
               }}
               aria-label={promptPlaceholder}
-              className="col-start-1 row-start-1 min-h-[42px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 pl-4 pr-10 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30"
+              className="col-start-1 row-start-1 min-h-[92px] w-full overflow-hidden ios-rounded-scroll-fix whitespace-pre-wrap break-words rounded-2xl bg-transparent pl-4 pr-11 py-3.5 text-sm leading-relaxed outline-none dark:text-gray-100 sm:min-h-[112px]"
             />
             {prompt.length === 0 && (
-              <div className={`prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-10 py-3 text-sm leading-relaxed text-gray-400 dark:text-gray-500${
+              <div className={`prompt-placeholder col-start-1 row-start-1 pointer-events-none pl-4 pr-11 py-3.5 text-sm leading-relaxed text-gray-400 dark:text-gray-500${
                 isMobile && mobileCollapsed ? ' truncate' : ''
               }`}>
                 {promptPlaceholder}
@@ -3090,7 +3478,7 @@ export default function InputBar() {
               <button
                 type="button"
                 onClick={handleClearPrompt}
-                className={`absolute right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.08] rounded-full p-1 transition-all duration-200 focus:outline-none z-10 flex items-center justify-center ${
+                className={`absolute right-3 text-gray-400 transition-[color,background-color,transform] duration-150 hover:text-gray-600 active:scale-95 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.08] rounded-full p-1 focus:outline-none z-10 flex items-center justify-center ${
                   isSingleLine ? 'top-1/2 -translate-y-1/2' : 'top-3'
                 }`}
                 title="清空文本"
@@ -3099,14 +3487,18 @@ export default function InputBar() {
               </button>
             )}
           </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-gray-400 dark:text-gray-500">
+            <span>Enter 发送 · Shift+Enter 换行 · @ 引用参考图</span>
+            <span className="tabular-nums">{prompt.trim().length} 字</span>
+          </div>
 
           {/* 参数 + 按钮 */}
           <div className="mt-3">
             {/* 桌面端布局 */}
-            <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-8')}
+            <div className="hidden sm:flex flex-nowrap items-center justify-between gap-3">
+              {renderInputContextControls()}
 
-              <div className="flex gap-2 flex-shrink-0 mb-0.5">
+              <div className="flex flex-shrink-0 gap-2">
                 {/* 转换为变量按钮 */}
                 <div
                   className="relative"
@@ -3117,7 +3509,7 @@ export default function InputBar() {
                   <button
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={handleConvertToVariable}
-                    className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow"
+                    className="p-2.5 rounded-xl transition-[background-color,transform,box-shadow] duration-150 shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow active:scale-[0.97]"
                     aria-label="转换为变量"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3137,23 +3529,22 @@ export default function InputBar() {
                         setInputImageFolder(null)
                         return
                       }
-                      void handleSelectFolder()
+                      if (!atImageLimit) {
+                        void handleSelectFolder()
+                      }
                     }}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm ${
+                    disabled={atImageLimit && !inputImageFolder}
+                    className={`p-2.5 rounded-xl transition-[background-color,transform,box-shadow] duration-150 shadow-sm ${
                       inputImageFolder
-                        ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-500/30'
+                        ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-500/30 active:scale-[0.97]'
                         : atImageLimit
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
+                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow active:scale-[0.97]'
                     }`}
                     aria-label={uploadImageTooltipText}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      {inputImageFolder ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      )}
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                     </svg>
                   </button>
                 </div>
@@ -3162,13 +3553,15 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
+                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : gallerySopModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
+                    disabled={activeAgentIsRunning ? false : gallerySopModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
+                    className={`flex min-w-[116px] items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition-[background-color,transform,box-shadow,opacity] duration-150 shadow-sm hover:shadow active:scale-[0.97] ${
                       activeAgentIsRunning
                         ? 'bg-red-500 text-white hover:bg-red-600'
+                      : gallerySopModeActive
+                        ? 'bg-violet-600 text-white hover:bg-violet-700 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
@@ -3184,11 +3577,11 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
+                    <span className="text-sm font-semibold">{submitButtonText}</span>
                   </button>
                 </div>
               </div>
             </div>
-
             {/* 移动端布局 */}
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
@@ -3210,7 +3603,7 @@ export default function InputBar() {
                         setShowMobileUploadMenu(!showMobileUploadMenu)
                       }
                     }}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${
+                    className={`p-2.5 rounded-xl transition shadow-sm flex-shrink-0 ${
                       atImageLimit
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300'
@@ -3274,7 +3667,7 @@ export default function InputBar() {
                   <button
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={handleConvertToVariable}
-                    className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300"
+                    className="p-2.5 rounded-xl transition shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300"
                     aria-label="转换为变量"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3287,14 +3680,16 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : gallerySopModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
+                    disabled={activeAgentIsRunning ? false : gallerySopModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
                     aria-label={submitButtonAriaLabel}
-                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
+                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition shadow-sm ${
                       activeAgentIsRunning
                         ? 'bg-red-500 text-white hover:bg-red-600'
+                        : gallerySopModeActive
+                        ? 'bg-violet-600 text-white hover:bg-violet-700 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
@@ -3309,7 +3704,7 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
-                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像'}
+                    {submitButtonText}
                   </button>
                 </div>
               </div>
@@ -3342,9 +3737,14 @@ export default function InputBar() {
         </div>
       </div>
       {showCustomAdRuleDialog && createPortal(
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" onMouseDown={() => setShowCustomAdRuleDialog(false)}>
+        <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4" onMouseDown={() => setShowCustomAdRuleDialog(false)}>
+          <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
           <form
-            className="w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl dark:border-white/[0.08] dark:bg-gray-900"
+            ref={customAdRuleDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-ad-rule-title"
+            className="ds-modal-surface relative z-10 w-full max-w-lg rounded-2xl border p-5"
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault()
@@ -3364,7 +3764,7 @@ export default function InputBar() {
               setShowCustomAdRuleDialog(false)
             }}
           >
-            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">新建自定义合规规则</h3>
+            <h2 id="custom-ad-rule-title" className="text-base font-semibold text-gray-800 dark:text-gray-100">新建自定义合规规则</h2>
             <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">规则会作为固定负向约束附加到每次生图请求。</p>
             <label className="mt-4 block text-xs text-gray-600 dark:text-gray-300">规则名称
               <input autoFocus value={customAdRuleName} onChange={(event) => setCustomAdRuleName(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-100" placeholder="例如：品牌安全" />
@@ -3382,6 +3782,42 @@ export default function InputBar() {
       )}
       {showAgentBatchPlanner && createPortal(
         <AgentBatchPlannerModal onClose={() => setShowAgentBatchPlanner(false)} />,
+        document.body,
+      )}
+      {gallerySopBatchTabIds.map((tabId) => createPortal(
+        <GallerySopBatchModal
+          key={tabId}
+          workspaceTabId={tabId === '__default__' ? null : tabId}
+          visible={showGallerySopBatch && visibleGallerySopBatchTabId === tabId}
+          initialSopId={gallerySopIdsByTab[tabId] ?? ''}
+          initialPromptCount={gallerySopPromptCountsByTab[tabId] ?? 5}
+          initialImagesPerPrompt={gallerySopImagesPerPromptByTab[tabId] ?? 1}
+          initialBrief={prompt}
+          initialAutoGenerate={gallerySopAutoGenerateByTab[tabId] ?? false}
+          autoStart={gallerySopAutoStart && visibleGallerySopBatchTabId === tabId}
+          onStatusChange={handleGallerySopRunStatusChange}
+          onBackground={() => {
+            setVisibleGallerySopBatchTabId(null)
+            setShowGallerySopBatch(false)
+            setGallerySopAutoStart(false)
+          }}
+          onClose={() => {
+            setGallerySopBatchTabIds((current) => current.filter((id) => id !== tabId))
+            setVisibleGallerySopBatchTabId((current) => current === tabId ? null : current)
+            setShowGallerySopBatch(false)
+            setGallerySopAutoStart(false)
+            refreshSavedSopPromptCount()
+          }}
+        />,
+        document.body,
+      ))}
+      {showGallerySopManagement && createPortal(
+        <GallerySopManagementCenter
+          selectedSopId={gallerySopId}
+          onApply={(item) => setGallerySopId(item.id)}
+          onClear={() => { setGallerySopId(''); setGallerySopAutoStart(false) }}
+          onClose={() => setShowGallerySopManagement(false)}
+        />,
         document.body,
       )}
     </>

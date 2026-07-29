@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { TaskRecord } from '../types'
 import { parseBatchTaskFile } from '../lib/agentBatchImport'
@@ -8,6 +8,9 @@ import { submitPlannedBatchUnit } from '../lib/agentBatchExecution'
 import { getAgentImageApiProfile } from '../lib/apiProfiles'
 import { AGENT_BATCH_QUEUE_UPDATED_EVENT, createAgentBatchQueue, getAgentBatchQueueStatusLabel, getBatchQueueProgress, loadAgentBatchQueues, saveAgentBatchQueues, type AgentBatchQueue } from '../lib/agentBatchQueue'
 import { applyAgentBatchPreset, createAgentBatchPreset, loadAgentBatchDraft, loadAgentBatchPresets, saveAgentBatchDraft, saveAgentBatchPresets, type AgentBatchStrategyPreset } from '../lib/agentBatchWorkspace'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 
 type SortKey = 'source' | 'sku' | 'product' | 'channel' | 'quantity'
 
@@ -72,6 +75,10 @@ function rowMatchesQuery(row: BatchTaskInput, query: string) {
 }
 
 export default function AgentBatchPlannerModal({ onClose }: { onClose: () => void }) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useCloseOnEscape(true, onClose)
+  usePreventBackgroundScroll(true, modalRef)
+  useDialogFocusTrap(true, modalRef)
   const settings = useStore((state) => state.settings)
   const params = useStore((state) => state.params)
   const tasks = useStore((state) => state.tasks)
@@ -405,11 +412,12 @@ export default function AgentBatchPlannerModal({ onClose }: { onClose: () => voi
   const visibleSelected = visibleRows.length > 0 && visibleRows.every(({ index }) => selectedRows.has(index))
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-2 backdrop-blur-sm">
-      <div className="flex h-[94vh] w-[min(1680px,99vw)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-gray-900">
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-2">
+      <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="agent-batch-planner-title" className="ds-modal-surface relative z-10 flex h-[94vh] w-[min(1680px,99vw)] flex-col overflow-hidden rounded-2xl border">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-white/10">
           <div>
-            <h2 className="text-base font-semibold tracking-tight text-slate-950 dark:text-white">批量任务工作台</h2>
+            <h2 id="agent-batch-planner-title" className="text-base font-semibold tracking-tight text-slate-950 dark:text-white">批量任务工作台</h2>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-gray-400">导入、校验、排程与执行均在此完成。</p>
           </div>
           <div className="flex items-center gap-2">

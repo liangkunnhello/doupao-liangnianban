@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { CalendarIcon, PlusIcon, CloseIcon, ChevronDownIcon, SettingsIcon, CopyIcon, EditIcon, TrashIcon } from './icons'
+import { CalendarIcon, PlusIcon, CloseIcon, ChevronDownIcon, SettingsIcon, CopyIcon, EditIcon, TrashIcon, Layers3Icon } from './icons'
 import type { WorkspaceTab, WorkspaceTabGroup } from '../types'
+import { Button, IconButton, ListRow, SearchField } from '../design-system'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 
 const MIN_W = 280
 const MIN_H = 400
@@ -61,6 +63,8 @@ function loadSavedDock(): 'left' | 'right' | null {
 }
 
 export default function WorkspaceTabBar() {
+  const compactViewport = useMediaQuery('(max-width: 1023px)')
+  const [compactOpen, setCompactOpen] = useState(false)
   const appMode = useStore((s) => s.appMode)
   const workspaceTabs = useStore((s) => s.workspaceTabs)
   const activeWorkspaceTabId = useStore((s) => s.activeWorkspaceTabId)
@@ -425,15 +429,25 @@ export default function WorkspaceTabBar() {
     const root = document.documentElement
     const leftVar = '--workspace-tabbar-left-width'
     const rightVar = '--workspace-tabbar-right-width'
-    root.style.setProperty(leftVar, appMode === 'gallery' && docked === 'left' ? `${sz.w}px` : '0px')
-    root.style.setProperty(rightVar, appMode === 'gallery' && docked === 'right' ? `${sz.w}px` : '0px')
+    root.style.setProperty(leftVar, appMode === 'gallery' && !compactViewport && docked === 'left' ? `${sz.w}px` : '0px')
+    root.style.setProperty(rightVar, appMode === 'gallery' && !compactViewport && docked === 'right' ? `${sz.w}px` : '0px')
     return () => {
       root.style.setProperty(leftVar, '0px')
       root.style.setProperty(rightVar, '0px')
     }
-  }, [appMode, docked, sz.w])
+  }, [appMode, compactViewport, docked, sz.w])
 
   if (appMode !== 'gallery') return null
+  if (compactViewport && !compactOpen) {
+    return (
+      <IconButton
+        aria-label="打开标签页"
+        icon={<CalendarIcon className="h-4 w-4" />}
+        onClick={() => setCompactOpen(true)}
+        className="fixed left-2 top-[calc(var(--app-header-offset)+var(--ds-space-2))] z-[var(--ds-z-overlay)] border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] shadow-[var(--ds-shadow-md)]"
+      />
+    )
+  }
 
   const isDocked = Boolean(docked)
   const dockedStyle = isDocked
@@ -451,93 +465,113 @@ export default function WorkspaceTabBar() {
       } as React.CSSProperties
     : {
         left: pos.x, top: pos.y,
-        borderRadius: 16,
-        boxShadow: '0 24px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.05), inset 0 1px 0 rgba(255,255,255,0.04)',
+        borderRadius: 'var(--ds-radius-xl)',
+        boxShadow: 'var(--ds-shadow-lg)',
+      } as React.CSSProperties
+  const panelStyle = compactViewport
+    ? {
+        left: 'var(--ds-space-2)',
+        top: 'calc(var(--app-header-offset) + var(--ds-space-2))',
+        height: 'calc(100dvh - var(--app-header-offset) - var(--ds-space-4))',
+        width: 'min(420px, calc(100% - var(--ds-space-4)))',
+        minWidth: 0,
+        maxWidth: 'calc(100% - var(--ds-space-4))',
+        borderRadius: 'var(--ds-radius-xl)',
+        boxShadow: 'var(--ds-shadow-lg)',
+      } as React.CSSProperties
+    : {
+        width: sz.w,
+        minWidth: MIN_W,
+        maxWidth: MAX_W,
+        ...dockedStyle,
       } as React.CSSProperties
 
   return (
     <div
       ref={panelRef}
-      className="fixed z-40 flex flex-col text-foreground overflow-hidden bg-background border border-border"
-      style={{
-        width: sz.w,
-        minWidth: MIN_W,
-        maxWidth: MAX_W,
-        ...dockedStyle,
-      }}
+      className="doupao-side-panel fixed z-40 flex flex-col overflow-hidden"
+      data-docked={docked ?? undefined}
+      style={panelStyle}
     >
       {/* ===== Header (drag) ===== */}
       <div
         data-drag
         onMouseDown={onDragStart}
-        className="shrink-0 px-4 pt-4 pb-3 border-b cursor-move select-none border-border"
+        className="doupao-side-panel__header shrink-0 cursor-move select-none"
       >
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-blue-500/15 flex items-center justify-center">
-              <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="doupao-side-panel__icon">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
               </svg>
             </div>
             <div>
-              <h3 className="text-base font-bold text-foreground">标签页</h3>
-              <p className="text-[11px] text-muted-foreground leading-tight">{workspaceTabs.length} 个标签页 · {workspaceTabGroups.length} 个分组</p>
+              <h3 className="doupao-side-panel__title">标签页</h3>
+              <p className="doupao-side-panel__meta">{workspaceTabs.length} 个标签页 · {workspaceTabGroups.length} 个分组</p>
             </div>
           </div>
+          {compactViewport && (
+            <IconButton aria-label="关闭标签页" icon={<CloseIcon className="h-4 w-4" />} onClick={() => setCompactOpen(false)} onMouseDown={(e) => e.stopPropagation()} size="sm" />
+          )}
         </div>
 
         {/* Toolbar buttons */}
         <div className="flex items-center gap-1.5">
-          <button
+          <Button
             onClick={handleCreateTab}
             title="创建标签页"
-            className="flex-1 flex items-center justify-center gap-1 h-8 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors"
+            size="sm"
+            className="flex-1"
+            leadingIcon={<PlusIcon className="h-3.5 w-3.5" />}
           >
-            <PlusIcon className="w-3.5 h-3.5" />
             新建
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={() => setWorkspaceTabManagerOpen(true)}
             title="标签管理"
-            className="flex-1 flex items-center justify-center gap-1 h-8 rounded-lg bg-muted hover:bg-muted/80 text-sidebar-foreground text-xs font-medium transition-colors border border-border"
+            variant="secondary"
+            size="sm"
+            className="flex-1"
+            leadingIcon={<SettingsIcon className="h-3.5 w-3.5" />}
           >
-            <SettingsIcon className="w-3.5 h-3.5" />
             管理
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleBatchRun}
             title="批量运行选中标签页"
-            className={`flex-1 flex items-center justify-center gap-1 h-8 rounded-lg text-xs font-medium transition-colors ${selectedWorkspaceTabIds.length > 0 ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-muted hover:bg-muted/80 text-sidebar-foreground border border-border'}`}
+            variant={selectedWorkspaceTabIds.length > 0 ? 'primary' : 'secondary'}
+            size="sm"
+            className="flex-1"
+            leadingIcon={(
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
             运行
-          </button>
+          </Button>
         </div>
 
         {/* Search */}
-        <div className="relative mt-2">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text"
+        <div className="mt-2">
+          <SearchField
+            label="搜索标签页"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={setSearchQuery}
+            onClear={() => setSearchQuery('')}
             placeholder="搜索标签页"
-            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm placeholder-muted-foreground transition focus:outline-none focus:ring-2 focus:ring-blue-500/25 bg-sidebar border border-border text-foreground"
           />
         </div>
       </div>
 
       {/* ===== Tab list ===== */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2">
+      <div className="doupao-side-panel__scroll flex-1 overflow-y-auto custom-scrollbar px-3 py-3">
         {grouped.map(({ group, tabs }) => (
           <div
             key={group?.id ?? '__ungrouped__'}
-            className={`mb-1 ${dragOverGroupId === (group?.id ?? null) ? 'bg-blue-500/10 rounded-md' : ''}`}
+            className={`mb-1 ${draggingTabId !== null && dragOverGroupId === (group?.id ?? null) ? 'doupao-drop-target' : ''}`}
             onDragOver={(e) => onGroupDragOver(e, group?.id ?? null)}
             onDrop={(e) => onGroupDrop(e, group?.id ?? null)}
             onDragLeave={() => setDragOverGroupId(null)}
@@ -553,7 +587,7 @@ export default function WorkspaceTabBar() {
               const isDragOver = dragOverTabId === tab.id
               const isEditing = editingTabId === tab.id
               return (
-                <div
+                <ListRow
                   key={tab.id}
                   draggable={!isEditing}
                   onDragStart={(e) => onTabDragStart(e, tab.id)}
@@ -566,23 +600,18 @@ export default function WorkspaceTabBar() {
                     e.stopPropagation()
                     startInlineRename(tab.id)
                   }}
-                  onClick={(e) => {
-                    if (e.ctrlKey || e.metaKey) {
-                      toggleWorkspaceTabSelection(tab.id)
-                    } else {
-                      clearWorkspaceTabSelection()
-                      setActiveWorkspaceTabId(tab.id)
-                    }
-                  }}
                   className={`
-                    group relative flex items-center gap-2 mx-1 px-2.5 py-2 rounded-xl cursor-pointer select-none transition-colors border
-                    ${isActive ? 'bg-blue-500/15 border-blue-500/35 text-blue-300' : 'border-transparent hover:bg-muted/50 text-sidebar-foreground'}
-                    ${isSelected && !isActive ? 'ring-1 ring-blue-500/40' : ''}
-                    ${isDragOver ? 'outline outline-1 outline-blue-500' : ''}
+                    workspace-tab-row group cursor-pointer select-none
+                    ${isDragOver ? 'workspace-tab-row--drop' : ''}
                   `}
-                  title={tab.name}
-                >
-                  {isEditing ? (
+                  selected={isActive || isSelected}
+                  variant="divided"
+                  leading={(
+                    <span className={`flex h-7 w-7 items-center justify-center ${isActive || isSelected ? 'text-ds-primary' : 'text-ds-muted'}`}>
+                      <Layers3Icon className="h-4 w-4" />
+                    </span>
+                  )}
+                  title={isEditing ? (
                     <input
                       value={editingTabName}
                       autoFocus
@@ -606,19 +635,37 @@ export default function WorkspaceTabBar() {
                           cancelInlineRename()
                         }
                       }}
-                      className="min-w-0 flex-1 rounded-md border border-blue-500/40 bg-background/80 px-1.5 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500/40"
+                      className="ds-input w-full min-w-0 px-1.5 py-0.5 text-xs"
                     />
                   ) : (
-                    <span className="flex-1 text-xs truncate">{tab.name}</span>
+                    <span className="block truncate">{tab.name}</span>
                   )}
-                  <button
-                    onClick={(e) => handleCloseTab(e, tab.id)}
-                    className={`opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted transition-opacity ${isActive ? 'text-blue-300' : 'text-muted-foreground'}`}
-                    title="关闭"
-                  >
-                    <CloseIcon className="w-3 h-3" />
-                  </button>
-                </div>
+                  description={isEditing ? undefined : `${tab.tasks.length} 个任务`}
+                  interactive={isEditing ? undefined : {
+                    'aria-current': isActive ? 'page' : undefined,
+                    'aria-label': `切换到标签页 ${tab.name}`,
+                    'aria-pressed': isSelected || undefined,
+                    title: tab.name,
+                    onClick: (e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        toggleWorkspaceTabSelection(tab.id)
+                      } else {
+                        clearWorkspaceTabSelection()
+                        setActiveWorkspaceTabId(tab.id)
+                      }
+                    },
+                  }}
+                  actions={(
+                    <IconButton
+                      onClick={(e) => handleCloseTab(e, tab.id)}
+                      className="workspace-tab-row__close opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      title="关闭"
+                      aria-label={`关闭标签页 ${tab.name}`}
+                      size="sm"
+                      icon={<CloseIcon className="h-3 w-3" />}
+                    />
+                  )}
+                />
               )
             })}
           </div>
@@ -630,16 +677,18 @@ export default function WorkspaceTabBar() {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border p-2">
-        <button
+      <div className="doupao-side-panel__footer shrink-0 p-2">
+        <Button
           type="button"
           onClick={() => setScheduleModalOpen(true)}
-          className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted text-xs font-medium text-sidebar-foreground transition-colors hover:bg-muted/80"
+          variant="secondary"
+          size="sm"
+          className="w-full"
+          leadingIcon={<CalendarIcon className="h-4 w-4" />}
           title="打开日程表"
         >
-          <CalendarIcon className="h-4 w-4" />
           日程表
-        </button>
+        </Button>
       </div>
 
       {/* ===== Resize handle (hidden when docked) ===== */}

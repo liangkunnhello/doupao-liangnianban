@@ -1,6 +1,10 @@
 import React, { type ReactNode, useState, useMemo } from 'react'
-import { RefreshIcon } from '../../../components/icons'
-import { Trash2, Plus, Edit2 } from 'lucide-react'
+import {
+  Edit2Icon as Edit2,
+  PlusIcon as Plus,
+  RefreshIcon,
+  TrashIcon as Trash2,
+} from '../../../design-system/icons'
 import { useTooltip } from '../../../hooks/useTooltip'
 import ViewportTooltip from '../../../components/ViewportTooltip'
 import type { CompositeFsImage } from '../lib/compositeTypes'

@@ -1,6 +1,7 @@
 import type { ApiProfile } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { getApiErrorMessage } from './imageApiShared'
+import { apiFetch as fetch } from './desktopApiFetch'
 
 export type ModelType = 'multimodal' | 'text' | 'image' | 'unknown'
 

@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { initStore, exportDataToPath } from './store'
 import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { mergeImportedSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
 import { isElectron as isElectronEnv, getDesktopPath, getBackupList, restoreFromBackupFile, checkBackupHasData } from './lib/localSave'
-import { applyThemeMode } from './lib/theme'
+import { applyThemeMode, applyColorScheme } from './lib/theme'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
@@ -19,8 +19,12 @@ import WordLibrarySidebar from './components/WordLibrarySidebar'
 import ErrorBoundary from './components/ErrorBoundary'
 import VarEntryEditor from './components/VarEntryEditor'
 import WorkspaceTabBar from './components/WorkspaceTabBar'
+import AppPageRail from './components/AppPageRail'
+import RequirementQueueRunner from './features/requirementPrototype/QueueRunner'
 const AgentWorkspace = React.lazy(() => import('./components/AgentWorkspace'))
 const CompositeWorkspace = React.lazy(() => import('./features/composite/CompositeWorkspace'))
+const StrategyWorkspace = React.lazy(() => import('./features/strategy/adapters/RequirementStrategyWorkspace'))
+const OrderingWorkspace = React.lazy(() => import('./features/ordering/adapters/RequirementOrderingWorkspace'))
 const DetailModal = React.lazy(() => import('./components/DetailModal'))
 const Lightbox = React.lazy(() => import('./components/Lightbox'))
 const SettingsModal = React.lazy(() => import('./components/SettingsModal'))
@@ -45,14 +49,27 @@ export default function App() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const themeMode = useStore((s) => s.settings.themeMode)
+  const colorScheme = useStore((s) => s.settings.colorScheme)
   const themeAppliedRef = useRef(false)
   const [startupSafeMode, setStartupSafeMode] = useState(false)
   useGlobalClickSuppression()
 
+  useLayoutEffect(() => {
+    const openGallery = () => {
+      if (useStore.getState().appMode !== 'gallery') {
+        useStore.getState().setAppMode('gallery')
+      }
+    }
+
+    openGallery()
+    return useStore.persist.onFinishHydration(openGallery)
+  }, [])
+
   useEffect(() => {
     applyThemeMode(themeMode, document.documentElement, { transition: themeAppliedRef.current })
+    applyColorScheme(colorScheme, document.documentElement)
     themeAppliedRef.current = true
-  }, [themeMode])
+  }, [themeMode, colorScheme])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)
@@ -213,9 +230,10 @@ export default function App() {
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
 
-  return (
+  const legacyWorkspace = (
     <ErrorBoundary>
       <WorkspaceTabBar />
+      <AppPageRail enabled={appMode === 'gallery' || appMode === 'agent'} />
       <div className={appMode === 'postprocess' ? '' : 'app-shell-with-docked-panels'}>
         <Header />
         {startupSafeMode && (
@@ -227,18 +245,22 @@ export default function App() {
         )}
         {appMode === 'agent' ? (
           <React.Suspense fallback={null}><AgentWorkspace /></React.Suspense>
+        ) : appMode === 'strategy' ? (
+          <React.Suspense fallback={null}><StrategyWorkspace /></React.Suspense>
+        ) : appMode === 'ordering' ? (
+          <React.Suspense fallback={null}><OrderingWorkspace /></React.Suspense>
         ) : appMode === 'postprocess' ? (
           <React.Suspense fallback={null}><CompositeWorkspace /></React.Suspense>
         ) : (
-          <main data-home-main data-drag-select-surface className="pb-48">
-            <div className="safe-area-x max-w-7xl mx-auto">
+          <main data-home-main data-drag-select-surface className="gallery-main pb-48">
+            <div className="gallery-home-inner safe-area-x max-w-7xl mx-auto">
               <SearchBar />
               {filterFavorite && <FavoriteCollectionsView />}
               <TaskGrid />
             </div>
           </main>
         )}
-        {appMode !== 'postprocess' && <InputBar />}
+        {(appMode === 'gallery' || appMode === 'agent') && <InputBar />}
       <React.Suspense fallback={null}>
       <DetailModal />
       <Lightbox />
@@ -251,8 +273,8 @@ export default function App() {
       <Toast />
       <MaskEditorModal />
       <ImageContextMenu />
-      {appMode !== 'postprocess' && <WordLibrarySidebar />}
-      {appMode !== 'postprocess' && <WordLibraryManagerModal />}
+      {(appMode === 'gallery' || appMode === 'agent') && <WordLibrarySidebar />}
+      {(appMode === 'gallery' || appMode === 'agent') && <WordLibraryManagerModal />}
       <VarEntryEditor />
       <RandomPromptModal />
       <ScheduleModal />
@@ -262,6 +284,13 @@ export default function App() {
       <UpdateReleaseNotesModal />
       </React.Suspense>
       </div>
+    </ErrorBoundary>
+  )
+
+  return (
+    <ErrorBoundary>
+      <RequirementQueueRunner />
+      {legacyWorkspace}
     </ErrorBoundary>
   )
 }

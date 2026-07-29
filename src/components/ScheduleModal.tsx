@@ -13,6 +13,7 @@ import { formatDateKey, getWeekDates, getWeekStartDate, parseDateKey, resolveSch
 import { checkPathExists, selectLocalSaveDirectory } from '../lib/localSave'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 import { CloseIcon, FolderOpenIcon, PlusIcon, TrashIcon } from './icons'
 
 const DAY_LABELS = ['\u5468\u4e00', '\u5468\u4e8c', '\u5468\u4e09', '\u5468\u56db', '\u5468\u4e94', '\u5468\u516d', '\u5468\u65e5']
@@ -88,6 +89,7 @@ export default function ScheduleModal() {
 
   useCloseOnEscape(open, () => setScheduleModalOpen(false))
   usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
 
   const favoriteTasks = useMemo(() => tasks.filter((task) => task.isFavorite), [tasks])
   const filteredTasks = useMemo(() => {
@@ -246,13 +248,14 @@ export default function ScheduleModal() {
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/45 p-3 backdrop-blur-sm" onMouseDown={(e) => {
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-3" onMouseDown={(e) => {
       if (e.target === e.currentTarget) setScheduleModalOpen(false)
     }}>
-      <div ref={modalRef} className="flex h-[88vh] w-[min(1280px,96vw)] flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="schedule-dialog-title" className="ds-modal-surface relative z-10 flex h-[88vh] w-[min(1280px,96vw)] flex-col overflow-hidden rounded-xl border text-foreground" onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold">{'\u65e5\u7a0b\u8868'}</h2>
+            <h2 id="schedule-dialog-title" className="text-base font-semibold">{'\u65e5\u7a0b\u8868'}</h2>
             <p className="text-xs text-muted-foreground">{schedule.activeWeekStart} - {activeWeekEnd}</p>
           </div>
           <div className="flex items-center gap-2">
@@ -277,7 +280,7 @@ export default function ScheduleModal() {
               {'\u590d\u7528\u4e0a\u5468'}
             </button>
             <button type="button" onClick={() => setScheduleWeekStart(addDays(schedule.activeWeekStart, 7))} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted">{'\u4e0b\u4e00\u5468'}</button>
-            <button type="button" onClick={() => setScheduleModalOpen(false)} className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="\u5173\u95ed\u65e5\u7a0b\u8868">
+            <button type="button" onClick={() => setScheduleModalOpen(false)} className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="关闭日程表">
               <CloseIcon className="h-4 w-4" />
             </button>
           </div>
@@ -525,7 +528,7 @@ function ScheduleTaskPreview({ task }: { task: TaskRecord }) {
       </div>
       {thumbSrc && hoverPoint && createPortal(
         <div
-          className="pointer-events-none fixed z-[190] overflow-hidden rounded-lg border border-white/30 bg-background p-1 shadow-2xl ring-1 ring-black/10"
+          className="pointer-events-none fixed z-[var(--ds-z-tooltip)] overflow-hidden rounded-lg border border-white/30 bg-background p-1 shadow-2xl ring-1 ring-black/10"
           style={{ left: previewLeft, top: previewTop, width: previewSize, height: previewSize }}
         >
           <img src={thumbSrc} alt="" className="h-full w-full rounded-md object-contain" />

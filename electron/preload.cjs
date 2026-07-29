@@ -1,6 +1,39 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+const apiFetchListeners = new Map()
+
+async function apiFetch(request, onEvent) {
+  const previous = apiFetchListeners.get(request.id)
+  if (previous) ipcRenderer.removeListener('api:fetch:event', previous)
+  const handler = (_event, payload) => {
+    if (!payload || payload.id !== request.id) return
+    onEvent(payload)
+    if (payload.type === 'done' || payload.type === 'error') {
+      ipcRenderer.removeListener('api:fetch:event', handler)
+      apiFetchListeners.delete(request.id)
+    }
+  }
+  apiFetchListeners.set(request.id, handler)
+  ipcRenderer.on('api:fetch:event', handler)
+  try {
+    return await ipcRenderer.invoke('api:fetch', request)
+  } catch (error) {
+    ipcRenderer.removeListener('api:fetch:event', handler)
+    apiFetchListeners.delete(request.id)
+    throw error
+  }
+}
+
+function cancelApiFetch(id) {
+  ipcRenderer.send('api:fetch:abort', id)
+  const handler = apiFetchListeners.get(id)
+  if (handler) ipcRenderer.removeListener('api:fetch:event', handler)
+  apiFetchListeners.delete(id)
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  apiFetch,
+  cancelApiFetch,
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
   selectFile: (filters) => ipcRenderer.invoke('fs:select-file', { filters }),
   selectFiles: (filters) => ipcRenderer.invoke('fs:select-files', { filters }),

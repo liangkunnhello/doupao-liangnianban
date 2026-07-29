@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { getUniqueWordLibraryEntryKey, useStore } from '../store'
 import { createVariableMention, parseVariableMention, VAR_MENTION_RE } from '../lib/promptImageMentions'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 
-type View = 'library' | 'batches' | 'archived'
+type View = 'library' | 'batches' | 'archived' | 'trash'
 type LassoRect = { x: number; y: number; width: number; height: number }
 
 export default function WordLibraryManagerModal() {
@@ -31,6 +34,13 @@ export default function WordLibraryManagerModal() {
   const setPrompt = useStore((s) => s.setPrompt)
   const toast = useStore((s) => s.showToast)
   const confirm = useStore((s) => s.setConfirmDialog)
+  const requestedEntryId = useStore((s) => s.wordLibraryEditEntryId)
+  const setRequestedEntryId = useStore((s) => s.setWordLibraryEditEntryId)
+  const restoreEntries = useStore((s) => s.restoreWordLibraryEntries)
+  const destroyEntries = useStore((s) => s.destroyWordLibraryEntries)
+  const emptyTrash = useStore((s) => s.emptyWordLibraryTrash)
+  const exportLibrary = useStore((s) => s.exportWordLibrary)
+  const importLibrary = useStore((s) => s.importWordLibrary)
 
   const [view, setView] = useState<View>('library')
   const [groupId, setGroupId] = useState('__all__')
@@ -47,6 +57,8 @@ export default function WordLibraryManagerModal() {
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null)
   const [lasso, setLasso] = useState<LassoRect | null>(null)
   const entryListRef = useRef<HTMLElement>(null)
+  const modalRef = useRef<HTMLElement>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
   const lassoStartRef = useRef<{ x: number; y: number; initialIds: string[]; additive: boolean } | null>(null)
 
   useEffect(() => {
@@ -55,6 +67,7 @@ export default function WordLibraryManagerModal() {
 
   const activeEntries = useMemo(() => entries.filter((entry) => entry.deletedAt == null), [entries])
   const activeGroups = useMemo(() => groups.filter((group) => !group.archivedAt), [groups])
+  const trashedEntries = useMemo(() => entries.filter((entry) => entry.deletedAt != null).sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0)), [entries])
   const roots = useMemo(() => activeGroups.filter((group) => !group.parentId).sort((a, b) => a.sortOrder - b.sortOrder), [activeGroups])
   const selectedGroup = activeGroups.find((group) => group.id === groupId) ?? null
   const activeEntry = activeEntries.find((entry) => entry.id === entryId) ?? null
@@ -83,6 +96,16 @@ export default function WordLibraryManagerModal() {
     if (!entry) return
     setEntryId(id); setEntryName(entry.key); setEntryValues(entry.entries.join('\n'))
   }
+  useEffect(() => {
+    if (!open || !requestedEntryId) return
+    const entry = activeEntries.find((item) => item.id === requestedEntryId)
+    if (entry) {
+      setView('library')
+      setGroupId('__all__')
+      selectEntry(entry.id)
+    }
+    setRequestedEntryId(null)
+  }, [activeEntries, open, requestedEntryId, setRequestedEntryId])
   const saveGroup = () => {
     if (!groupForm?.name.trim()) return
     const name = groupForm.name.trim()
@@ -209,29 +232,76 @@ export default function WordLibraryManagerModal() {
       action: () => { deleteGroup(selectedGroup.id); setGroupId(target.id); setGroupNameDraft(''); toast('分组已删除，词条已迁移', 'success') },
     })
   }
+  const handleExport = () => {
+    const data = exportLibrary()
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `word-library-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    toast('词条库已导出', 'success')
+  }
+  const handleImport = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const result = importLibrary(JSON.parse(await file.text()), 'merge')
+      toast(`已导入 ${result.added} 个新词条，更新 ${result.updated} 个词条`, 'success')
+    } catch {
+      toast('导入失败：文件格式不正确', 'error')
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
+  }
 
   const entryById = useMemo(() => new Map(activeEntries.map((entry) => [entry.id, entry])), [activeEntries])
   const activeBatches = useMemo(() => batches.filter((batch) => !batch.archivedAt), [batches])
+  const handleViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, currentView: View) => {
+    const views: View[] = ['library', 'batches', 'archived', 'trash']
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const currentIndex = views.indexOf(currentView)
+    const nextView = event.key === 'Home'
+      ? views[0]
+      : event.key === 'End'
+        ? views[views.length - 1]
+        : views[(currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length]
+    setView(nextView)
+    window.requestAnimationFrame(() => modalRef.current?.querySelector<HTMLElement>(`[data-word-library-view="${nextView}"]`)?.focus())
+  }
+
+  useCloseOnEscape(open, () => setOpen(false))
+  usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
-      <section className="flex h-[min(820px,92vh)] w-[min(1320px,96vw)] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
+      <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
+      <section ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="word-library-manager-title" className="ds-modal-surface relative z-10 flex h-[min(820px,92vh)] w-[min(1320px,96vw)] flex-col overflow-hidden rounded-xl border" onMouseDown={(event) => event.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-border px-5 py-3">
-          <div className="min-w-0 flex-1"><h2 className="text-base font-semibold">词条管理</h2><p className="text-xs text-muted-foreground">{activeEntries.length} 个词条 · {activeGroups.length} 个分组</p></div>
+          <div className="min-w-0 flex-1"><h2 id="word-library-manager-title" className="text-base font-semibold">词条管理</h2><p className="text-xs text-muted-foreground">{activeEntries.length} 个词条 · {activeGroups.length} 个分组</p></div>
+          <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void handleImport(event.target.files?.[0])} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索词条、内容或标签" className="h-9 w-64 rounded-md border border-border bg-muted/30 px-3 text-sm outline-none" />
+          <button type="button" onClick={handleExport} className="h-9 rounded-md border border-border px-3 text-sm hover:bg-muted">导出</button>
+          <button type="button" onClick={() => importInputRef.current?.click()} className="h-9 rounded-md border border-border px-3 text-sm hover:bg-muted">导入</button>
           <button type="button" onClick={newEntry} className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white">新建词条</button>
           <button type="button" onClick={() => setOpen(false)} className="h-9 w-9 rounded-md text-xl hover:bg-muted" aria-label="关闭">×</button>
         </header>
-        <nav className="flex shrink-0 gap-2 border-b border-border px-5 py-2 text-xs">
-          {([['library', '词条库'], ['batches', `技能批次 ${batches.filter((batch) => !batch.archivedAt).length}`], ['archived', '已归档']] as const).map(([id, label]) => <button key={id} type="button" onClick={() => setView(id)} className={`rounded-md px-2.5 py-1.5 ${view === id ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300' : 'hover:bg-muted'}`}>{label}</button>)}
+        <nav role="tablist" aria-label="词条管理视图" className="flex shrink-0 gap-2 border-b border-border px-5 py-2 text-xs">
+          {([['library', '词条库'], ['batches', `技能批次 ${batches.filter((batch) => !batch.archivedAt).length}`], ['archived', '已归档'], ['trash', `回收站 ${trashedEntries.length}`]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={view === id} tabIndex={view === id ? 0 : -1} data-word-library-view={id} onKeyDown={(event) => handleViewTabKeyDown(event, id)} onClick={() => setView(id)} className={`rounded-md px-2.5 py-1.5 ${view === id ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300' : 'hover:bg-muted'}`}>{label}</button>)}
         </nav>
         {view === 'batches' && <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {activeBatches.map((batch) => <article key={batch.id} className="mb-2 rounded-md border border-border p-4"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><h3 className="text-sm font-medium">{batch.skillName}</h3><p className="mt-1 text-xs text-muted-foreground">{new Date(batch.createdAt).toLocaleString()} · {batch.entryIds.length} 个词条 · {batch.referenceImageIds.length} 张参考图</p><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{batch.sourcePrompt || '无原始提示词'}</p></div><button type="button" onClick={() => archiveBatch(batch.id)} className="shrink-0 text-xs text-muted-foreground hover:text-foreground">归档</button></div></article>)}
           {activeBatches.length === 0 && <Empty text="暂无技能生成批次" />}
         </div>}
         {view === 'archived' && <div className="min-h-0 flex-1 overflow-y-auto p-5"><h3 className="mb-3 text-sm font-medium">已归档分组与批次</h3>{groups.filter((group) => group.archivedAt).map((group) => <div key={group.id} className="mb-2 flex items-center rounded-md border border-border p-3 text-sm"><span className="flex-1">{group.name}</span><button type="button" onClick={() => archiveGroup(group.id, false)} className="text-xs text-blue-600">恢复</button></div>)}{batches.filter((batch) => batch.archivedAt).map((batch) => <div key={batch.id} className="mb-2 flex items-center rounded-md border border-border p-3 text-sm"><span className="flex-1">{batch.skillName} · {new Date(batch.createdAt).toLocaleDateString()}</span><button type="button" onClick={() => archiveBatch(batch.id, false)} className="text-xs text-blue-600">恢复</button></div>)}{groups.every((group) => !group.archivedAt) && batches.every((batch) => !batch.archivedAt) && <Empty text="暂无已归档内容" />}</div>}
+        {view === 'trash' && <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="mb-3 flex items-center justify-between"><div><h3 className="text-sm font-medium">回收站</h3><p className="mt-1 text-xs text-muted-foreground">恢复误删词条，或永久清理不再需要的内容。</p></div>{trashedEntries.length > 0 && <button type="button" onClick={() => confirm({ title: '清空回收站？', message: '所有回收站词条将被永久删除，无法恢复。', confirmText: '永久删除', tone: 'danger', action: emptyTrash })} className="text-xs text-red-500">清空回收站</button>}</div>
+          {trashedEntries.map((entry) => <div key={entry.id} className="mb-2 flex items-center gap-3 rounded-md border border-border p-3"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{entry.key}</p><p className="mt-1 text-xs text-muted-foreground">{entry.entries.length} 个候选值 · 删除于 {new Date(entry.deletedAt ?? 0).toLocaleString()}</p></div><button type="button" onClick={() => restoreEntries([entry.id])} className="text-xs text-blue-600">恢复</button><button type="button" onClick={() => confirm({ title: `永久删除「${entry.key}」？`, message: '永久删除后无法恢复。', confirmText: '永久删除', tone: 'danger', action: () => destroyEntries([entry.id]) })} className="text-xs text-red-500">永久删除</button></div>)}
+          {trashedEntries.length === 0 && <Empty text="回收站为空" />}
+        </div>}
         {view === 'library' && <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(360px,1fr)_340px]">
           <aside className="overflow-y-auto border-r border-border p-3">
             <button type="button" onClick={() => setGroupId('__all__')} className={`mb-2 w-full rounded-md px-3 py-2 text-left text-sm ${groupId === '__all__' ? 'bg-blue-500/15 text-blue-600' : 'hover:bg-muted'}`}>全部词条 <span className="float-right text-xs text-muted-foreground">{activeEntries.length}</span></button>
@@ -247,7 +317,39 @@ export default function WordLibraryManagerModal() {
             {lasso && <div className="pointer-events-none absolute z-10 border border-blue-500 bg-blue-500/10" style={{ left: lasso.x, top: lasso.y, width: lasso.width, height: lasso.height }} />}
             {visibleEntries.length === 0 && <Empty text="没有匹配的词条" />}
           </main>
-          <aside className="overflow-y-auto border-l border-border p-4">{activeEntry ? <><div className="mb-3 flex justify-between"><span className="text-sm font-medium">词条详情</span><button type="button" onClick={requestDelete} className="text-xs text-red-500">删除</button></div><div className="mb-3 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">引用 {referenceCounts.get(activeEntry.id) ?? 0} 处 · 来源 {activeEntry.sourceSkillName ?? '手动'}</div><label className="mb-3 block text-xs text-muted-foreground">移动到分组<select value={activeEntry.groupId} onChange={(event) => moveEntry(activeEntry.id, event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-muted/30 px-2 text-sm text-foreground">{activeGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><label className="mb-3 block text-xs text-muted-foreground">名称<input value={entryName} onChange={(event) => setEntryName(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-muted/30 px-2 text-sm text-foreground" /></label><label className="block text-xs text-muted-foreground">候选值（每行一个）<textarea value={entryValues} onChange={(event) => setEntryValues(event.target.value)} className="mt-1 h-64 w-full resize-none rounded-md border border-border bg-muted/30 p-2 text-sm leading-6 text-foreground" /></label><div className="mt-3 flex gap-2"><button type="button" onClick={() => { setPrompt(`${prompt}${createVariableMention(activeEntry.key, activeEntry.id)}`); toast('已插入词条变量', 'success') }} className="h-9 rounded-md border border-border px-3 text-sm">插入</button><button type="button" onClick={saveEntry} className="h-9 rounded-md bg-blue-600 px-3 text-sm text-white">保存</button></div></> : <Empty text="选择词条后可编辑" />}</aside>
+          <aside className="overflow-y-auto border-l border-border p-4">
+            {activeEntry ? (
+              <>
+                <div className="mb-3 flex justify-between">
+                  <span className="text-sm font-medium">词条详情</span>
+                  <button type="button" onClick={requestDelete} className="text-xs text-red-500">删除</button>
+                </div>
+                <div className="mb-3 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
+                  引用 {referenceCounts.get(activeEntry.id) ?? 0} 处 · 来源 {activeEntry.sourceSkillName ?? '手动'}
+                </div>
+                <label className="mb-3 block text-xs text-muted-foreground">
+                  移动到分组
+                  <select value={activeEntry.groupId} onChange={(event) => moveEntry(activeEntry.id, event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-muted/30 px-2 text-sm text-foreground">
+                    {activeGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select>
+                </label>
+                <label className="mb-3 block text-xs text-muted-foreground">
+                  名称
+                  <input value={entryName} onChange={(event) => setEntryName(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-muted/30 px-2 text-sm text-foreground" />
+                </label>
+                <label className="block text-xs text-muted-foreground">
+                  候选值（每行一个）
+                  <textarea value={entryValues} onChange={(event) => setEntryValues(event.target.value)} className="mt-1 h-56 w-full resize-y rounded-md border border-border bg-muted/30 p-2 text-sm leading-6 text-foreground" />
+                </label>
+                <div className="sticky bottom-0 mt-3 flex gap-2 border-t border-border bg-background py-3">
+                  <button type="button" onClick={() => { setPrompt(`${prompt}${createVariableMention(activeEntry.key, activeEntry.id)}`); toast('已插入词条变量', 'success') }} className="h-9 rounded-md border border-border px-3 text-sm">插入</button>
+                  <button type="button" onClick={saveEntry} className="h-9 flex-1 rounded-md bg-blue-600 px-3 text-sm text-white">保存</button>
+                </div>
+              </>
+            ) : (
+              <Empty text="选择词条后可编辑" />
+            )}
+          </aside>
         </div>}
       </section>
     </div>

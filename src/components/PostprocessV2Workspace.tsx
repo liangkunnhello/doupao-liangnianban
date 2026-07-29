@@ -280,7 +280,7 @@ export default function PostprocessV2Workspace() {
                 ))}
               </div>
               <div className="pt-4 mt-2 border-t border-gray-100 dark:border-white/[0.08]">
-                <button disabled={isExporting} onClick={handleExport} className="w-full py-3 rounded-xl bg-blue-600 text-white font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm transition-all">
+                <button disabled={isExporting} onClick={handleExport} className="w-full py-3 rounded-xl bg-blue-600 text-white font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm transition">
                   <DownloadIcon className="h-4 w-4" />
                   {isExporting ? exportProgress : '一键执行批量导出'}
                 </button>

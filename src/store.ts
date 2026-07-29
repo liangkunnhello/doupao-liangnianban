@@ -19,6 +19,7 @@ import type {
   MaskDraft,
   ScheduleItem,
   ScheduleState,
+  SopBatchSnapshot,
   TaskRecord,
   FavoriteCollection,
   ExportData,
@@ -70,14 +71,18 @@ import {
   commitImportedRecords,
   getMigrationJournal,
   putMigrationJournal,
+  getSopBatchSnapshot,
+  getAllSopBatchSnapshots,
+  putSopBatchSnapshot,
+  clearSopBatchSnapshots,
   updateImageLocalPaths,
   getAllLocalImagePaths,
 } from './lib/db'
 import { callImageApi } from './lib/api'
-import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
+import { callAgentChatCompletionsApi, callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { getDataUrlDecodedByteSize, IMAGE_FETCH_CORS_HINT, isRetryableError, runWithConcurrencyAndRetry } from './lib/imageApiShared'
+import { getDataUrlDecodedByteSize, IMAGE_FETCH_CORS_HINT, isRetryableError, retryTransientRequest, runWithConcurrencyAndRetry } from './lib/imageApiShared'
 import {
   formatInputImageLimitBytes,
   MAX_ALL_REFERENCE_IMAGES,
@@ -87,6 +92,7 @@ import {
 } from './lib/inputImageLimits'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
+import { setApiTransportMode } from './lib/desktopApiFetch'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib/imagePostprocess'
 import {
@@ -1183,6 +1189,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
 
   const persisted = persistedState as Partial<AppState>
   const settings = normalizeSettings(persisted.settings ?? currentState.settings)
+  setApiTransportMode(settings.apiTransportMode)
   const hasPersistedAgentConversations = Array.isArray(persisted.agentConversations)
   if (hasPersistedAgentConversations && normalizeAgentConversations(persisted.agentConversations).length > 0) {
     agentConversationMigrationPending = true
@@ -1194,7 +1201,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'postprocess' ? persisted.appMode : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'postprocess' || persisted.appMode === 'strategy' || persisted.appMode === 'ordering'
+    ? persisted.appMode
+    : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -1659,6 +1668,8 @@ export async function deleteImageIfUnreferenced(imageId: string) {
   thumbnailSubscribers.delete(imageId)
   if (isImageReferencedByState(useStore.getState(), imageId)) return
   try {
+    const sopRuns = await getAllSopBatchSnapshots()
+    if (sopRuns.some((run) => run.referenceImageIds.includes(imageId))) return
     await deleteImage(imageId)
   } catch {
     // 清理是内存/存储优化，失败不影响替换结果。
@@ -2111,7 +2122,7 @@ export const useStore = create<AppState>()(
           return
         }
 
-        if (appMode === 'postprocess') {
+        if (appMode === 'postprocess' || appMode === 'strategy' || appMode === 'ordering') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -2206,6 +2217,7 @@ export const useStore = create<AppState>()(
           )
         }
         const settings = normalizeSettings(merged)
+        setApiTransportMode(settings.apiTransportMode)
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
         return {
           settings,
@@ -3550,7 +3562,12 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
+    const hasPersistedRemoteRequest = task.remoteGenerationRequests?.some((request) =>
+      (request.provider === 'fal' || request.provider === 'custom') &&
+      Boolean(request.remoteRequestId) &&
+      (request.status === 'submitted' || request.status === 'running'),
+    )
+    if (!isRunningOpenAITask(task) || task.customTaskId || hasPersistedRemoteRequest) return task
 
     const updated: TaskRecord = {
       ...task,
@@ -4222,6 +4239,10 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   for (const t of tasks) {
     addTaskReferencedImageIds(referencedIds, t)
   }
+  const sopRuns = await getAllSopBatchSnapshots()
+  for (const run of sopRuns) {
+    for (const imageId of run.referenceImageIds) referencedIds.add(imageId)
+  }
   for (const tab of state.workspaceTabs) {
     for (const img of tab.inputImages) referencedIds.add(img.id)
     if (tab.inputImageFolder) {
@@ -4405,13 +4426,14 @@ export async function submitTaskWithData(
     scheduledOutputPath?: string
     scheduledOutputSubFolder?: string
     apiProfileId?: string
+    sopBatch?: TaskRecord['sopBatch']
   },
-  options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {},
+  options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; silentSuccess?: boolean } = {},
 ) {
   const { settings, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
-  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId } = data
+  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId, sopBatch } = data
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -4538,6 +4560,7 @@ export async function submitTaskWithData(
   const task: TaskRecord = {
     id: taskId,
     prompt: prompt.trim(),
+    sopBatch,
     params: normalizedParams,
     adNegativeRuleSnapshot: createAdNegativeRuleSnapshot(normalizedSettings, normalizedParams.adNegativeRuleId),
     apiProvider: activeProfile.provider,
@@ -4586,7 +4609,7 @@ export async function submitTaskWithData(
     })
   }
   await putTask(task)
-  useStore.getState().showToast('任务已提交', 'success')
+  if (!options.silentSuccess) useStore.getState().showToast('任务已提交', 'success')
 
   // 异步调用 API
   executeTask(taskId)
@@ -5002,6 +5025,12 @@ function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.streamPartialImageIds || []) target.add(id)
 }
 
+function addSopRunReferencedImageIds(target: Set<string>, runs: SopBatchSnapshot[]) {
+  for (const run of runs) {
+    for (const imageId of run.referenceImageIds) target.add(imageId)
+  }
+}
+
 async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
@@ -5012,6 +5041,7 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
+  addSopRunReferencedImageIds(stillUsed, await getAllSopBatchSnapshots())
 
   for (const imgId of candidates) {
     if (stillUsed.has(imgId)) continue
@@ -5039,6 +5069,7 @@ export async function getAllOrphanedImageIds(): Promise<string[]> {
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
+  addSopRunReferencedImageIds(stillUsed, await getAllSopBatchSnapshots())
   for (const tab of workspaceTabs) {
     for (const image of tab.inputImages) stillUsed.add(image.id)
     for (const imageId of tab.inputImageFolder?.imageIds ?? []) stillUsed.add(imageId)
@@ -6183,27 +6214,37 @@ async function executeAgentRound(
       signal: AbortSignal
       onPartialImage?: (event: { image: string; partialImageIndex?: number }) => void
     }) => {
-      const result = await callImageApi({
+      let requestProgressed = false
+      const result = await retryTransientRequest(() => callImageApi({
         settings: imageRequestSettings,
         prompt: replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
         onPartialImage: opts.onPartialImage
-          ? (partial) => opts.onPartialImage?.({ image: partial.image, partialImageIndex: partial.partialImageIndex ?? partial.requestIndex })
+          ? (partial) => {
+              requestProgressed = true
+              opts.onPartialImage?.({ image: partial.image, partialImageIndex: partial.partialImageIndex ?? partial.requestIndex })
+            }
           : undefined,
         onFalRequestEnqueued: (request) => {
-          updateTaskInStore(opts.taskId, {
+          requestProgressed = true
+          return updateTaskInStore(opts.taskId, {
             falRequestId: request.requestId,
             falEndpoint: request.endpoint,
             falRecoverable: false,
           })
         },
         onCustomTaskEnqueued: (request) => {
-          updateTaskInStore(opts.taskId, {
+          requestProgressed = true
+          return updateTaskInStore(opts.taskId, {
             customTaskId: request.taskId,
             customRecoverable: false,
           })
         },
+      }), {
+        maxRetries: normalizeMaxRetries(imageProfile.maxRetries),
+        signal: opts.signal,
+        shouldRetry: (error) => !requestProgressed && isRetryableError(error),
       })
       if (opts.signal.aborted) throw createAgentAbortError()
       const dataUrl = result.images[0]
@@ -6463,16 +6504,23 @@ async function executeAgentRound(
       if (controller.signal.aborted) throw createAgentAbortError()
       const textBeforeResponse = accumulatedText
       let currentResponseOutputItems: ResponsesOutputItem[] = []
-      const result = await callAgentResponsesApi({
-        settings: requestSettings,
-        profile: activeProfile,
-        params,
-        input: apiInputForTurn,
-        maskDataUrl,
-        signal: controller.signal,
-        onTextDelta: shouldStreamAssistantMessage
+      let agentAttemptProgressed = false
+      const result = await retryTransientRequest(() => {
+        agentAttemptProgressed = false
+        const callAgent = requestSettings.agentTextProtocol === 'chat-completions'
+          ? callAgentChatCompletionsApi
+          : callAgentResponsesApi
+        return callAgent({
+          settings: requestSettings,
+          profile: activeProfile,
+          params,
+          input: apiInputForTurn,
+          maskDataUrl,
+          signal: controller.signal,
+          onTextDelta: shouldStreamAssistantMessage
           ? (delta) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               if (pendingToolTextSeparator && delta && accumulatedText.trim()) {
                 accumulatedText += '\n\n'
                 appendAgentAssistantMessageContent(conversationId, assistantMessageId, '\n\n')
@@ -6482,9 +6530,10 @@ async function executeAgentRound(
               appendAgentAssistantMessageContent(conversationId, assistantMessageId, delta)
             }
           : undefined,
-        onOutputItems: shouldStreamAssistantMessage
+          onOutputItems: shouldStreamAssistantMessage
           ? (outputItems) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               currentResponseOutputItems = outputItems
               // Debounce output items updates to avoid excessive store updates
               const existingTimer = agentTextFlushTimers.get(getAgentTextFlushKey(conversationId, roundId + ':outputItems'))
@@ -6500,15 +6549,17 @@ async function executeAgentRound(
               )
             }
           : undefined,
-        onImageToolStarted: shouldStreamAssistantMessage
+          onImageToolStarted: shouldStreamAssistantMessage
           ? async ({ toolCallId }) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               await ensureStreamingAgentTask(toolCallId)
             }
           : undefined,
-        onImagePartialImage: shouldStreamAssistantMessage
+          onImagePartialImage: shouldStreamAssistantMessage
           ? async ({ toolCallId, image, partialImageIndex }) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               const taskId = await ensureStreamingAgentTask(toolCallId)
               if (controller.signal.aborted) return
               useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
@@ -6517,20 +6568,27 @@ async function executeAgentRound(
               }
             }
           : undefined,
-        onImageToolCompleted: shouldStreamAssistantMessage
+          onImageToolCompleted: shouldStreamAssistantMessage
           ? async (image) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               await completeAgentImageTask(image)
             }
           : undefined,
-        onImageToolFailed: shouldStreamAssistantMessage
+          onImageToolFailed: shouldStreamAssistantMessage
           ? async ({ toolCallId, error }) => {
               if (controller.signal.aborted) return
+              agentAttemptProgressed = true
               await ensureStreamingAgentTask(toolCallId)
               if (controller.signal.aborted) return
               failAgentImageTask(toolCallId, error)
             }
           : undefined,
+        })
+      }, {
+        maxRetries: normalizeMaxRetries(activeProfile.maxRetries),
+        signal: controller.signal,
+        shouldRetry: (error) => !agentAttemptProgressed && isRetryableError(error),
       })
       if (controller.signal.aborted) throw createAgentAbortError()
 
@@ -7386,7 +7444,7 @@ async function executeTask(taskId: string) {
                 persist()
                 falRequestInfo = request
                 updateTaskProgress(taskId, 'relay-received')
-                updateTaskInStore(taskId, {
+                return updateTaskInStore(taskId, {
                   falRequestId: request.requestId,
                   falEndpoint: request.endpoint,
                   falRecoverable: false,
@@ -7401,7 +7459,7 @@ async function executeTask(taskId: string) {
                 persist()
                 customTaskInfo = request
                 updateTaskProgress(taskId, 'relay-received')
-                updateTaskInStore(taskId, {
+                return updateTaskInStore(taskId, {
                   customTaskId: request.taskId,
                   customRecoverable: false,
                 })
@@ -7572,7 +7630,8 @@ async function executeTask(taskId: string) {
     if (n > 1) {
       result = await executeOrchestratedBatch()
     } else {
-      result = await callImageApi({
+      let singleRequestProgressed = false
+      result = await retryTransientRequest(() => callImageApi({
         settings: requestSettings,
         prompt: appendAdNegativeRule(
           replaceImageMentionsForApi(task.prompt, inputDataUrls.length, undefined, variableResolver),
@@ -7582,29 +7641,35 @@ async function executeTask(taskId: string) {
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,
         onFalRequestEnqueued: (request) => {
+          singleRequestProgressed = true
           falRequestInfo = request
           updateTaskProgress(taskId, 'relay-received')
-          updateTaskInStore(taskId, {
+          return updateTaskInStore(taskId, {
             falRequestId: request.requestId,
             falEndpoint: request.endpoint,
             falRecoverable: false,
           })
         },
         onCustomTaskEnqueued: (request) => {
+          singleRequestProgressed = true
           customTaskInfo = request
           updateTaskProgress(taskId, 'relay-received')
-          updateTaskInStore(taskId, {
+          return updateTaskInStore(taskId, {
             customTaskId: request.taskId,
             customRecoverable: false,
           })
         },
         onPartialImage: (partial) => {
+          singleRequestProgressed = true
           updateTaskProgress(taskId, 'previewing')
           useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
           scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
         },
-      })
+        }), {
+          maxRetries: normalizeMaxRetries(activeProfile.maxRetries),
+          shouldRetry: (error) => !singleRequestProgressed && isRetryableError(error),
+        })
     }
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -7833,7 +7898,7 @@ function normalizeFavoritePatch(task: TaskRecord, patch: Partial<TaskRecord>, de
   return patch
 }
 
-export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
+export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>): Promise<void> {
   const { tasks, setTasks, defaultFavoriteCollectionId, workspaceTabs } = useStore.getState()
   const updated = tasks.map((t) =>
     t.id === taskId ? { ...t, ...normalizeFavoritePatch(t, patch, defaultFavoriteCollectionId) } : t,
@@ -7849,7 +7914,7 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   }))
   useStore.setState({ workspaceTabs: updatedTabs })
   maybeOpenSupportPrompt(tasks, updated, taskId)
-  if (task) putTask(task)
+  return task ? putTask(task).then(() => undefined) : Promise.resolve()
 }
 
 function updateTaskProgress(taskId: string, progressStage: TaskProgressStage, progressMessage?: string) {
@@ -8124,7 +8189,7 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
 }
 
 /** 重试失败的任务：创建新任务并执行 */
-export async function retryTask(task: TaskRecord) {
+export async function retryTask(task: TaskRecord, options: { sopBatch?: TaskRecord['sopBatch'] } = {}) {
   const { settings, workspaceTabs, activeWorkspaceTabId } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
   const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
@@ -8136,6 +8201,7 @@ export async function retryTask(task: TaskRecord) {
   const newTask: TaskRecord = {
     id: taskId,
     prompt: task.prompt,
+    sopBatch: options.sopBatch ?? (task.sopBatch ? { ...task.sopBatch } : undefined),
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -8182,6 +8248,38 @@ export async function retryTask(task: TaskRecord) {
   await putTask(newTask)
 
   executeTask(taskId)
+}
+
+export async function rerunSopBatchTasks(tasks: TaskRecord[]) {
+  const batchTasks = tasks.filter((task) => task.sopBatch)
+  if (!batchTasks.length) return
+  const firstMeta = batchTasks[0].sopBatch!
+  const batchId = `sop-batch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  let snapshotId: string | undefined
+  if (firstMeta.snapshotId) {
+    const previousSnapshot = await getSopBatchSnapshot(firstMeta.snapshotId)
+    if (previousSnapshot) {
+      snapshotId = `sop-snapshot-${batchId}`
+      await putSopBatchSnapshot({
+        ...previousSnapshot,
+        id: snapshotId,
+        batchId,
+        createdAt: Date.now(),
+        prompts: previousSnapshot.prompts.map((prompt) => ({ ...prompt })),
+        referenceImageIds: [...previousSnapshot.referenceImageIds],
+        params: { ...previousSnapshot.params },
+        sop: { ...previousSnapshot.sop },
+      })
+    }
+  }
+  await Promise.all(batchTasks.map((task) => retryTask(task, {
+    sopBatch: {
+      ...task.sopBatch!,
+      batchId,
+      snapshotId,
+    },
+  })))
+  useStore.getState().showToast(`已创建新的 SOP 批次，共 ${batchTasks.length} 条提示词`, 'success')
 }
 
 /** 复用配置 */
@@ -8275,6 +8373,91 @@ export async function editOutputs(task: TaskRecord) {
     }
   }
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
+}
+
+/** 将任务从当前标签移动到另一个标签 */
+export function moveTasksToWorkspaceTab(
+  taskIds: string[],
+  targetTabId: string,
+  sourceTabId?: string,
+): boolean {
+  const state = useStore.getState()
+  const targetTab = state.workspaceTabs.find((tab) => tab.id === targetTabId)
+  const sourceTab = sourceTabId
+    ? state.workspaceTabs.find((tab) => tab.id === sourceTabId)
+    : null
+
+  if (!targetTab) {
+    state.showToast('目标标签不存在', 'error')
+    return false
+  }
+
+  if (sourceTabId && !sourceTab) {
+    state.showToast('当前标签不存在', 'error')
+    return false
+  }
+
+  if (sourceTabId === targetTabId) {
+    state.showToast('所选任务已在该标签中', 'info')
+    return false
+  }
+
+  const selectedIds = new Set(taskIds.filter(Boolean))
+  const movableIds = new Set(
+    sourceTab
+      ? sourceTab.tasks.filter((task) => selectedIds.has(task.id)).map((task) => task.id)
+      : state.workspaceTabs
+          .filter((tab) => tab.id !== targetTabId)
+          .flatMap((tab) => tab.tasks)
+          .filter((task) => selectedIds.has(task.id))
+          .map((task) => task.id),
+  )
+
+  if (movableIds.size === 0) {
+    state.showToast('所选任务已在该标签中', 'info')
+    return false
+  }
+
+  const taskById = new Map(state.tasks.map((task) => [task.id, task]))
+  for (const tab of state.workspaceTabs) {
+    for (const task of tab.tasks) {
+      if (!taskById.has(task.id)) taskById.set(task.id, task)
+    }
+  }
+  const movingTasks = [...movableIds]
+    .map((taskId) => taskById.get(taskId))
+    .filter((task): task is TaskRecord => Boolean(task))
+
+  if (movingTasks.length === 0) {
+    state.showToast('未找到可移动的任务', 'info')
+    return false
+  }
+
+  const now = Date.now()
+  const targetTaskIds = new Set(targetTab.tasks.map((task) => task.id))
+  const updatedTabs = state.workspaceTabs.map((tab) => {
+    if (tab.id === targetTabId) {
+      const additions = movingTasks.filter((task) => !targetTaskIds.has(task.id))
+      return {
+        ...tab,
+        tasks: [...additions, ...tab.tasks],
+        updatedAt: now,
+      }
+    }
+
+    if (sourceTabId && tab.id !== sourceTabId) return tab
+    const remainingTasks = tab.tasks.filter((task) => !movableIds.has(task.id))
+    return remainingTasks.length === tab.tasks.length
+      ? tab
+      : { ...tab, tasks: remainingTasks, updatedAt: now }
+  })
+
+  useStore.setState({
+    workspaceTabs: updatedTabs,
+    selectedTaskIds: [],
+  })
+  state.showToast(`已将 ${movingTasks.length} 个任务移动到「${targetTab.name}」`, 'success')
+  return true
 }
 
 /** 删除多条任务 */
@@ -8451,10 +8634,17 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   if (options.clearTasks) {
     await dbClearTasks()
     await dbClearAgentConversations()
+    await clearSopBatchSnapshots()
     await clearImages()
     imageCache.clear()
     thumbnailCache.clear()
     thumbnailBackfillIds.clear()
+    if (typeof localStorage !== 'undefined') {
+      for (let index = localStorage.length - 1; index >= 0; index--) {
+        const key = localStorage.key(index)
+        if (key?.startsWith('doupao.gallery-sop-prompt-run.')) localStorage.removeItem(key)
+      }
+    }
     setTasks([])
     useStore.setState({
       agentConversations: [],
@@ -8564,6 +8754,7 @@ function formatExportFileTime(date: Date): string {
 /** 生成 ZIP 数据 */
 async function generateExportZipBuffer(options: ExportOptions = { exportConfig: true, exportTasks: true }): Promise<Uint8Array> {
   const tasks = options.exportTasks ? await getAllTasks() : []
+  const sopPromptRuns = options.exportTasks ? await getAllSopBatchSnapshots() : []
   const images = options.exportTasks ? await getAllImages() : []
   const state = useStore.getState()
   const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries, wordGenerationBatches } = state
@@ -8647,6 +8838,7 @@ async function generateExportZipBuffer(options: ExportOptions = { exportConfig: 
     }
   if (options.exportTasks) {
     manifest.tasks = tasks
+    manifest.sopPromptRuns = sopPromptRuns
     manifest.agentConversations = getPersistableAgentConversations(agentConversations)
     manifest.thumbnailFiles = thumbnailFiles
   }
@@ -8758,6 +8950,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       return
     }
     const tasks = options.exportTasks ? await getAllTasks() : []
+    const sopPromptRuns = options.exportTasks ? await getAllSopBatchSnapshots() : []
     const images = options.exportTasks || options.exportImages ? await getAllImages() : []
     const state = useStore.getState()
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId, wordLibraryGroups, wordLibraryEntries, wordGenerationBatches } = state
@@ -8863,6 +9056,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
     if (options.exportTasks) {
       manifest.tasks = tasks
+      manifest.sopPromptRuns = sopPromptRuns
       manifest.agentConversations = getPersistableAgentConversations(agentConversations)
       manifest.thumbnailFiles = thumbnailFiles
     }
@@ -8901,11 +9095,15 @@ export async function exportDataToPath(
     if (!isElectronEnv()) throw new Error('当前环境不支持流式导出')
     await ensureImageStorageMigrated()
     const allTasks = options.exportTasks || options.exportImages ? await getAllTasks() : []
+    const sopPromptRuns = options.exportTasks || options.exportImages ? await getAllSopBatchSnapshots() : []
     const state = useStore.getState()
     const exportedAt = Date.now()
     const compositeBackup = options.exportConfig ? await buildCompositeBackup() : null
     const ids = options.exportImages
-      ? collectReferencedExportImageIds(allTasks, state.agentConversations)
+      ? [...new Set([
+          ...collectReferencedExportImageIds(allTasks, state.agentConversations),
+          ...sopPromptRuns.flatMap((run) => run.referenceImageIds),
+        ])]
       : []
     const entries = await buildElectronImageExportEntries(ids, getImage)
     const imageFiles: ExportData['imageFiles'] = {}
@@ -8942,6 +9140,7 @@ export async function exportDataToPath(
       } : {}),
       ...(options.exportTasks ? {
         tasks: allTasks,
+        sopPromptRuns,
         agentConversations: getPersistableAgentConversations(state.agentConversations),
       } : {}),
       ...(options.exportImages ? { imageFiles } : {}),
@@ -9066,6 +9265,9 @@ export async function importData(file: File, options: ImportOptions = { importCo
         tasks: importedTasks,
         replaceTasks: replaceWorkspace,
       })
+      if (data.sopPromptRuns?.length) {
+        await Promise.all(data.sopPromptRuns.map((run) => putSopBatchSnapshot(run)))
+      }
 
       const tasks = await getAllTasks()
       const state = useStore.getState()

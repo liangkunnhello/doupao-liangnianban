@@ -1,4 +1,9 @@
-import { Circle, Diamond, Image as ImageIcon, Type } from 'lucide-react'
+import {
+  CircleIcon as Circle,
+  DiamondIcon as Diamond,
+  ImageIcon,
+  TypeIcon as Type,
+} from '../../../design-system/icons'
 import type { ReactNode } from 'react'
 import ViewportTooltip from '../../../components/ViewportTooltip'
 import { useTooltip } from '../../../hooks/useTooltip'

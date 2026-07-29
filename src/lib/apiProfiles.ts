@@ -1,6 +1,8 @@
 import type {
   ApiMode,
   AgentApiConfigMode,
+  AgentTextProtocol,
+  ApiTransportMode,
   ApiProfile,
   ApiProvider,
   AppSettings,
@@ -17,7 +19,7 @@ import type {
   ImageSaveLayout,
 } from '../types'
 import type { AssistantActionPreferences } from '../features/assistantActions/types'
-import { normalizeThemeMode } from './theme'
+import { normalizeThemeMode, normalizeColorScheme } from './theme'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_WORD_LIBRARY_DERIVATIVE_RULE, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { normalizeAssistantActionPreferences } from '../features/assistantActions/matcher'
 import { shouldUseApiProxy } from './devProxy'
@@ -116,6 +118,14 @@ function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAc
 
 function normalizeAgentApiConfigMode(value: unknown): AgentApiConfigMode {
   return value === 'hybrid' ? 'hybrid' : 'native'
+}
+
+function normalizeAgentTextProtocol(value: unknown): AgentTextProtocol {
+  return value === 'chat-completions' ? 'chat-completions' : 'responses'
+}
+
+function normalizeApiTransportMode(value: unknown): ApiTransportMode {
+  return value === 'renderer' ? 'renderer' : 'auto'
 }
 
 function normalizeImageSaveLayout(value: unknown): ImageSaveLayout {
@@ -542,7 +552,11 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
   const provider: ApiProvider = rawProvider === 'fal' || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
   const defaults = provider === 'fal' ? createDefaultFalProfile(fallback) : createDefaultOpenAIProfile(fallback)
-  const apiMode: ApiMode = record.apiMode === 'responses' ? 'responses' : 'images'
+  const apiMode: ApiMode = record.apiMode === 'responses'
+    ? 'responses'
+    : record.apiMode === 'images'
+      ? 'images'
+      : defaults.apiMode
   const rawBaseUrl = typeof record.baseUrl === 'string' ? record.baseUrl : defaults.baseUrl
 
   return {
@@ -604,12 +618,31 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? record.activeProfileId
     : profiles[0].id
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
+  const legacyAgentProfile = typeof record.agentProfileId === 'string'
+    ? profiles.find((profile) => profile.id === record.agentProfileId)
+    : undefined
+  const hasExplicitAgentSharing = typeof record.agentShareApiParameters === 'boolean'
+  const legacyAgentUsesCustomProfile = typeof record.agentUseCustomProfile === 'boolean' && record.agentUseCustomProfile
+  const agentShareApiParameters = hasExplicitAgentSharing
+    ? Boolean(record.agentShareApiParameters)
+    : !legacyAgentUsesCustomProfile && !legacyAgentProfile
+  const rawAgentProfile = isRecord(record.agentProfile) ? record.agentProfile : {}
+  const migrateLegacySharedDefault = agentShareApiParameters &&
+    !hasExplicitAgentSharing &&
+    (!rawAgentProfile.model || rawAgentProfile.model === DEFAULT_IMAGES_MODEL) &&
+    (!rawAgentProfile.apiMode || rawAgentProfile.apiMode === 'images')
+  const agentProfileSource = legacyAgentProfile && !hasExplicitAgentSharing
+    ? legacyAgentProfile
+    : migrateLegacySharedDefault
+      ? {}
+      : rawAgentProfile
   const wordLibraryDerivativeRuleMode = normalizeDerivativeRuleMode(record.wordLibraryDerivativeRuleMode)
   const wordLibraryDerivativeRules = normalizeDerivativeRules(record, wordLibraryDerivativeRuleMode)
   const adNegativeRuleProfiles = normalizeAdNegativeRuleProfiles(record.adNegativeRuleProfiles)
 
   return {
     themeMode: normalizeThemeMode(record.themeMode),
+    colorScheme: normalizeColorScheme(record.colorScheme),
     baseUrl: active.baseUrl,
     apiKey: active.apiKey,
     model: active.model,
@@ -617,6 +650,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     apiMode: active.apiMode,
     codexCli: active.codexCli,
     apiProxy: active.apiProxy,
+    apiTransportMode: normalizeApiTransportMode(record.apiTransportMode),
     streamImages: active.streamImages,
     streamPartialImages: active.streamPartialImages,
     customProviders,
@@ -636,6 +670,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
     agentApiConfigMode: normalizeAgentApiConfigMode(record.agentApiConfigMode),
+    agentTextProtocol: normalizeAgentTextProtocol(record.agentTextProtocol),
     allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     assistantActions: normalizeAssistantActionPreferences(record.assistantActions as Partial<AssistantActionPreferences> | undefined),
     adNegativeRuleProfiles,
@@ -647,12 +682,21 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentProfileId: typeof record.agentProfileId === 'string' && profiles.some((p) => p.id === record.agentProfileId)
       ? record.agentProfileId
       : null,
-    agentUseCustomProfile: typeof record.agentUseCustomProfile === 'boolean' ? record.agentUseCustomProfile : false,
-    agentProfile: normalizeApiProfile(
-      isRecord(record.agentProfile) ? record.agentProfile : {},
-      createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
-      customProviderIds,
-    ),
+    agentShareApiParameters,
+    agentUseCustomProfile: !agentShareApiParameters,
+    agentProfile: {
+      ...normalizeApiProfile(
+        agentProfileSource,
+        createDefaultOpenAIProfile({
+          id: 'agent-default',
+          name: 'Agent 默认',
+          model: DEFAULT_RESPONSES_MODEL,
+          apiMode: 'responses',
+        }),
+        customProviderIds,
+      ),
+      apiMode: 'responses',
+    },
     backupInterval: typeof record.backupInterval === 'number' && Number.isFinite(record.backupInterval) && record.backupInterval >= 0 ? record.backupInterval : 600,
     customBackupPath: typeof record.customBackupPath === 'string' ? record.customBackupPath : '',
   }
@@ -756,15 +800,17 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
 
 export function getAgentApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
   const normalized = normalizeSettings(settings)
-  if (normalized.agentUseCustomProfile) {
+  if (!normalized.agentShareApiParameters) {
     return normalized.agentProfile
   }
-  const agentProfileId = normalized.agentProfileId
-  if (agentProfileId) {
-    const profile = normalized.profiles.find((p) => p.id === agentProfileId)
-    if (profile) return profile
+  const sharedProfile = getActiveApiProfile(settings)
+  return {
+    ...sharedProfile,
+    id: normalized.agentProfile.id,
+    name: `${sharedProfile.name} · Agent`,
+    model: normalized.agentProfile.model || DEFAULT_RESPONSES_MODEL,
+    apiMode: 'responses',
   }
-  return getActiveApiProfile(settings)
 }
 
 export function getAgentTextApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
@@ -778,6 +824,9 @@ export function getAgentImageApiProfile(settings: Partial<AppSettings> | unknown
 
 export function getAgentProfileValidationError(settings: Partial<AppSettings> | unknown): { message: string } | null {
   const normalized = normalizeSettings(settings)
+  if (normalized.agentTextProtocol === 'chat-completions' && normalized.agentApiConfigMode !== 'hybrid') {
+    return { message: 'Chat Completions 仅支持 Hybrid Agent，请先切换图像调用方式' }
+  }
   const textProfile = getAgentTextApiProfile(normalized)
   const textError = validateApiProfile(textProfile)
   if (textError) return { message: `文本模型配置：${textError}` }
@@ -962,6 +1011,7 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
 
 export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   themeMode: 'light',
+  colorScheme: 'default',
   baseUrl: DEFAULT_BASE_URL,
   apiKey: '',
   model: DEFAULT_IMAGES_MODEL,
@@ -969,6 +1019,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   apiMode: 'images',
   codexCli: false,
   apiProxy: DEFAULT_OPENAI_API_PROXY,
+  apiTransportMode: 'auto',
   streamImages: true,
   streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
   customProviders: [],
@@ -987,11 +1038,18 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
   agentApiConfigMode: 'native',
+  agentTextProtocol: 'responses',
   allowPromptRewrite: false,
   assistantActions: normalizeAssistantActionPreferences(undefined),
   agentProfileId: null,
+  agentShareApiParameters: true,
   agentUseCustomProfile: false,
-  agentProfile: createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
+  agentProfile: createDefaultOpenAIProfile({
+    id: 'agent-default',
+    name: 'Agent 默认',
+    model: DEFAULT_RESPONSES_MODEL,
+    apiMode: 'responses',
+  }),
   backupInterval: 600,
   customBackupPath: '',
 })

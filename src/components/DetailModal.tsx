@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -175,8 +176,14 @@ export default function DetailModal() {
     if (count > 0 && imageIndex >= count) setImageIndex(count - 1)
   }, [imageIndex, streamPreviewItems.length, task?.outputImages?.length, task?.status])
 
-  useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
+  const hasNestedDialog = showRawUrlsModal || showRawResponseModal
+  useCloseOnEscape(Boolean(task) && !hasNestedDialog, () => setDetailTaskId(null))
+  useCloseOnEscape(showRawUrlsModal, () => setShowRawUrlsModal(false))
+  useCloseOnEscape(showRawResponseModal, () => setShowRawResponseModal(false))
   usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
+  useDialogFocusTrap(Boolean(task) && !hasNestedDialog, modalRef)
+  useDialogFocusTrap(showRawUrlsModal, rawUrlsModalRef)
+  useDialogFocusTrap(showRawResponseModal, rawResponseModalRef)
 
   // Reset index when task changes
   useEffect(() => {
@@ -564,13 +571,16 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
       onClick={() => setDetailTaskId(null)}
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+      <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
       <div
         ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        role="dialog"
+        aria-modal="true"
+        aria-label="任务详情"
+        className="ds-modal-surface relative max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 rounded-2xl border animate-modal-in motion-reduce:animate-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -1166,7 +1176,7 @@ export default function DetailModal() {
 
       {showRawUrlsModal && rawImageUrls.length > 0 && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 sm:p-6"
           onPointerDown={(e) => {
             rawUrlsBackdropPointerDownRef.current = e.target === e.currentTarget
           }}
@@ -1176,9 +1186,10 @@ export default function DetailModal() {
             rawUrlsBackdropPointerDownRef.current = false
           }}
         >
-          <div ref={rawUrlsModalRef} className="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]" onClick={(e) => e.stopPropagation()}>
+          <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
+          <div ref={rawUrlsModalRef} role="dialog" aria-modal="true" aria-labelledby="raw-image-urls-title" className="ds-modal-surface relative z-10 flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl border" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始图片链接 ({rawImageUrls.length})</h3>
+              <h2 id="raw-image-urls-title" className="text-base font-semibold text-gray-900 dark:text-white">原始图片链接 ({rawImageUrls.length})</h2>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1207,7 +1218,7 @@ export default function DetailModal() {
             <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 bg-gray-50/50 dark:bg-black/20 overscroll-contain">
               <div className="space-y-2.5">
                 {rawImageUrls.map((url, i) => (
-                  <div key={i} className="group flex items-center gap-3 p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/[0.06] shadow-sm hover:shadow-md transition-all">
+                  <div key={i} className="group flex items-center gap-3 p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/[0.06] shadow-sm hover:shadow-md transition">
                     <div className="flex-1 min-w-0 flex flex-col gap-1">
                       <div className="text-xs font-medium text-gray-400 dark:text-gray-500">
                         图片 {i + 1}
@@ -1242,7 +1253,7 @@ export default function DetailModal() {
 
       {showRawResponseModal && task?.rawResponsePayload && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 sm:p-6"
           onPointerDown={(e) => {
             rawResponseBackdropPointerDownRef.current = e.target === e.currentTarget
           }}
@@ -1252,16 +1263,20 @@ export default function DetailModal() {
             rawResponseBackdropPointerDownRef.current = false
           }}
         >
+          <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
           <div
             ref={rawResponseModalRef}
-            className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="raw-response-title"
+            className="ds-modal-surface relative z-10 flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl border"
             onPointerDown={(e) => {
               if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
             }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始响应数据</h3>
+              <h2 id="raw-response-title" className="text-base font-semibold text-gray-900 dark:text-white">原始响应数据</h2>
               <div className="flex items-center gap-2">
                 <button
                   type="button"

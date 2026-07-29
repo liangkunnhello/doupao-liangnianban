@@ -10,6 +10,7 @@ import { getTaskProgressDisplay } from '../lib/taskProgressDisplay'
 import { CodeIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 import PromptVariableEditor from './PromptVariableEditor'
+import { Card, IconButton } from '../design-system'
 
 interface Props {
   task: TaskRecord
@@ -44,15 +45,15 @@ function TaskActionButton({
       onFocus={() => setTooltipVisible(true)}
       onBlur={() => setTooltipVisible(false)}
     >
-      <button
+      <IconButton
         type="button"
         onClick={onClick}
         className={className}
         disabled={disabled}
         aria-label={tooltip}
-      >
-        {children}
-      </button>
+        icon={children}
+        size="sm"
+      />
       <ViewportTooltip visible={tooltipVisible} className="whitespace-nowrap">
         {tooltip}
       </ViewportTooltip>
@@ -305,9 +306,9 @@ function TaskCard({
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
-      ? 'bg-gray-500 dark:bg-gray-600'
-      : 'bg-blue-500'
-    : 'bg-gray-200 dark:bg-gray-700'
+      ? 'gallery-swipe-bg--neutral'
+      : 'gallery-swipe-bg--primary'
+    : 'gallery-swipe-bg--muted'
 
   const qualityDisplay = getParamDisplay(task, 'quality', undefined, task.isFavorite)
   const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
@@ -348,7 +349,7 @@ function TaskCard({
   }
 
   return (
-    <div className="relative rounded-xl">
+    <div className="gallery-card-shell relative rounded-xl">
       {/* 侧滑底图 */}
       <div
         className={`absolute inset-0 rounded-xl flex items-center transition-opacity duration-200 pointer-events-none ${
@@ -366,18 +367,12 @@ function TaskCard({
         </svg>
       </div>
 
-      <div
+      <Card
         ref={cardRef}
-        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
-          isSwiping ? '!bg-white dark:!bg-gray-900' : ''
+        className={`gallery-task-card relative overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 ${
+          isSwiping ? 'gallery-task-card--swiping' : ''
         } ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
-        } ${
-          task.status === 'running'
-            ? 'border-blue-400 generating'
-            : isSelected
-            ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
-            : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'
         }`}
         onClick={(e) => {
           if (Date.now() < suppressClickUntilRef.current) {
@@ -392,6 +387,9 @@ function TaskCard({
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
         draggable={task.status === 'done' && task.outputImages?.length > 0}
+        data-selected={isSelected || undefined}
+        data-status={task.status}
+        data-sop-card={Boolean(task.sopBatch) || undefined}
         onDragStart={(e) => {
           if (task.status !== 'done' || !task.outputImages?.length) return;
           const imageIds = task.outputImages;
@@ -413,15 +411,15 @@ function TaskCard({
       >
         {/* 选中时的角标 */}
       {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        <div className="gallery-selection-check absolute top-2 right-2 z-10 flex h-5 w-5 items-center justify-center">
           <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
         </div>
       )}
-      <div className="flex h-40">
+      <div className="flex h-44">
         {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div className="gallery-task-media w-40 min-w-[10rem] h-full relative flex items-center justify-center overflow-hidden flex-shrink-0">
           {task.status === 'running' && streamPreviewSrc && (
             <>
               <img
@@ -432,7 +430,7 @@ function TaskCard({
                 onError={() => setStreamPreviewLoaded(false)}
               />
               {streamPreviewLoaded && (
-                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                <span className="gallery-image-badge gallery-image-badge--info absolute top-1.5 right-1.5">
                   预览
                 </span>
               )}
@@ -460,7 +458,7 @@ function TaskCard({
                   {task.batchItemStatuses.filter((s) => s === 'done').length}/{task.batchItemStatuses.length}
                 </span>
               )}
-              <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+              <span className="gallery-image-badge gallery-image-badge--info absolute top-1.5 right-1.5">
                 <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -472,7 +470,7 @@ function TaskCard({
           {task.status === 'running' && !streamPreviewSrc && !((task.outputImages?.length ?? 0) > 0 && thumbSrc) && (
             <div className="flex flex-col items-center gap-2">
               <svg
-                className="w-8 h-8 text-blue-400 animate-spin"
+                className="gallery-state-icon gallery-state-icon--info w-8 h-8 animate-spin"
                 fill="none"
                 viewBox="0 0 24 24"
               >
@@ -490,13 +488,13 @@ function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">{progressDisplay.cardLabel}</span>
+              <span className="gallery-task-meta text-xs">{progressDisplay.cardLabel}</span>
             </div>
           )}
           {task.status === 'error' && (isFalReconnecting || isCustomReconnecting) && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
-                className="w-7 h-7 text-yellow-400"
+                className="gallery-state-icon gallery-state-icon--warning w-7 h-7"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -508,7 +506,7 @@ function TaskCard({
                   d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
               </svg>
-              <span className="text-xs text-yellow-500 text-center leading-tight">
+              <span className="gallery-state-text gallery-state-text--warning text-xs text-center leading-tight">
                 {progressDisplay.cardLabel}
               </span>
             </div>
@@ -516,7 +514,7 @@ function TaskCard({
           {task.status === 'error' && !isFalReconnecting && !isCustomReconnecting && !hasPartialSuccess && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
-                className={`w-7 h-7 ${isInterrupted ? 'text-yellow-400' : 'text-red-400'}`}
+                className={`gallery-state-icon w-7 h-7 ${isInterrupted ? 'gallery-state-icon--warning' : 'gallery-state-icon--danger'}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -528,7 +526,7 @@ function TaskCard({
                   d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <span className={`text-xs text-center leading-tight ${isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
+              <span className={`gallery-state-text text-xs text-center leading-tight ${isInterrupted ? 'gallery-state-text--warning' : 'gallery-state-text--danger'}`}>
                 {progressDisplay.cardLabel}
               </span>
             </div>
@@ -551,7 +549,7 @@ function TaskCard({
                 </span>
               )}
               {hasPartialFailure && (
-                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-yellow-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  <span className="gallery-image-badge gallery-image-badge--warning absolute top-1.5 right-1.5">
                   {progressDisplay.cardLabel}
                 </span>
               )}
@@ -559,7 +557,7 @@ function TaskCard({
           )}
           {hasPartialSuccess && !thumbSrc && (
             <svg
-              className="w-8 h-8 text-gray-300"
+              className="gallery-placeholder-icon w-8 h-8"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -588,7 +586,7 @@ function TaskCard({
                 </span>
               )}
               {!task.isFavorite && hasPartialFailure && (
-                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-yellow-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  <span className="gallery-image-badge gallery-image-badge--warning absolute top-1.5 right-1.5">
                   {progressDisplay.cardLabel}
                 </span>
               )}
@@ -596,7 +594,7 @@ function TaskCard({
           )}
           {task.status === 'done' && !thumbSrc && (
             <svg
-              className="w-8 h-8 text-gray-300"
+              className="gallery-placeholder-icon w-8 h-8"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -634,12 +632,18 @@ function TaskCard({
         </div>
 
         {/* 右侧信息区域 */}
-        <div className="flex-1 p-3 flex flex-col min-w-0">
+        <div className="gallery-task-body flex-1 p-3 flex flex-col min-w-0">
+          {task.sopBatch && (
+            <div className="gallery-sop-inline mb-2 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate font-medium">SOP · {task.sopBatch.sopName}</span>
+              <span className="shrink-0 tabular-nums">{task.sopBatch.promptIndex}/{task.sopBatch.promptCount}</span>
+            </div>
+          )}
           <div className="flex-1 min-h-0 mb-2 overflow-hidden">
             {showPendingPrompt ? (
               <div className="leading-relaxed">
-                <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
+                <p className="gallery-task-prompt text-sm">正在生成……</p>
+                <p className="gallery-task-meta mt-1 text-xs">输入内容将在响应完成时接收</p>
               </div>
             ) : task.isFavorite && isEditingPrompt ? (
               <PromptVariableEditor
@@ -655,20 +659,20 @@ function TaskCard({
                 autoFocus
                 selectOnFocus
                 spellCheck={false}
-                className="h-full min-h-[3rem] w-full overflow-y-auto rounded border border-blue-400/50 bg-gray-50 p-1 text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-700 outline-none transition focus:border-blue-500 dark:border-blue-400/50 dark:bg-black/20 dark:text-gray-300 dark:focus:border-blue-400"
+                className="gallery-prompt-editor h-full min-h-[3rem] w-full overflow-y-auto p-1 text-sm leading-relaxed whitespace-pre-wrap break-words outline-none transition"
               />
             ) : (
-              <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3 group/prompt relative cursor-default">
+              <div className="gallery-task-prompt text-sm leading-relaxed line-clamp-3 group/prompt relative cursor-default">
                 {task.prompt || '(无提示词)'}
                 {task.isFavorite && (
                   <div 
-                    className="absolute inset-0 bg-gray-100/50 dark:bg-white/[0.04] opacity-0 group-hover/prompt:opacity-100 transition-opacity flex items-center justify-center rounded cursor-text"
+                    className="gallery-prompt-edit-overlay absolute inset-0 opacity-0 group-hover/prompt:opacity-100 transition-opacity flex items-center justify-center rounded cursor-text"
                     onClick={(e) => {
                       e.stopPropagation()
                       setIsEditingPrompt(true)
                     }}
                   >
-                    <span className="bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded text-xs text-gray-600 dark:text-gray-300 shadow-sm border border-gray-200 dark:border-gray-700 flex items-center gap-1 backdrop-blur-sm">
+                    <span className="gallery-prompt-edit-pill px-2 py-1 rounded text-xs flex items-center gap-1 backdrop-blur-sm">
                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                       </svg>
@@ -683,7 +687,7 @@ function TaskCard({
             {/* 参数与信息：横向滚动 */}
             <div 
               data-tag-scroll-area
-              className="flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2"
+              className="gallery-task-tags flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2"
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
               onTouchEnd={(e) => e.stopPropagation()}
@@ -692,10 +696,10 @@ function TaskCard({
               {/* API Name */}
               {!task.isFavorite && (task.apiProfileName || task.apiProvider) && (
                 <span 
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
+                  className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0"
                   title={task.apiProfileName || task.apiProvider}
                 >
-                  <CodeIcon className="w-3 h-3 flex-shrink-0 text-gray-400" />
+                  <CodeIcon className="gallery-task-tag__icon w-3 h-3 flex-shrink-0" />
                   <span className="truncate max-w-[8rem]">
                     {task.apiProfileName || task.apiProvider}
                   </span>
@@ -704,10 +708,10 @@ function TaskCard({
               {/* Model */}
               {!task.isFavorite && showModel && (
                 <span 
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
+                  className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0"
                   title={task.apiModel}
                 >
-                  <svg className="w-3 h-3 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="gallery-task-tag__icon w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                   </svg>
                   <span className="truncate max-w-[8rem]">
@@ -717,7 +721,7 @@ function TaskCard({
               )}
               {/* Mask */}
               {!task.isFavorite && task.maskImageId && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
+                <span className="gallery-task-tag gallery-task-tag--primary flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
@@ -726,36 +730,36 @@ function TaskCard({
               )}
               {/* Params: only show if not default or mismatch */}
               {showQuality && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">质量</span>
-                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
+                <span className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0">
+                  <span className="gallery-task-tag__label">质量</span>
+                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="gallery-task-tag__value">{qualityDisplay.displayValue}</span>}
                 </span>
               )}
               {showSize && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">尺寸</span>
-                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{sizeDisplay.displayValue}</span>}
+                <span className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0">
+                  <span className="gallery-task-tag__label">尺寸</span>
+                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="gallery-task-tag__value">{sizeDisplay.displayValue}</span>}
                 </span>
               )}
               {showFormat && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">格式</span>
-                  {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{formatDisplay.displayValue}</span>}
+                <span className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0">
+                  <span className="gallery-task-tag__label">格式</span>
+                  {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="gallery-task-tag__value">{formatDisplay.displayValue}</span>}
                 </span>
               )}
               {!task.isFavorite && showN && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">数量</span>
+                <span className="gallery-task-tag flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0">
+                  <span className="gallery-task-tag__label">数量</span>
                   {hasPartialSuccess && task.batchItemStatuses ? (
-                    <span className="text-gray-600 dark:text-gray-300">
+                    <span className="gallery-task-tag__value">
                       {task.batchItemStatuses.filter((s) => s === 'done').length}
-                      <span className="text-gray-400 dark:text-gray-500 mx-0.5">/</span>
+                      <span className="gallery-task-tag__label mx-0.5">/</span>
                       {task.batchItemStatuses.length}
                     </span>
                   ) : nDisplay.isMismatch ? (
                     <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" />
                   ) : (
-                    <span className="text-gray-600 dark:text-gray-300">{nDisplay.displayValue}</span>
+                    <span className="gallery-task-tag__value">{nDisplay.displayValue}</span>
                   )}
                 </span>
               )}
@@ -763,7 +767,7 @@ function TaskCard({
             {/* 操作按钮 */}
             <div
               data-tag-scroll-area
-              className="flex items-center gap-1 flex-shrink-0 mt-0.5 ml-auto max-w-full overflow-x-auto hide-scrollbar mask-edge-r pr-2"
+              className="gallery-task-actions flex items-center gap-1 flex-shrink-0 mt-0.5 ml-auto max-w-full overflow-x-auto hide-scrollbar mask-edge-r pr-2"
               onClick={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
@@ -774,7 +778,7 @@ function TaskCard({
                 <TaskActionButton
                   tooltip="重试任务"
                   onClick={() => retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                  className="gallery-task-action gallery-task-action--primary"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -798,8 +802,8 @@ function TaskCard({
                 }}
                 className={`p-1.5 rounded-md transition ${
                   task.isFavorite
-                    ? 'text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-500/10'
-                    : 'text-gray-400 hover:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-500/10'
+                    ? 'gallery-task-action gallery-task-action--warning'
+                    : 'gallery-task-action gallery-task-action--neutral'
                 }`}
               >
                 {task.isFavorite ? (
@@ -815,7 +819,7 @@ function TaskCard({
               <TaskActionButton
                 tooltip="复用配置"
                 onClick={onReuse}
-                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                className="gallery-task-action gallery-task-action--primary"
               >
                 <svg
                   className="w-4 h-4"
@@ -834,7 +838,7 @@ function TaskCard({
               <TaskActionButton
                 tooltip="编辑输出"
                 onClick={onEditOutputs}
-                className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
+                className="gallery-task-action gallery-task-action--success disabled:opacity-30"
                 disabled={!task.outputImages?.length}
               >
                 <svg
@@ -854,7 +858,7 @@ function TaskCard({
               <TaskActionButton
                 tooltip="删除任务"
                 onClick={onDelete}
-                className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
+                className="gallery-task-action gallery-task-action--danger"
               >
                 <svg
                   className="w-4 h-4"
@@ -874,8 +878,8 @@ function TaskCard({
           </div>
         </div>
       </div>
+      </Card>
       </div>
-    </div>
   )
 }
 

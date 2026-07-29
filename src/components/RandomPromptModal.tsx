@@ -1,9 +1,10 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useStore } from '../store'
 import { render_prompt } from '../lib/promptGenerator'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { CloseIcon, PlusIcon, TrashIcon, ChevronDownIcon } from './icons'
+import { useDialogFocusTrap } from '../design-system'
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
@@ -124,7 +125,9 @@ export default function WordLibraryManager() {
   }, [result, setPrompt, close, showToast])
 
   useCloseOnEscape(open, close)
-  usePreventBackgroundScroll(open)
+  const modalRef = useRef<HTMLDivElement>(null)
+  usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
 
   if (!open) return null
 
@@ -133,19 +136,23 @@ export default function WordLibraryManager() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-[55] flex items-center justify-center p-4"
+      className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
       onClick={close}
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md" />
+      <div className="ds-modal-scrim absolute inset-0" />
       <div
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-lg max-w-4xl w-full max-h-[85vh] flex flex-col"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="random-prompt-title"
+        className="ds-modal-surface relative max-h-[85vh] w-full max-w-4xl flex flex-col rounded-2xl border"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部 */}
         <div className="flex items-center justify-between shrink-0 p-5 border-b border-gray-100 dark:border-white/[0.08]">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-gray-100">
+          <h2 id="random-prompt-title" className="text-lg font-bold text-gray-800 dark:text-gray-100">
             提示词模板
-          </h3>
+          </h2>
           <button
             onClick={close}
             className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"

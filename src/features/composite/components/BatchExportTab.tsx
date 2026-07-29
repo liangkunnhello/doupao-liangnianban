@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, Pause, Play, RefreshCw, Shuffle, Square, Search, Plus, Trash2 } from 'lucide-react'
+import {
+  ArrowLeftIcon as ArrowLeft,
+  ArrowRightIcon as ArrowRight,
+  ChevronDownIcon as ChevronDown,
+  ChevronRightIcon as ChevronRight,
+  FileTextIcon as FileText,
+  FolderIcon as Folder,
+  FolderOpenIcon as FolderOpen,
+  PauseIcon as Pause,
+  PlayIcon as Play,
+  PlusIcon as Plus,
+  RefreshIcon as RefreshCw,
+  SearchIcon as Search,
+  ShuffleIcon as Shuffle,
+  SquareIcon as Square,
+  TrashIcon as Trash2,
+} from '../../../design-system/icons'
 import { naturalSortBackgrounds } from '../lib/compositeBackgrounds'
 import { createCompositeExportSnapshot, expandCompositeExportItems } from '../lib/compositeExportPlan'
 import { runCompositeV2Export } from '../lib/compositeExportRuntime'

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, calculatePostprocessImageSize, isRecommendedSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useDialogFocusTrap } from '../design-system'
 import Select from './Select'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -59,6 +61,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
+  useCloseOnEscape(true, onClose)
+  useDialogFocusTrap(true, modalRef)
   const mouseDownTargetRef = useRef<EventTarget | null>(null)
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -189,18 +193,21 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+      className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
+      <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
       <div
         ref={modalRef}
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="size-picker-dialog-title"
+        className="ds-modal-surface relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col rounded-2xl border p-5 animate-modal-in motion-reduce:animate-none"
       >
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">设置图像尺寸</h3>
+            <h2 id="size-picker-dialog-title" className="text-base font-semibold text-gray-800 dark:text-gray-100">设置图像尺寸</h2>
             <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">当前：{currentSize || 'auto'}</p>
           </div>
           <button
@@ -214,7 +221,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
           </button>
         </div>
 
-        <div className="space-y-6">
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
           <div className="flex rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
             {allowAuto && (
               <button

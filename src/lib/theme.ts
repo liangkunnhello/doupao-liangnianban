@@ -1,4 +1,19 @@
-import type { ThemeMode } from '../types'
+import type { ColorScheme, ThemeMode } from '../types'
+
+export const COLOR_SCHEME_VALUES: ColorScheme[] = [
+  'default',
+  'apple',
+  'xiaomi',
+  'rose',
+  'lake',
+  'sunset',
+  'lavender',
+  'midnight',
+]
+
+export function normalizeColorScheme(value: unknown): ColorScheme {
+  return COLOR_SCHEME_VALUES.includes(value as ColorScheme) ? (value as ColorScheme) : 'default'
+}
 
 export const THEME_TRANSITION_CLASS = 'theme-transitioning'
 export const THEME_TRANSITION_DURATION_MS = 220
@@ -24,4 +39,11 @@ export function applyThemeMode(
   }
   root.classList.toggle('dark', themeMode === 'dark')
   root.style.colorScheme = themeMode
+}
+
+export function applyColorScheme(
+  colorScheme: ColorScheme,
+  root: HTMLElement = document.documentElement,
+) {
+  root.setAttribute('data-color-scheme', colorScheme)
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { TaskRecord } from '../types'
 import { ensureImageThumbnailCached, subscribeImageThumbnail, useStore } from '../store'
+import { Grid } from '../design-system'
 
 export type AgentImageGridItem =
   | { task: TaskRecord; taskId: string }
@@ -208,10 +209,10 @@ export default function AgentImageGrid({ items, imageList }: { items: AgentImage
   if (entries.length === 0) return null
 
   return (
-    <div className="mt-3 grid w-full grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-4" onClick={(event) => event.stopPropagation()}>
+    <Grid gap={2} minColumnWidth="12rem" className="mt-3 w-full" onClick={(event) => event.stopPropagation()}>
       {entries.map((entry) => (
         <AgentImageTile key={entry.key} entry={entry} imageList={imageList} />
       ))}
-    </div>
+    </Grid>
   )
 }

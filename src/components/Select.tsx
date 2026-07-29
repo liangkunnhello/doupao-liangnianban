@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import { ChevronDownIcon, EditIcon, PlusIcon, TrashIcon, DragHandleIcon } from './icons'
@@ -22,9 +22,31 @@ interface SelectProps {
   options: Option[]
   disabled?: boolean
   className?: string
+  ariaLabel?: string
 }
 
-export default function Select({ value, onChange, onReorder, options, disabled, className }: SelectProps) {
+function getOptionClassName({
+  dragged,
+  dragOver,
+  selected,
+  variant,
+}: {
+  dragged: boolean
+  dragOver: boolean
+  selected: boolean
+  variant?: Option['variant']
+}) {
+  return [
+    'ds-legacy-select__option',
+    dragged && 'ds-legacy-select__option--dragged',
+    dragOver && 'ds-legacy-select__option--drag-over',
+    selected && 'ds-legacy-select__option--selected',
+    variant === 'action' && 'ds-legacy-select__option--action',
+    variant === 'danger' && 'ds-legacy-select__option--danger',
+  ].filter(Boolean).join(' ')
+}
+
+export default function Select({ value, onChange, onReorder, options, disabled, className, ariaLabel }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [menuMaxHeight, setMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [placement, setPlacement] = useState<'bottom' | 'top'>('bottom')
@@ -43,7 +65,9 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
   const touchDragRef = useRef<{ value: string | number, startX: number, startY: number, moved: boolean } | null>(null)
   const dragScrollIntervalRef = useRef<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuId = useId()
 
   const selectedOption = options.find((o) => o.value === value)
 
@@ -134,8 +158,33 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
     if (disabled) return
     e.preventDefault()
     e.stopPropagation()
+    setIsOpen((open) => !open)
     // 动画和位置的计算在 useEffect 中进行，这里可以先假设一个默认值或保留当前状态
-    setIsOpen(!isOpen)
+  }
+
+  const focusMenuOption = (where: 'selected' | 'first' | 'last') => {
+    const schedule = window.requestAnimationFrame ?? ((callback: FrameRequestCallback) => window.setTimeout(callback, 0))
+    schedule(() => {
+      const optionElements = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
+      if (optionElements.length === 0) return
+      const selectedIndex = options.findIndex((option) => option.value === value)
+      const index = where === 'first' ? 0 : where === 'last' ? optionElements.length - 1 : Math.max(0, selectedIndex)
+      optionElements[index]?.focus()
+    })
+  }
+
+  const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (event.key === 'Escape' && isOpen) {
+      event.preventDefault()
+      setIsOpen(false)
+      return
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      setIsOpen(true)
+      focusMenuOption(event.key === 'ArrowUp' ? 'last' : 'selected')
+    }
   }
 
   const clearTouchDrag = () => {
@@ -152,22 +201,30 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
 
   return (
     <div ref={containerRef} className="relative w-full">
-      <div
+      <button
+        type="button"
         ref={triggerRef}
         onClick={handleToggle}
-        className={`flex items-center justify-between gap-1 w-full cursor-pointer select-none ${className ?? ''} ${
-          disabled ? '!opacity-50 !cursor-not-allowed !bg-gray-100/50 dark:!bg-white/[0.05]' : ''
-        }`}
+        onKeyDown={handleTriggerKeyDown}
+        className={`ds-legacy-select__trigger flex items-center justify-between gap-1 w-full cursor-pointer select-none ${className ?? ''}`}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-controls={menuId}
       >
         <span className="truncate">{selectedOption?.label ?? value}</span>
-        <ChevronDownIcon className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
-      </div>
+        <ChevronDownIcon className={`ds-legacy-select__chevron ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
 
       {isOpen && (
         <div
-          className={`absolute z-50 w-full overflow-hidden overflow-y-auto rounded-xl border border-gray-200/60 bg-white/95 py-1 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] dark:ring-white/10 custom-scrollbar ${
+          id={menuId}
+          ref={menuRef}
+          className={`ds-legacy-select__menu custom-scrollbar ${
             placement === 'top' ? 'bottom-full mb-1.5 animate-dropdown-up' : 'top-full mt-1.5 animate-dropdown-down'
           }`}
+          role="listbox"
           style={{ maxHeight: menuMaxHeight }}
         >
           {options.map((option) => (
@@ -175,6 +232,9 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
               key={option.value}
               data-option-value={String(option.value)}
               draggable={option.draggable}
+              role="option"
+              aria-selected={option.value === value}
+              tabIndex={0}
               onDragStart={(e) => {
                 if (!option.draggable) return
                 setDraggedValue(option.value)
@@ -328,29 +388,47 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
                 onChange(option.value)
                 setIsOpen(false)
               }}
-              className={`relative flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-xs transition-colors ${
-                draggedValue === option.value
-                  ? 'opacity-40 bg-gray-100 dark:bg-white/[0.04]'
-                  : option.variant === 'action'
-                  ? 'font-semibold text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10'
-                  : option.variant === 'danger'
-                  ? 'font-semibold text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
-                  : option.value === value
-                  ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
-              }`}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onChange(option.value)
+                  setIsOpen(false)
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setIsOpen(false)
+                  triggerRef.current?.focus()
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+                  event.preventDefault()
+                  const optionElements = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
+                  const currentIndex = optionElements.indexOf(event.currentTarget)
+                  const nextIndex = event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? optionElements.length - 1
+                      : event.key === 'ArrowDown'
+                        ? Math.min(optionElements.length - 1, currentIndex + 1)
+                        : Math.max(0, currentIndex - 1)
+                  optionElements[nextIndex]?.focus()
+                }
+              }}
+              className={getOptionClassName({
+                dragged: draggedValue === option.value,
+                dragOver: dragOverValue === option.value && draggedValue !== option.value,
+                selected: option.value === value,
+                variant: option.variant,
+              })}
             >
               {dragOverValue === option.value && dragDropPosition === 'before' && draggedValue !== option.value && (
-                <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                <div className="ds-legacy-select__drop-line ds-legacy-select__drop-line--before" />
               )}
               {dragOverValue === option.value && dragDropPosition === 'after' && draggedValue !== option.value && (
-                <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                <div className="ds-legacy-select__drop-line ds-legacy-select__drop-line--after" />
               )}
               <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
                 {option.draggable && (
                   <div
                     data-drag-handle
-                    className="flex cursor-grab active:cursor-grabbing items-center justify-center text-gray-400 opacity-60 transition-opacity hover:opacity-100 dark:text-gray-500"
+                    className="ds-legacy-select__drag-handle"
                     style={{ touchAction: 'none' }}
                     title="拖拽排序"
                   >
@@ -375,9 +453,9 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
                         action.onClick()
                         setIsOpen(false)
                       }}
-                      className={`rounded-md p-1.5 transition flex items-center justify-center ${action.variant === 'danger'
-                        ? 'text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
-                        : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.08] dark:hover:text-gray-200'}`}
+                      className={`ds-legacy-select__action-button ${action.variant === 'danger'
+                        ? 'ds-legacy-select__action-button--danger'
+                        : ''}`}
                     >
                       {action.label === '编辑' ? (
                         <EditIcon className="w-3.5 h-3.5" />
@@ -403,7 +481,7 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
       {touchDragPreview && createPortal(
         <div
           id="touch-drag-preview"
-          className="fixed pointer-events-none z-[110] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
+          className="ds-legacy-select__touch-preview"
           style={{
             left: touchDragPreview.x - touchDragPreview.offsetX,
             top: touchDragPreview.y - touchDragPreview.offsetY,
@@ -412,7 +490,7 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
           }}
         >
           <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
-            <DragHandleIcon className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
+            <DragHandleIcon className="ds-legacy-select__touch-preview-icon" />
             <span className="min-w-0 truncate">{touchDragPreview.label}</span>
           </div>
         </div>,

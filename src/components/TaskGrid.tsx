@@ -1,7 +1,13 @@
 import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeMultipleTasks, removeTask } from '../store'
 import { getTaskGridColumnCount, getTaskGridVirtualWindow } from '../lib/taskGridVirtualWindow'
+import { groupSopBatchTasks, type TaskGridItem } from '../lib/sopBatchTaskGrouping'
+import type { TaskRecord } from '../types'
+import { ImageIcon, SearchXIcon as SearchX } from '../design-system/icons'
+import { EmptyState } from '../design-system'
 import TaskCard from './TaskCard'
+import SopBatchTaskCard from './SopBatchTaskCard'
+import SopBatchDetailModal from './SopBatchDetailModal'
 
 export default function TaskGrid() {
   const activeTabId = useStore((s) => s.activeWorkspaceTabId)
@@ -31,6 +37,7 @@ export default function TaskGrid() {
     width: typeof window === 'undefined' ? 1_024 : window.innerWidth,
   }))
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
+  const [batchDetail, setBatchDetail] = useState<{ sopName: string; tasks: TaskRecord[] } | null>(null)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
   const hasDragged = useRef(false)
@@ -73,6 +80,11 @@ export default function TaskGrid() {
       return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q) || batchErrorStr.includes(q)
     })
   }, [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  const gridItems = useMemo<TaskGridItem[]>(() => (
+    filterFavorite
+      ? filteredTasks.map((task) => ({ kind: 'task' as const, id: task.id, createdAt: task.createdAt, task }))
+      : groupSopBatchTasks(filteredTasks)
+  ), [filteredTasks, filterFavorite])
   useEffect(() => {
     let frame = 0
     const updateViewport = () => {
@@ -101,20 +113,45 @@ export default function TaskGrid() {
     ? rootRef.current.getBoundingClientRect().top + viewport.scrollY
     : viewport.scrollY
   const virtualWindow = getTaskGridVirtualWindow({
-    itemCount: filteredTasks.length,
+    itemCount: gridItems.length,
     columns,
-    rowHeight: 176,
+    rowHeight: 192,
     scrollTop: Math.max(0, viewport.scrollY - gridPageTop),
     viewportHeight: viewport.height,
     overscanRows: 3,
   })
-  const visibleTasks = filteredTasks.slice(virtualWindow.start, virtualWindow.end)
+  const visibleItems = gridItems.slice(virtualWindow.start, virtualWindow.end)
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
       title: '删除任务',
       message: '确定要删除这个任务吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
       action: () => removeTask(task),
+    })
+  }
+
+  const handleDeleteBatch = (batchTasks: TaskRecord[]) => {
+    setConfirmDialog({
+      title: '删除 SOP 批量任务',
+      message: `确定要删除这 ${batchTasks.length} 个 SOP 子任务吗？关联的图片资源也会一并清理。`,
+      action: () => removeMultipleTasks(batchTasks.map((task) => task.id)),
+    })
+  }
+
+  const getCardTaskIds = (card: Element) => {
+    const taskIds = card.getAttribute('data-task-ids')
+    if (taskIds) return taskIds.split(',').filter(Boolean)
+    const taskId = card.getAttribute('data-task-id')
+    return taskId ? [taskId] : []
+  }
+
+  const toggleBatchSelection = (batchTasks: TaskRecord[]) => {
+    const batchTaskIds = batchTasks.map((task) => task.id)
+    setSelectedTaskIds((current) => {
+      const selected = new Set(current)
+      const shouldSelect = !batchTaskIds.every((taskId) => selected.has(taskId))
+      batchTaskIds.forEach((taskId) => shouldSelect ? selected.add(taskId) : selected.delete(taskId))
+      return Array.from(selected)
     })
   }
 
@@ -159,8 +196,8 @@ export default function TaskGrid() {
 
     cards.forEach((card) => {
       const rect = card.getBoundingClientRect()
-      const taskId = card.getAttribute('data-task-id')
-      if (!taskId) return
+      const taskIds = getCardTaskIds(card)
+      if (!taskIds.length) return
 
       const cardLeft = rect.left + window.scrollX
       const cardRight = rect.right + window.scrollX
@@ -171,13 +208,10 @@ export default function TaskGrid() {
         minX < cardRight && maxX > cardLeft && minY < cardBottom && maxY > cardTop
 
       if (isIntersecting) {
-        if (initialSelected.has(taskId)) {
-          newSelected.delete(taskId)
-        } else {
-          newSelected.add(taskId)
-        }
-      } else if (!initialSelected.has(taskId)) {
-        newSelected.delete(taskId)
+        const cardWasSelected = taskIds.every((taskId) => initialSelected.has(taskId))
+        taskIds.forEach((taskId) => cardWasSelected ? newSelected.delete(taskId) : newSelected.add(taskId))
+      } else {
+        taskIds.filter((taskId) => !initialSelected.has(taskId)).forEach((taskId) => newSelected.delete(taskId))
       }
     })
 
@@ -319,30 +353,17 @@ export default function TaskGrid() {
     }
   }, [clearSelection, isMac])
 
-  if (!filteredTasks.length) {
+  if (!gridItems.length) {
     return (
-      <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
-          <p className="text-sm">没有找到匹配的任务</p>
-        ) : (
-          <>
-            <svg
-              className="w-16 h-16 mx-auto mb-4 text-gray-200 dark:text-gray-700"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <p className="text-sm">输入提示词开始生成图片</p>
-          </>
-        )}
-      </div>
+      <EmptyState
+        icon={searchQuery || filterFavorite ? <SearchX size={22} /> : <ImageIcon size={22} />}
+        title={searchQuery || filterFavorite ? '没有找到匹配的任务' : '从第一张图片开始'}
+        description={
+          searchQuery || filterFavorite
+            ? '尝试调整搜索词或筛选条件。'
+            : '在下方输入提示词，配置尺寸与质量后生成图片。'
+        }
+      />
     )
   }
 
@@ -350,18 +371,18 @@ export default function TaskGrid() {
     <div 
       ref={rootRef}
       data-task-grid-root
-      className="relative min-h-[50vh]"
+      className="gallery-grid-shell relative min-h-[50vh]"
     >
       <div style={{ height: virtualWindow.totalHeight + 40 }}>
         <div
           ref={gridRef}
-          className="absolute left-0 right-0 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          className="gallery-grid absolute left-0 right-0 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
           style={{ top: virtualWindow.offsetTop }}
         >
-          {visibleTasks.map((task) => (
-            <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
+          {visibleItems.map((item) => item.kind === 'task' ? (
+            <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.task.id}>
               <TaskCard
-                task={task}
+                task={item.task}
                 onClick={(e) => {
                   if (Date.now() < suppressClickUntil.current) {
                     e.preventDefault()
@@ -370,16 +391,40 @@ export default function TaskGrid() {
                   suppressClickUntil.current = 0
                   const isCtrl = isMac ? e.metaKey : e.ctrlKey
                   if (isCtrl) {
-                    useStore.getState().toggleTaskSelection(task.id)
+                    useStore.getState().toggleTaskSelection(item.task.id)
                     return
                   }
 
-                  setDetailTaskId(task.id)
+                  setDetailTaskId(item.task.id)
                 }}
-                onReuse={() => reuseConfig(task)}
-                onEditOutputs={() => editOutputs(task)}
-                onDelete={() => handleDelete(task)}
-                isSelected={selectedTaskIdSet.has(task.id)}
+                onReuse={() => reuseConfig(item.task)}
+                onEditOutputs={() => editOutputs(item.task)}
+                onDelete={() => handleDelete(item.task)}
+                isSelected={selectedTaskIdSet.has(item.task.id)}
+              />
+            </div>
+          ) : (
+            <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.tasks[0]?.id} data-task-ids={item.tasks.map((task) => task.id).join(',')}>
+              <SopBatchTaskCard
+                sopName={item.sopName}
+                tasks={item.tasks}
+                summary={item.summary}
+                isSelected={item.tasks.length > 0 && item.tasks.every((task) => selectedTaskIdSet.has(task.id))}
+                onClick={(event) => {
+                  if (Date.now() < suppressClickUntil.current) {
+                    event.preventDefault()
+                    return
+                  }
+                  suppressClickUntil.current = 0
+                  const isCtrl = isMac ? event.metaKey : event.ctrlKey
+                  if (isCtrl) {
+                    toggleBatchSelection(item.tasks)
+                    return
+                  }
+                  setBatchDetail({ sopName: item.sopName, tasks: item.tasks })
+                }}
+                onOpenBatch={() => setBatchDetail({ sopName: item.sopName, tasks: item.tasks })}
+                onDelete={() => handleDeleteBatch(item.tasks)}
               />
             </div>
           ))}
@@ -387,7 +432,7 @@ export default function TaskGrid() {
       </div>
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
+          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[var(--ds-z-dropdown)]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
             top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
@@ -396,6 +441,12 @@ export default function TaskGrid() {
           }}
         />
       )}
+      {batchDetail && <SopBatchDetailModal
+        sopName={batchDetail.sopName}
+        tasks={batchDetail.tasks}
+        onClose={() => setBatchDetail(null)}
+        onOpenTask={(taskId) => { setBatchDetail(null); setDetailTaskId(taskId) }}
+      />}
     </div>
   )
 }

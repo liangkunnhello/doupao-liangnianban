@@ -14,3 +14,7 @@ latest.yml
 *.asar
 .superpowers/
 .worktrees/
+
+# build / runtime logs
+*.log
+.impeccable/

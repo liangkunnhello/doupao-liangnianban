@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { registerIpcHandlers, initLocalSavePath } from './ipc-handlers'
+import { registerApiTransport } from './api-transport'
 import { decideRendererRecovery } from './renderer-crash-recovery'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -195,6 +196,7 @@ process.on('unhandledRejection', (reason) => {
 app.whenReady().then(() => {
   initLocalSavePath()
   registerIpcHandlers()
+  registerApiTransport()
   ipcMain.handle('app:get-startup-mode', () => ({ safeMode: rendererSafeMode }))
 
   ipcMain.handle('update:check', async () => {

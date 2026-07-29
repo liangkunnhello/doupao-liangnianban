@@ -4,6 +4,7 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
+import { useDialogFocusTrap } from '../design-system'
 
 const MIN_SCALE = 1
 const MAX_SCALE = 10
@@ -174,6 +175,7 @@ interface LightboxInnerProps {
 function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const openedAtRef = useRef(Date.now())
+  useDialogFocusTrap(true, containerRef)
 
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
@@ -602,19 +604,22 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
   const zoomPercent = Math.round(s * 100)
 
   const navBtnClass =
-    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-all z-10 backdrop-blur-sm'
+    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition z-10 backdrop-blur-sm'
 
   return (
     <div
       ref={containerRef}
       data-lightbox-root
-      className="fixed inset-0 z-[200] flex items-center justify-center select-none"
+      role="dialog"
+      aria-modal="true"
+      aria-label="图片预览"
+      className="ds-modal-layer fixed inset-0 flex items-center justify-center select-none"
       style={{ cursor: isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'pointer' }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
-      <div className="relative animate-zoom-in">
+      <div className="absolute inset-0 bg-black/70 animate-fade-in motion-reduce:animate-none" />
+      <div className="relative animate-zoom-in motion-reduce:animate-none">
         <div
           className="relative flex items-center justify-center"
           style={{

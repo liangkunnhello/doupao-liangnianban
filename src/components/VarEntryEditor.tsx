@@ -1,5 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { useStore } from '../store'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 
 /** 去除行首序号（如 "1. xxx"、"1) xxx"、"1、xxx"、"1.xxx"）和空白 */
 function cleanEntryLine(line: string): string {
@@ -29,6 +32,7 @@ export default function VarEntryEditor() {
   const [groupId, setGroupId] = useState('')
   const [entriesText, setEntriesText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const modalRef = useRef<HTMLDivElement>(null)
 
   // 打开时初始化
   useEffect(() => {
@@ -57,15 +61,9 @@ export default function VarEntryEditor() {
     }
   }
 
-  // ESC 关闭
-  useEffect(() => {
-    if (!config) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [config])
+  useCloseOnEscape(Boolean(config), handleClose)
+  usePreventBackgroundScroll(Boolean(config), modalRef)
+  useDialogFocusTrap(Boolean(config), modalRef, textareaRef)
 
   // ⚠️ useMemo 必须在所有提前 return 之前调用，否则 React 会抱怨
   // "Rendered more hooks than during the previous render"
@@ -74,13 +72,17 @@ export default function VarEntryEditor() {
   if (!config) return null
 
   return (
-    <div className="fixed inset-0 z-[55] flex items-start justify-center pt-16" onClick={handleClose}>
+    <div className="ds-modal-layer fixed inset-0 flex items-start justify-center p-4 pt-16" onClick={handleClose}>
       {/* 遮罩 */}
-      <div className="absolute inset-0 bg-black/10 dark:bg-black/20" />
+      <div className="ds-modal-scrim absolute inset-0" />
 
       {/* 弹窗卡片 */}
       <div
-        className="relative w-full max-w-md bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200/60 dark:border-white/[0.08] overflow-hidden"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑变量词条"
+        className="ds-modal-surface relative w-full max-w-md rounded-2xl border overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶栏：变量名 | 分组 | 保存 */}

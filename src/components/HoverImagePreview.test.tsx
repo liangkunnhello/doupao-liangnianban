@@ -29,4 +29,12 @@ describe('HoverImagePreview', () => {
 
     expect(html).not.toContain('aria-label="图片尺寸"')
   })
+
+  it('allows a modal to raise the preview above its own stacking layer', () => {
+    const html = renderToStaticMarkup(
+      <HoverImagePreview preview={preview} zIndex={90} />,
+    )
+
+    expect(html).toContain('z-index:90')
+  })
 })

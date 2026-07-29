@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useStore, addImageFromUrl, ensureImageCached } from '../store'
 import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { downloadImageEntries, downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getGeneratedImageDownloadEntries, getImageZipEntries } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
+import { Menu, MenuItem } from '../design-system'
 
 export default function ImageContextMenu() {
   const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; x: number; y: number } | null>(null)
@@ -211,40 +212,26 @@ export default function ImageContextMenu() {
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 py-1 w-[120px] overflow-hidden animate-fade-in"
+      className="fixed z-[var(--ds-z-tooltip)] animate-fade-in"
       style={{ left, top }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <button
-        onClick={handleCopy}
-        className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-      >
-        <CopyIcon className="w-4 h-4 flex-shrink-0" />
-        复制
-      </button>
-      <button
-        onClick={handleDownload}
-        className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-      >
-        <DownloadIcon className="w-4 h-4 flex-shrink-0" />
-        下载
-      </button>
-      {showDownloadAll && (
-        <button
-          onClick={handleDownloadAll}
-          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-        >
-          <DownloadIcon className="w-4 h-4 flex-shrink-0" />
-          下载全部
-        </button>
-      )}
-      <button
-        onClick={handleEdit}
-        className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-      >
-        <EditIcon className="w-4 h-4 flex-shrink-0" />
-        编辑
-      </button>
+      <Menu label="图片操作" className="w-[120px]">
+        <MenuItem icon={<CopyIcon className="w-4 h-4 flex-shrink-0" />} onClick={handleCopy}>
+          复制
+        </MenuItem>
+        <MenuItem icon={<DownloadIcon className="w-4 h-4 flex-shrink-0" />} onClick={handleDownload}>
+          下载
+        </MenuItem>
+        {showDownloadAll && (
+          <MenuItem icon={<DownloadIcon className="w-4 h-4 flex-shrink-0" />} onClick={handleDownloadAll}>
+            下载全部
+          </MenuItem>
+        )}
+        <MenuItem icon={<EditIcon className="w-4 h-4 flex-shrink-0" />} onClick={handleEdit}>
+          编辑
+        </MenuItem>
+      </Menu>
     </div>
   )
 }

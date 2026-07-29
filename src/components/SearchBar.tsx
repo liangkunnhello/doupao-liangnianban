@@ -2,6 +2,7 @@ import { useStore } from '../store'
 import { clearFailedTasks } from '../store'
 import Select from './Select'
 import { FavoriteIcon, CollectionManageIcon, TrashIcon } from './icons'
+import { IconButton, SearchField, Toolbar } from '../design-system'
 
 export default function SearchBar() {
   const searchQuery = useStore((s) => s.searchQuery)
@@ -18,31 +19,35 @@ export default function SearchBar() {
   }
 
   return (
-    <div data-no-drag-select className="mt-6 mb-4 flex flex-col gap-3 sm:flex-row">
-      <div className="flex flex-wrap gap-2 flex-shrink-0 z-20">
-        <button
+    <div
+      data-no-drag-select
+      role="search"
+      aria-label="画廊筛选"
+      className="gallery-toolbar mt-6 mb-4 flex flex-col gap-3 sm:flex-row"
+    >
+      <Toolbar label="画廊筛选操作" className="flex-shrink-0 z-20">
+        <IconButton
           onClick={handleFavoriteClick}
-          className={`p-2.5 rounded-xl border transition-all ${
-            filterFavorite
-              ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-500'
-              : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
-          }`}
+          aria-label={filterFavorite ? '退出收藏夹视图' : '打开收藏夹'}
+          aria-pressed={filterFavorite}
+          className="gallery-toolbar__icon"
+          data-active={filterFavorite || undefined}
           title={filterFavorite ? '退出收藏夹视图' : '收藏夹'}
-        >
-          <FavoriteIcon filled={filterFavorite} className="w-5 h-5" />
-        </button>
+          icon={<FavoriteIcon filled={filterFavorite} className="h-5 w-5" />}
+        />
         {filterFavorite && (
-          <button
+          <IconButton
             onClick={openManageCollectionsModal}
-            className="p-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-all"
+            aria-label="管理收藏夹"
+            className="gallery-toolbar__icon"
             title="管理收藏夹"
-          >
-            <CollectionManageIcon className="w-5 h-5" />
-          </button>
+            icon={<CollectionManageIcon className="h-5 w-5" />}
+          />
         )}
         <div className="relative w-28">
           <Select
             value={filterStatus}
+            ariaLabel="筛选任务状态"
             onChange={(val) => setFilterStatus(val as any)}
             options={[
               { label: '全部状态', value: 'all' },
@@ -50,39 +55,26 @@ export default function SearchBar() {
               { label: '生成中', value: 'running' },
               { label: '失败', value: 'error' },
             ]}
-            className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+            className="gallery-status-select"
           />
         </div>
         {hasFailedTasks && (
-          <button
+          <IconButton
             onClick={clearFailedTasks}
-            className="p-2.5 rounded-xl border border-red-200 dark:border-red-500/30 bg-white dark:bg-gray-900 text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all"
+            aria-label="清除失败记录"
+            className="gallery-toolbar__icon gallery-toolbar__icon--danger"
             title="清除失败记录"
-          >
-            <TrashIcon className="w-5 h-5" />
-          </button>
-        )}
-      </div>
-      <div className="relative flex-1 min-w-0 z-10">
-        <svg
-          className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            icon={<TrashIcon className="h-5 w-5" />}
           />
-        </svg>
-        <input
+        )}
+      </Toolbar>
+      <div className="relative z-10 min-w-0 flex-1">
+        <SearchField
+          label="搜索任务"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          type="text"
+          onChange={setSearchQuery}
+          onClear={() => setSearchQuery('')}
           placeholder="搜索提示词、参数..."
-          className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
         />
       </div>
     </div>

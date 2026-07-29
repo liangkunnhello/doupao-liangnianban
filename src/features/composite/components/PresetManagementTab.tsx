@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Plus, Trash2, ChevronRight, ChevronDown, Folder, FolderOpen, FileText } from 'lucide-react'
+import {
+  ChevronDownIcon as ChevronDown,
+  ChevronRightIcon as ChevronRight,
+  CopyIcon as Copy,
+  FileTextIcon as FileText,
+  FolderIcon as Folder,
+  FolderOpenIcon as FolderOpen,
+  PlusIcon as Plus,
+  TrashIcon as Trash2,
+} from '../../../design-system/icons'
 import { filterPresetsForLibrary } from '../lib/compositePresetLibrary'
 import type { CompositeFsImage } from '../lib/compositeTypes'
 import {

@@ -1,6 +1,9 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { CloseIcon, PlusIcon, TrashIcon, ExportIcon } from './icons'
+import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap } from '../design-system'
 
 export default function WorkspaceTabManagerModal() {
   const open = useStore((s) => s.workspaceTabManagerOpen)
@@ -30,6 +33,7 @@ export default function WorkspaceTabManagerModal() {
   const [editingName, setEditingName] = useState('')
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState('')
+  const modalRef = useRef<HTMLDivElement>(null)
 
   const filteredTabs = useMemo(() => {
     if (!searchQuery.trim()) return workspaceTabs
@@ -184,16 +188,20 @@ export default function WorkspaceTabManagerModal() {
     })
   }, [deleteWorkspaceTabGroup, setConfirmDialog, showToast])
 
+  useCloseOnEscape(open, handleClose)
+  usePreventBackgroundScroll(open, modalRef)
+  useDialogFocusTrap(open, modalRef)
+
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40 animate-overlay-in" onClick={handleClose} />
-      <div className="relative w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl border border-border bg-background shadow-xl animate-modal-in mx-4">
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center">
+      <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" onClick={handleClose} />
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="workspace-tab-manager-title" className="ds-modal-surface relative w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl border animate-modal-in motion-reduce:animate-none mx-4">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold">标签页管理</h2>
-          <button onClick={handleClose} className="p-1 rounded hover:bg-muted text-muted-foreground transition-colors">
+          <h2 id="workspace-tab-manager-title" className="text-sm font-semibold">标签页管理</h2>
+          <button onClick={handleClose} aria-label="关闭标签页管理" className="p-1 rounded hover:bg-muted text-muted-foreground transition-colors">
             <CloseIcon className="w-4 h-4" />
           </button>
         </div>

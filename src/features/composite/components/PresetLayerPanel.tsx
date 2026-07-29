@@ -1,5 +1,16 @@
 import { useState } from 'react'
-import { AlignCenter, AlignLeft, AlignRight, ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Trash2 } from 'lucide-react'
+import {
+  AlignCenterIcon as AlignCenter,
+  AlignLeftIcon as AlignLeft,
+  AlignRightIcon as AlignRight,
+  ChevronDownIcon as ChevronDown,
+  ChevronUpIcon as ChevronUp,
+  EyeIcon as Eye,
+  EyeOffIcon as EyeOff,
+  LockIcon as Lock,
+  LockOpenIcon as LockOpen,
+  TrashIcon as Trash2,
+} from '../../../design-system/icons'
 import { fitCompositeTextLayer } from '../lib/compositeTextLayout'
 import type { CompositeV2Layer, CompositeV2Preset } from '../lib/compositeV2Types'
 

@@ -11,12 +11,22 @@ import {
   type GenerationStatsRange,
   type GenerationStatsTabCount,
 } from '../lib/generationStats'
+import type { AppMode, ColorScheme } from '../types'
+import { SegmentedControl } from '../design-system'
 import ViewportTooltip from './ViewportTooltip'
 import HelpModal from './HelpModal'
 import { useFavoriteCollectionTitle } from './FavoriteCollections'
-import { HelpCircleIcon, MoonIcon, SettingsIcon, SunIcon } from './icons'
+import { HelpCircleIcon, MoonIcon, PaletteIcon, SettingsIcon, SunIcon } from './icons'
 
 type GenerationStatsMetricKey = 'total' | 'elapsedMs' | 'success' | 'failure'
+
+const appModeOptions: Array<{ value: AppMode; label: string }> = [
+  { value: 'gallery', label: '画廊' },
+  { value: 'strategy', label: '策略' },
+  { value: 'ordering', label: '下单' },
+  { value: 'postprocess', label: '后期处理' },
+  { value: 'agent', label: 'Agent' },
+]
 
 function formatGenerationStatsValue(key: GenerationStatsMetricKey, value: number) {
   if (key === 'elapsedMs') return formatGenerationStatsDuration(value)
@@ -135,6 +145,7 @@ export default function Header() {
   const appMode = useStore((s) => s.appMode)
   const setAppMode = useStore((s) => s.setAppMode)
   const themeMode = useStore((s) => s.settings.themeMode)
+  const colorScheme = useStore((s) => s.settings.colorScheme)
   const setSettings = useStore((s) => s.setSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -193,8 +204,31 @@ export default function Header() {
   const helpTooltip = useTooltip()
   const themeTooltip = useTooltip()
   const settingsTooltip = useTooltip()
+  const schemeTooltip = useTooltip()
   const nextThemeMode = themeMode === 'dark' ? 'light' : 'dark'
   const themeTooltipText = nextThemeMode === 'dark' ? '切换深色主题' : '切换浅色主题'
+  const schemeOrder: ColorScheme[] = [
+    'default',
+    'apple',
+    'xiaomi',
+    'rose',
+    'lake',
+    'sunset',
+    'lavender',
+    'midnight',
+  ]
+  const schemeLabels: Record<ColorScheme, string> = {
+    default: '默认',
+    apple: 'Apple',
+    xiaomi: '小米',
+    rose: '玫瑰花园',
+    lake: '湖光',
+    sunset: '日落霞光',
+    lavender: '薰衣草梦',
+    midnight: '暗夜',
+  }
+  const nextScheme = schemeOrder[(schemeOrder.indexOf(colorScheme) + 1) % schemeOrder.length]
+  const schemeTooltipText = `配色：${schemeLabels[colorScheme]}（点击切换为 ${schemeLabels[nextScheme]}）`
 
   return (
     <>
@@ -232,7 +266,7 @@ export default function Header() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={dismiss}
-                  className="absolute -right-1 -top-1 translate-x-full -translate-y-1/4 px-1 py-0.5 rounded-[4px] border border-red-500/30 text-[9px] font-black bg-red-500 text-white hover:bg-red-600 transition-all animate-fade-in leading-none shadow-sm"
+                  className="absolute -right-1 -top-1 translate-x-full -translate-y-1/4 px-1 py-0.5 rounded-[4px] border border-red-500/30 text-[9px] font-black bg-red-500 text-white hover:bg-red-600 transition animate-fade-in leading-none shadow-sm"
                   title={`新版本 ${latestRelease.tag}`}
                 >
                   NEW
@@ -250,28 +284,13 @@ export default function Header() {
           <div className="mr-3">
             <GenerationStatsBar />
           </div>
-          <div className="hidden sm:flex items-center gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mr-4">
-            <button
-              type="button"
-              onClick={() => setAppMode('gallery')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              画廊
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('postprocess')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'postprocess' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              后期处理
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              Agent
-            </button>
+          <div className="mr-4 hidden sm:block">
+            <SegmentedControl
+              aria-label="切换工作区"
+              value={appMode}
+              options={appModeOptions}
+              onValueChange={setAppMode}
+            />
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <div
@@ -294,6 +313,24 @@ export default function Header() {
               </button>
               <ViewportTooltip visible={themeTooltip.visible} className="whitespace-nowrap">
                 {themeTooltipText}
+              </ViewportTooltip>
+            </div>
+            <div
+              className="relative"
+              {...schemeTooltip.handlers}
+            >
+              <button
+                onClick={() => {
+                  dismissAllTooltips()
+                  setSettings({ colorScheme: nextScheme })
+                }}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+                aria-label={schemeTooltipText}
+              >
+                <PaletteIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              </button>
+              <ViewportTooltip visible={schemeTooltip.visible} className="whitespace-nowrap">
+                {schemeTooltipText}
               </ViewportTooltip>
             </div>
             <div
@@ -331,43 +368,30 @@ export default function Header() {
             </div>
           </div>
         </div>
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
-          <div className="grid grid-cols-3 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
-            <button
-              type="button"
-              onClick={() => setAppMode('gallery')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              画廊
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('postprocess')}
-              className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'postprocess' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              自动化分发
-            </button>
-            <button
-              type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
-            >
-              Agent
-            </button>
-          </div>
+        <div className={`safe-area-x sm:hidden overflow-hidden transition duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
+          <SegmentedControl
+            aria-label="切换工作区"
+            value={appMode}
+            options={appModeOptions.map((item) =>
+              item.value === 'postprocess' ? { ...item, label: '后期' } : item,
+            )}
+            onValueChange={setAppMode}
+            size="sm"
+            className="app-mode-switcher--mobile mx-2"
+          />
         </div>
       </header>
       
       {/* Hint for sliding down */}
-      <div className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out sm:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}>
+      <div className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition duration-300 ease-in-out sm:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}>
         <div className="bg-black/60 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-b-xl shadow-lg">
           下拉展示顶栏
         </div>
       </div>
 
-      <div className={`safe-area-top invisible pointer-events-none transition-all duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
+      <div className={`safe-area-top invisible pointer-events-none transition duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? 'max-h-0 sm:max-h-[500px] opacity-0 sm:opacity-100 overflow-hidden sm:overflow-visible' : 'max-h-[500px] opacity-100'}`} aria-hidden="true">
         <div className="safe-header-inner" />
-        <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-20 pb-2'}`}>
+        <div className={`safe-area-x sm:hidden overflow-hidden transition duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 pb-0' : 'max-h-20 pb-2'}`}>
           <div className="p-1">
             <div className="py-1.5 text-sm">占位</div>
           </div>

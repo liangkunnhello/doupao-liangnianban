@@ -1,4 +1,5 @@
 import type { AppSettings, TaskParams } from '../types'
+import { apiFetch as fetch } from './desktopApiFetch'
 
 export const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -16,8 +17,8 @@ export interface CallApiOptions {
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
   maskDataUrl?: string
-  onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
-  onCustomTaskEnqueued?: (task: { taskId: string }) => void
+  onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void | Promise<void>
+  onCustomTaskEnqueued?: (task: { taskId: string }) => void | Promise<void>
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
 }
 
@@ -161,22 +162,28 @@ export async function fetchImageUrlAsDataUrl(url: string, fallbackMime: string, 
 }
 
 export async function getApiErrorMessage(response: Response): Promise<string> {
-  let errorMsg = `HTTP ${response.status}`
+  const statusLabel = `HTTP ${response.status}`
+  let errorMsg = ''
   try {
-    const errJson = await response.json()
+    const rawText = await response.text()
+    if (!rawText.trim()) return statusLabel
+    let errJson: any
+    try {
+      errJson = JSON.parse(rawText)
+    } catch {
+      errorMsg = rawText.trim()
+      return errorMsg.startsWith(statusLabel) ? errorMsg : `${statusLabel}: ${errorMsg}`
+    }
     if (errJson.error?.message) errorMsg = errJson.error.message
     else if (typeof errJson.detail === 'string') errorMsg = errJson.detail
     else if (Array.isArray(errJson.detail)) errorMsg = errJson.detail.map((item: unknown) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
     else if (typeof errJson.error === 'string') errorMsg = errJson.error
     else if (errJson.message) errorMsg = errJson.message
   } catch {
-    try {
-      errorMsg = await response.text()
-    } catch {
-      /* ignore */
-    }
+    return statusLabel
   }
-  return errorMsg
+  if (!errorMsg) return statusLabel
+  return errorMsg.startsWith(statusLabel) ? errorMsg : `${statusLabel}: ${errorMsg}`
 }
 
 export function pickActualParams(source: unknown): Partial<TaskParams> {
@@ -206,13 +213,62 @@ export function mergeActualParams(...sources: Array<Partial<TaskParams> | undefi
 export function isRetryableError(err: unknown): boolean {
   if (err instanceof Error) {
     const msg = err.message || ''
-    if (/^HTTP 429\b/.test(msg) || /^HTTP 5\d{2}\b/.test(msg)) return true
+    if (/^HTTP (?:408|429|5\d{2})\b/.test(msg)) return true
     if (/rate.?limit/i.test(msg)) return true
     if (/timeout/i.test(msg)) return true
-    if (/network/i.test(msg)) return true
+    if (/network|failed to fetch|fetch failed|load failed/i.test(msg)) return true
     if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND/i.test(msg)) return true
   }
   return false
+}
+
+export async function retryTransientRequest<T>(
+  handler: (attempt: number) => Promise<T>,
+  options: {
+    maxRetries: number
+    signal?: AbortSignal
+    shouldRetry?: (error: unknown, attempt: number) => boolean
+  },
+): Promise<T> {
+  let lastError: unknown
+  const maxRetries = Math.max(0, Math.trunc(options.maxRetries))
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason instanceof Error
+        ? options.signal.reason
+        : new DOMException('请求已停止', 'AbortError')
+    }
+    if (attempt > 0) {
+      const delayMs = Math.min(30_000, 1000 * Math.pow(2, attempt - 1))
+      await new Promise<void>((resolve, reject) => {
+        const finish = () => {
+          options.signal?.removeEventListener('abort', abort)
+          resolve()
+        }
+        const abort = () => {
+          clearTimeout(timer)
+          reject(options.signal?.reason instanceof Error
+            ? options.signal.reason
+            : new DOMException('请求已停止', 'AbortError'))
+        }
+        const timer = setTimeout(finish, delayMs)
+        options.signal?.addEventListener('abort', abort, { once: true })
+      })
+    }
+
+    try {
+      return await handler(attempt)
+    } catch (error) {
+      lastError = error
+      const retryable = options.shouldRetry
+        ? options.shouldRetry(error, attempt)
+        : isRetryableError(error)
+      if (attempt >= maxRetries || !retryable) throw error
+    }
+  }
+
+  throw lastError
 }
 
 export async function runWithConcurrencyAndRetry<T, R>(
@@ -232,23 +288,15 @@ export async function runWithConcurrencyAndRetry<T, R>(
       let lastError: unknown = undefined
       let succeeded = false
 
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        if (attempt > 0) {
-          const delayMs = Math.min(30_000, 1000 * Math.pow(2, attempt - 1))
-          await new Promise((resolve) => setTimeout(resolve, delayMs))
-        }
-        try {
-          const result = await handler(item, index)
-          results[index] = { status: 'fulfilled', value: result }
-          succeeded = true
-          break
-        } catch (err) {
-          lastError = err
-          if (attempt < maxRetries && isRetryableError(err)) {
-            continue
-          }
-          break
-        }
+      try {
+        const result = await retryTransientRequest(
+          () => handler(item, index),
+          { maxRetries },
+        )
+        results[index] = { status: 'fulfilled', value: result }
+        succeeded = true
+      } catch (err) {
+        lastError = err
       }
 
       if (!succeeded) {

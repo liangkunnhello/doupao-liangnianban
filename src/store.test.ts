@@ -3,7 +3,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultScheduleRows } from './lib/schedule'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ExportData, StoredCompositeAsset, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
+import type { AgentConversation, ExportData, SopBatchSnapshot, StoredCompositeAsset, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 import { formatGeneratedImageDate } from './lib/generatedImageFilename'
 vi.mock('./lib/db', () => {
@@ -12,6 +12,7 @@ vi.mock('./lib/db', () => {
   const thumbnails = new Map<string, StoredImageThumbnail>()
   const compositeAssets = new Map<string, StoredCompositeAsset>()
   const agentConversations = new Map<string, AgentConversation>()
+  const sopBatchSnapshots = new Map<string, SopBatchSnapshot>()
   let imageSeq = 0
 
   return {
@@ -50,6 +51,15 @@ vi.mock('./lib/db', () => {
     replaceAgentConversations: async (conversations: AgentConversation[]) => {
       agentConversations.clear()
       for (const conversation of conversations) agentConversations.set(conversation.id, conversation)
+    },
+    getSopBatchSnapshot: async (id: string) => sopBatchSnapshots.get(id),
+    getAllSopBatchSnapshots: async () => [...sopBatchSnapshots.values()],
+    putSopBatchSnapshot: async (snapshot: SopBatchSnapshot) => {
+      sopBatchSnapshots.set(snapshot.id, snapshot)
+      return snapshot.id
+    },
+    clearSopBatchSnapshots: async () => {
+      sopBatchSnapshots.clear()
     },
     getWordLibraryState: async () => undefined,
     putWordLibraryState: async () => undefined,
@@ -170,7 +180,7 @@ vi.mock('./lib/agentApi', () => ({
 import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, moveTasksToWorkspaceTab, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -539,6 +549,33 @@ describe('workspace tab defaults', () => {
     await removeTask(older)
 
     expect(useStore.getState().tasks.find((item) => item.id === newer.id)?.filenameBatch).toBe(2)
+  })
+
+  it('moves selected tasks from the current workspace tab without duplicating global tasks', () => {
+    const firstTask = task({ id: 'task-first', createdAt: 2 })
+    const secondTask = task({ id: 'task-second', createdAt: 1 })
+    const showToast = vi.fn()
+    useStore.setState({
+      tasks: [firstTask, secondTask],
+      workspaceTabs: [
+        workspaceTab({ id: 'tab-source', name: '来源标签', tasks: [firstTask, secondTask], order: 0 }),
+        workspaceTab({ id: 'tab-target', name: '目标标签', tasks: [], order: 1 }),
+      ],
+      activeWorkspaceTabId: 'tab-source',
+      selectedTaskIds: [firstTask.id],
+      showToast,
+    })
+
+    expect(moveTasksToWorkspaceTab([firstTask.id], 'tab-target', 'tab-source')).toBe(true)
+
+    const state = useStore.getState()
+    expect(state.workspaceTabs.find((tab) => tab.id === 'tab-source')?.tasks.map((item) => item.id))
+      .toEqual([secondTask.id])
+    expect(state.workspaceTabs.find((tab) => tab.id === 'tab-target')?.tasks.map((item) => item.id))
+      .toEqual([firstTask.id])
+    expect(state.tasks.map((item) => item.id)).toEqual([firstTask.id, secondTask.id])
+    expect(state.selectedTaskIds).toEqual([])
+    expect(showToast).toHaveBeenCalledWith('已将 1 个任务移动到「目标标签」', 'success')
   })
 })
 
@@ -1218,9 +1255,28 @@ describe('interrupted OpenAI running tasks', () => {
     const openAIRunning = task({ id: 'openai-running', apiProvider: 'openai', status: 'running', createdAt: 2_000, finishedAt: null, elapsed: null })
     const falRunning = task({ id: 'fal-running', apiProvider: 'fal', status: 'running', createdAt: 3_000, finishedAt: null, elapsed: null })
     const customAsyncRunning = task({ id: 'custom-running', apiProvider: 'custom-provider', customTaskId: 'task-1', status: 'running', createdAt: 4_000, finishedAt: null, elapsed: null })
+    const customBatchRunning = task({
+      id: 'custom-batch-running',
+      apiProvider: 'custom-provider',
+      status: 'running',
+      createdAt: 4_500,
+      finishedAt: null,
+      elapsed: null,
+      remoteGenerationRequests: [{
+        id: 'local-request-1',
+        provider: 'custom',
+        remoteRequestId: 'remote-task-1',
+        slotIndexes: [0],
+        requestedCount: 1,
+        attempt: 0,
+        status: 'running',
+        createdAt: 4_500,
+        updatedAt: 4_600,
+      }],
+    })
     const doneTask = task({ id: 'done-task', apiProvider: 'openai', status: 'done' })
 
-    const result = markInterruptedOpenAIRunningTasks([legacyRunning, openAIRunning, falRunning, customAsyncRunning, doneTask], now)
+    const result = markInterruptedOpenAIRunningTasks([legacyRunning, openAIRunning, falRunning, customAsyncRunning, customBatchRunning, doneTask], now)
 
     expect(result.interruptedTasks.map((item) => item.id)).toEqual(['legacy-running', 'openai-running'])
     expect(result.tasks.find((item) => item.id === 'legacy-running')).toMatchObject({
@@ -1237,6 +1293,7 @@ describe('interrupted OpenAI running tasks', () => {
     })
     expect(result.tasks.find((item) => item.id === 'fal-running')).toEqual(falRunning)
     expect(result.tasks.find((item) => item.id === 'custom-running')).toEqual(customAsyncRunning)
+    expect(result.tasks.find((item) => item.id === 'custom-batch-running')).toEqual(customBatchRunning)
     expect(result.tasks.find((item) => item.id === 'done-task')).toEqual(doneTask)
   })
 })

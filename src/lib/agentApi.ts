@@ -2,6 +2,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_W
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { appendStreamingFormatHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
 import { getAdNegativeRule } from './adNegativeRules'
+import { apiFetch as fetch } from './desktopApiFetch'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -704,7 +705,7 @@ async function parseAgentStreamResponse(
   }
 }
 
-export async function callAgentResponsesApi(opts: {
+export interface AgentApiCallOptions {
   settings: AppSettings
   profile: ApiProfile
   params: TaskParams
@@ -717,7 +718,9 @@ export async function callAgentResponsesApi(opts: {
   onImagePartialImage?: (event: { toolCallId: string; image: string; partialImageIndex?: number; outputIndex?: number }) => void | Promise<void>
   onImageToolCompleted?: (image: AgentApiResultImage) => void | Promise<void>
   onImageToolFailed?: (event: AgentApiImageToolFailure) => void | Promise<void>
-}): Promise<AgentApiResult> {
+}
+
+export async function callAgentResponsesApi(opts: AgentApiCallOptions): Promise<AgentApiResult> {
   const { settings, profile, params, input, maskDataUrl, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted, onImageToolFailed } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
@@ -771,6 +774,237 @@ export async function callAgentResponsesApi(opts: {
   }
 }
 
+type ChatToolCall = {
+  id: string
+  name: string
+  arguments: string
+}
+
+function createChatCompletionTools(params: TaskParams, profile: ApiProfile, settings: AppSettings) {
+  return createAgentTools(params, profile, settings)
+    .filter((tool) => tool.type === 'function' && typeof tool.name === 'string')
+    .map((tool) => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        ...(typeof tool.strict === 'boolean' ? { strict: tool.strict } : {}),
+      },
+    }))
+}
+
+function toChatContent(content: unknown): unknown {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  const parts: Array<Record<string, unknown>> = []
+  for (const part of content) {
+    if (!isRecordValue(part)) continue
+    if ((part.type === 'input_text' || part.type === 'output_text') && typeof part.text === 'string') {
+      parts.push({ type: 'text', text: part.text })
+      continue
+    }
+    if (part.type === 'input_image' && typeof part.image_url === 'string') {
+      parts.push({ type: 'image_url', image_url: { url: part.image_url } })
+    }
+  }
+
+  return parts.length === 1 && isRecordValue(parts[0]) && parts[0].type === 'text'
+    ? parts[0].text
+    : parts
+}
+
+function toChatCompletionMessages(input: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(input)) return [{ role: 'user', content: typeof input === 'string' ? input : JSON.stringify(input) }]
+
+  const messages: Array<Record<string, unknown>> = []
+  const appendToolCall = (call: ChatToolCall) => {
+    const previous = messages[messages.length - 1]
+    const toolCall = {
+      id: call.id,
+      type: 'function',
+      function: { name: call.name, arguments: call.arguments },
+    }
+    if (previous?.role === 'assistant' && !messages.slice(-1).some((message) => message.role === 'tool')) {
+      const existing = Array.isArray(previous.tool_calls) ? previous.tool_calls : []
+      previous.tool_calls = [...existing, toolCall]
+      return
+    }
+    messages.push({ role: 'assistant', content: null, tool_calls: [toolCall] })
+  }
+
+  for (const value of input) {
+    if (!isRecordValue(value)) continue
+    if (value.role === 'user' || value.role === 'assistant') {
+      messages.push({ role: value.role, content: toChatContent(value.content) })
+      continue
+    }
+    if (value.type === 'message') {
+      messages.push({ role: 'assistant', content: toChatContent(value.content) })
+      continue
+    }
+    if (value.type === 'function_call' && typeof value.call_id === 'string' && typeof value.name === 'string') {
+      appendToolCall({
+        id: value.call_id,
+        name: value.name,
+        arguments: typeof value.arguments === 'string' ? value.arguments : '',
+      })
+      continue
+    }
+    if (value.type === 'function_call_output' && typeof value.call_id === 'string') {
+      messages.push({
+        role: 'tool',
+        tool_call_id: value.call_id,
+        content: typeof value.output === 'string' ? value.output : JSON.stringify(value.output ?? ''),
+      })
+    }
+  }
+
+  return messages
+}
+
+function createChatOutputItems(text: string, toolCalls: ChatToolCall[], responseId?: string): ResponsesOutputItem[] {
+  const output: ResponsesOutputItem[] = []
+  if (text) {
+    output.push({
+      id: responseId ? `${responseId}-message` : undefined,
+      type: 'message',
+      status: 'completed',
+      content: [{ type: 'output_text', text }],
+    })
+  }
+  for (const call of toolCalls) {
+    output.push({
+      id: call.id,
+      type: 'function_call',
+      status: 'completed',
+      call_id: call.id,
+      name: call.name,
+      arguments: call.arguments,
+    })
+  }
+  return output
+}
+
+function parseChatToolCalls(value: unknown): ChatToolCall[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((toolCall, index) => {
+    if (!isRecordValue(toolCall)) return []
+    const fn = isRecordValue(toolCall.function) ? toolCall.function : null
+    const name = fn && typeof fn.name === 'string' ? fn.name : ''
+    if (!name) return []
+    return [{
+      id: typeof toolCall.id === 'string' && toolCall.id ? toolCall.id : `chat_tool_${index}`,
+      name,
+      arguments: fn && typeof fn.arguments === 'string' ? fn.arguments : '',
+    }]
+  })
+}
+
+export async function callAgentChatCompletionsApi(opts: AgentApiCallOptions): Promise<AgentApiResult> {
+  const { settings, profile, params, input, signal, onTextDelta, onOutputItems } = opts
+  if (settings.agentApiConfigMode !== 'hybrid') {
+    throw new Error('Chat Completions Agent 仅支持 Hybrid 图像调用方式')
+  }
+
+  const proxyConfig = readClientDevProxyConfig()
+  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const abortFromCaller = () => controller.abort(signal?.reason)
+  if (signal?.aborted) controller.abort(signal.reason)
+  signal?.addEventListener('abort', abortFromCaller, { once: true })
+
+  try {
+    const body: Record<string, unknown> = {
+      model: profile.model || settings.model,
+      messages: [
+        { role: 'system', content: createAgentInstructions(settings, params) },
+        ...toChatCompletionMessages(input),
+      ],
+      tools: createChatCompletionTools(params, profile, settings),
+    }
+    if (profile.streamImages) body.stream = true
+
+    const response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
+      method: 'POST',
+      headers: createHeaders(profile),
+      cache: 'no-store',
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await getApiErrorMessage(response))
+
+    if (profile.streamImages && isEventStreamResponse(response)) {
+      let responseId: string | undefined
+      let text = ''
+      const streamedToolCalls = new Map<number, ChatToolCall>()
+      await readJsonServerSentEvents(response, async (event) => {
+        if (typeof event.id === 'string') responseId = event.id
+        const choices = Array.isArray(event.choices) ? event.choices : []
+        for (const choice of choices) {
+          if (!isRecordValue(choice) || !isRecordValue(choice.delta)) continue
+          const delta = choice.delta
+          if (typeof delta.content === 'string' && delta.content) {
+            text += delta.content
+            onTextDelta?.(delta.content)
+          }
+          if (!Array.isArray(delta.tool_calls)) continue
+          for (const rawToolCall of delta.tool_calls) {
+            if (!isRecordValue(rawToolCall)) continue
+            const index = typeof rawToolCall.index === 'number' ? rawToolCall.index : streamedToolCalls.size
+            const previous = streamedToolCalls.get(index) ?? { id: '', name: '', arguments: '' }
+            const fn = isRecordValue(rawToolCall.function) ? rawToolCall.function : null
+            streamedToolCalls.set(index, {
+              id: typeof rawToolCall.id === 'string' ? rawToolCall.id : previous.id,
+              name: fn && typeof fn.name === 'string' ? previous.name + fn.name : previous.name,
+              arguments: fn && typeof fn.arguments === 'string' ? previous.arguments + fn.arguments : previous.arguments,
+            })
+          }
+        }
+      }, [controller.signal, signal])
+      const toolCalls = [...streamedToolCalls.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([index, call]) => ({ ...call, id: call.id || `chat_tool_${index}` }))
+      const outputItems = createChatOutputItems(text.trim(), toolCalls, responseId)
+      onOutputItems?.(outputItems)
+      return {
+        responseId,
+        text: text.trim(),
+        images: [],
+        outputItems,
+      }
+    }
+
+    const payload = await response.json() as Record<string, unknown>
+    const choices = Array.isArray(payload.choices) ? payload.choices : []
+    const firstChoice = choices.find(isRecordValue)
+    const message = firstChoice && isRecordValue(firstChoice.message) ? firstChoice.message : null
+    const text = message && typeof message.content === 'string' ? message.content.trim() : ''
+    const toolCalls = parseChatToolCalls(message?.tool_calls)
+    const responseId = typeof payload.id === 'string' ? payload.id : undefined
+    const outputItems = createChatOutputItems(text, toolCalls, responseId)
+    onOutputItems?.(outputItems)
+    return {
+      responseId,
+      text,
+      images: [],
+      outputItems,
+      rawResponsePayload: JSON.stringify(payload, null, 2),
+    }
+  } finally {
+    clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abortFromCaller)
+  }
+}
+
+export function callAgentApi(opts: AgentApiCallOptions): Promise<AgentApiResult> {
+  return opts.settings.agentTextProtocol === 'chat-completions'
+    ? callAgentChatCompletionsApi(opts)
+    : callAgentResponsesApi(opts)
+}
+
 export async function callAgentConversationTitleApi(opts: {
   settings: AppSettings
   profile: ApiProfile
@@ -793,6 +1027,32 @@ export async function callAgentConversationTitleApi(opts: {
     ]
     for (const dataUrl of imageDataUrls ?? []) {
       content.push({ type: 'input_image', image_url: dataUrl })
+    }
+
+    if (settings.agentTextProtocol === 'chat-completions') {
+      const chatContent = content.map((part) => part.type === 'input_image'
+        ? { type: 'image_url', image_url: { url: part.image_url } }
+        : { type: 'text', text: part.text })
+      const response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
+        method: 'POST',
+        headers: createHeaders(profile),
+        cache: 'no-store',
+        body: JSON.stringify({
+          model: profile.model || settings.model,
+          messages: [
+            { role: 'system', content: AGENT_TITLE_INSTRUCTIONS },
+            { role: 'user', content: chatContent },
+          ],
+          max_tokens: 32,
+        }),
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(await getApiErrorMessage(response))
+      const payload = await response.json() as Record<string, unknown>
+      const choices = Array.isArray(payload.choices) ? payload.choices : []
+      const firstChoice = choices.find(isRecordValue)
+      const message = firstChoice && isRecordValue(firstChoice.message) ? firstChoice.message : null
+      return parseAgentConversationTitleXml(message && typeof message.content === 'string' ? message.content : '')
     }
 
     const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {

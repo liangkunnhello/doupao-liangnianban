@@ -14,6 +14,7 @@ import {
   findEquivalentApiProfile,
   getApiProviderLabel,
   getActiveApiProfile,
+  getAgentTextApiProfile,
   importCustomProviderSettingsFromJson,
   isOpenAICompatibleProvider,
   mergeImportedSettings,
@@ -36,6 +37,7 @@ import { useVersionCheck } from '../hooks/useVersionCheck'
 import { formatUpdateReleaseNotes } from '../lib/updateReleaseNotes'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { useDialogFocusTrap, ColorPresetGrid, SectionHeader } from '../design-system'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
 import { shouldCopyProfileImportUrl } from '../lib/profileImportUrl'
@@ -51,6 +53,7 @@ function newId(prefix: string) {
 
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
 const COPY_IMPORT_URL_OPTIONS_STORAGE_KEY = 'gpt-image-playground.copy-import-url-options'
+const SETTINGS_TAB_ORDER: SettingsTab[] = ['api', 'general', 'data', 'backup', 'about']
 
 const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
   includeApiKey: false,
@@ -60,6 +63,11 @@ const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
 }
 
 type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+type ConnectionFeedback = {
+  type: 'success' | 'error'
+  message: string
+} | null
 
 const MODEL_TYPE_LABELS: Record<ModelType, string> = {
   multimodal: '多模态',
@@ -79,6 +87,69 @@ function getModelTypeClass(type: ModelType): string {
     default:
       return 'bg-gray-500/10 text-gray-500 dark:text-gray-400'
   }
+}
+
+export function ApiConnectionPanel({
+  loading,
+  feedback,
+  models,
+  onInspect,
+  onSelectModel,
+  selectedModelId,
+}: {
+  loading: boolean
+  feedback: ConnectionFeedback
+  models: AvailableModel[]
+  onInspect: () => void
+  onSelectModel: (modelId: string) => void
+  selectedModelId?: string
+}) {
+  const tone = loading ? 'blue' : feedback?.type === 'success' ? 'emerald' : feedback?.type === 'error' ? 'red' : 'gray'
+  const title = loading ? '正在检测连接与模型' : feedback?.type === 'success' ? '连接正常' : feedback?.type === 'error' ? '连接需要修正' : '等待检测'
+  const description = loading
+    ? '正在向服务商请求模型列表，请稍候。'
+    : feedback?.message ?? '填写 API URL 和 API Key 后，会自动检测连接并读取模型。'
+
+  return <section className={`rounded-xl border p-3.5 ${
+    tone === 'emerald' ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-500/20 dark:bg-emerald-500/[0.06]'
+      : tone === 'red' ? 'border-red-200 bg-red-50/70 dark:border-red-500/20 dark:bg-red-500/[0.06]'
+        : tone === 'blue' ? 'border-blue-200 bg-blue-50/70 dark:border-blue-500/20 dark:bg-blue-500/[0.06]'
+          : 'border-gray-200/80 bg-gray-50/70 dark:border-white/[0.08] dark:bg-white/[0.02]'
+  }`} aria-live="polite">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${tone === 'emerald' ? 'bg-emerald-500' : tone === 'red' ? 'bg-red-500' : tone === 'blue' ? 'animate-pulse bg-blue-500 motion-reduce:animate-none' : 'bg-gray-400'}`} />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">{title}</p>
+          <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{description}</p>
+        </div>
+      </div>
+      <button type="button" onClick={onInspect} disabled={loading} className="min-h-10 shrink-0 rounded-lg border border-gray-200/80 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.1] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]">
+        {loading ? '检测中…' : models.length ? '重新检测' : '检测连接'}
+      </button>
+    </div>
+    {models.length > 0 && <div className="mt-3 border-t border-current/10 pt-3">
+      <div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-gray-600 dark:text-gray-300">已发现 {models.length} 个模型</span><span className="text-xs text-gray-400">点击即可设为当前模型</span></div>
+      <div className="mt-2 flex flex-wrap gap-1.5">{models.slice(0, 8).map((model) => {
+        const selected = model.id === selectedModelId
+        return <button
+          key={model.id}
+          type="button"
+          onClick={() => onSelectModel(model.id)}
+          title={model.id}
+          aria-pressed={selected}
+          className={`flex max-w-full items-center gap-1 rounded-md px-2 py-1 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            selected
+              ? 'bg-blue-600 text-white shadow-sm hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-400'
+              : 'bg-white/80 text-gray-700 hover:bg-white hover:text-blue-700 dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1] dark:hover:text-blue-300'
+          }`}
+        >
+          <span className={`rounded px-1 py-0.5 text-[10px] ${selected ? 'bg-white/20 text-white' : getModelTypeClass(model.type)}`}>{MODEL_TYPE_LABELS[model.type]}</span>
+          <span className="max-w-36 truncate">{model.id}</span>
+        </button>
+      })}</div>
+    </div>}
+  </section>
 }
 
 const ZIP_DOWNLOAD_ROUTE_OPTIONS: Array<{ route: ZipDownloadRoute; label: string; description: string }> = [
@@ -346,6 +417,9 @@ export default function SettingsModal() {
   const settingsScrollBoundaryRef = useRef<HTMLDivElement>(null)
   const customProviderScrollBoundaryRef = useRef<HTMLDivElement>(null)
   const zipDownloadRouteScrollBoundaryRef = useRef<HTMLDivElement>(null)
+  const customProviderModalRef = useRef<HTMLDivElement>(null)
+  const zipDownloadRouteModalRef = useRef<HTMLDivElement>(null)
+  const copyImportUrlModalRef = useRef<HTMLDivElement>(null)
   
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
@@ -434,7 +508,14 @@ export default function SettingsModal() {
   const [agentModels, setAgentModels] = useState<AvailableModel[]>([])
   const [agentModelsLoading, setAgentModelsLoading] = useState(false)
   const [agentModelsError, setAgentModelsError] = useState<string | null>(null)
-  const [agentModelMenuOpen, setAgentModelMenuOpen] = useState(false)
+  const [agentModelManualEntry, setAgentModelManualEntry] = useState(false)
+  const [apiModels, setApiModels] = useState<AvailableModel[]>([])
+  const [apiModelsLoading, setApiModelsLoading] = useState(false)
+  const [apiModelsError, setApiModelsError] = useState<string | null>(null)
+  const [apiConnectionFeedback, setApiConnectionFeedback] = useState<ConnectionFeedback>(null)
+  const [agentConnectionFeedback, setAgentConnectionFeedback] = useState<ConnectionFeedback>(null)
+  const apiCatalogRequestRef = useRef(0)
+  const agentCatalogRequestRef = useRef(0)
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
@@ -445,6 +526,8 @@ export default function SettingsModal() {
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
+  const effectiveAgentProfile = getAgentTextApiProfile(draft)
+  const agentCatalogModels = agentModels
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
@@ -523,7 +606,7 @@ export default function SettingsModal() {
   }, [activeProfile.id, activeProfile.timeout])
 
   useEffect(() => {
-    if (showSettings && settingsTabRequest) setActiveTab(settingsTabRequest)
+    if (showSettings && settingsTabRequest) setActiveTab(settingsTabRequest === 'agent' ? 'api' : settingsTabRequest)
   }, [settingsTabRequest, showSettings])
 
   useEffect(() => {
@@ -545,40 +628,22 @@ export default function SettingsModal() {
   }, [activeTab])
 
   useEffect(() => {
-    if (!showSettings || !draft.agentUseCustomProfile) {
-      setAgentModels([])
-      setAgentModelsError(null)
-      setAgentModelsLoading(false)
-      return
-    }
-    if (!draft.agentProfile.baseUrl.trim() || !draft.agentProfile.apiKey.trim()) {
-      setAgentModels([])
-      setAgentModelsError(null)
-      setAgentModelsLoading(false)
-      return
-    }
+    apiCatalogRequestRef.current += 1
+    setApiModels([])
+    setApiModelsError(null)
+    setApiConnectionFeedback(null)
+  }, [activeProfile.id, activeProfile.baseUrl, activeProfile.apiKey, activeProfile.apiProxy])
 
-    const controller = new AbortController()
-    setAgentModelsLoading(true)
+  useEffect(() => {
+    agentCatalogRequestRef.current += 1
+    setAgentModels([])
     setAgentModelsError(null)
-    fetchAvailableModels(draft.agentProfile, controller.signal)
-      .then((models) => setAgentModels(models))
-      .catch((err) => {
-        if (controller.signal.aborted) return
-        setAgentModels([])
-        setAgentModelsError(err instanceof Error ? err.message : '模型列表拉取失败')
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setAgentModelsLoading(false)
-      })
-
-    return () => controller.abort()
+    setAgentConnectionFeedback(null)
   }, [
-    showSettings,
-    draft.agentUseCustomProfile,
-    draft.agentProfile.baseUrl,
-    draft.agentProfile.apiKey,
-    draft.agentProfile.apiProxy,
+    effectiveAgentProfile.id,
+    effectiveAgentProfile.baseUrl,
+    effectiveAgentProfile.apiKey,
+    effectiveAgentProfile.apiProxy,
   ])
 
   const handleSelectDirectory = async () => {
@@ -826,6 +891,74 @@ export default function SettingsModal() {
     commitSettings(nextDraft)
   }
 
+  const requestModelCatalog = useCallback(async (profile: ApiProfile, target: 'api' | 'agent') => {
+    const setLoading = target === 'api' ? setApiModelsLoading : setAgentModelsLoading
+    const setModels = target === 'api' ? setApiModels : setAgentModels
+    const setError = target === 'api' ? setApiModelsError : setAgentModelsError
+    const setFeedback = target === 'api' ? setApiConnectionFeedback : setAgentConnectionFeedback
+    const requestId = target === 'api' ? ++apiCatalogRequestRef.current : ++agentCatalogRequestRef.current
+
+    if (!profile.baseUrl.trim() || !profile.apiKey.trim()) {
+      const message = '请先填写 API URL 和 API Key'
+      setModels([])
+      setError(message)
+      setFeedback({ type: 'error', message })
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    setFeedback(null)
+    try {
+      const models = await fetchAvailableModels(profile)
+      if (requestId !== (target === 'api' ? apiCatalogRequestRef.current : agentCatalogRequestRef.current)) return
+      setModels(models)
+      setFeedback({
+        type: 'success',
+        message: models.length > 0 ? `连接成功，已拉取 ${models.length} 个模型` : '连接成功，但接口未返回模型列表',
+      })
+    } catch (error) {
+      if (requestId !== (target === 'api' ? apiCatalogRequestRef.current : agentCatalogRequestRef.current)) return
+      const message = error instanceof Error ? error.message : '连接失败'
+      setModels([])
+      setError(message)
+      setFeedback({ type: 'error', message })
+    } finally {
+      if (requestId === (target === 'api' ? apiCatalogRequestRef.current : agentCatalogRequestRef.current)) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!showSettings || activeTab !== 'api' || !activeProviderIsOpenAICompatible || !activeProfile.baseUrl.trim() || !activeProfile.apiKey.trim()) return
+    const timer = window.setTimeout(() => { void requestModelCatalog(activeProfile, 'api') }, 700)
+    return () => window.clearTimeout(timer)
+  }, [activeProfile.apiKey, activeProfile.apiProxy, activeProfile.baseUrl, activeProfile.id, activeProviderIsOpenAICompatible, activeTab, requestModelCatalog, showSettings])
+
+  useEffect(() => {
+    if (!showSettings || activeTab !== 'api') return
+    if (!effectiveAgentProfile.baseUrl.trim() || !effectiveAgentProfile.apiKey.trim()) return
+    const timer = window.setTimeout(() => { void requestModelCatalog(effectiveAgentProfile, 'agent') }, 700)
+    return () => window.clearTimeout(timer)
+  }, [
+    activeTab,
+    effectiveAgentProfile.id,
+    effectiveAgentProfile.baseUrl,
+    effectiveAgentProfile.apiKey,
+    effectiveAgentProfile.apiProxy,
+    requestModelCatalog,
+    showSettings,
+  ])
+
+  const selectApiModel = (modelId: string) => {
+    updateActiveProfile({ model: modelId }, true)
+    setApiConnectionFeedback({ type: 'success', message: `已选用模型：${modelId}` })
+  }
+
+  const selectAgentModel = (modelId: string) => {
+    updateAgentProfile({ model: modelId, apiMode: 'responses' }, true)
+    setAgentConnectionFeedback({ type: 'success', message: `已选用模型：${modelId}` })
+  }
+
   const handleClose = () => {
     if (showZipDownloadRouteManager) {
       setShowZipDownloadRouteManager(false)
@@ -902,8 +1035,31 @@ export default function SettingsModal() {
     }
   }
 
-  useCloseOnEscape(showSettings, handleClose)
-  usePreventBackgroundScroll(showSettings, showZipDownloadRouteManager ? zipDownloadRouteScrollBoundaryRef : showCustomProviderImport ? customProviderScrollBoundaryRef : settingsScrollBoundaryRef)
+  const hasNestedDialog = showZipDownloadRouteManager || showCustomProviderImport || Boolean(copyImportUrlProfile)
+  const handleSettingsTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, tab: SettingsTab) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const currentIndex = SETTINGS_TAB_ORDER.indexOf(tab)
+    const nextTab = event.key === 'Home'
+      ? SETTINGS_TAB_ORDER[0]
+      : event.key === 'End'
+        ? SETTINGS_TAB_ORDER[SETTINGS_TAB_ORDER.length - 1]
+        : SETTINGS_TAB_ORDER[(currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + SETTINGS_TAB_ORDER.length) % SETTINGS_TAB_ORDER.length]
+    setActiveTab(nextTab)
+    window.requestAnimationFrame(() => settingsScrollBoundaryRef.current?.querySelector<HTMLElement>(`[data-settings-tab="${nextTab}"]`)?.focus())
+  }
+  useCloseOnEscape(showSettings && !hasNestedDialog, handleClose)
+  useCloseOnEscape(showZipDownloadRouteManager, () => setShowZipDownloadRouteManager(false))
+  useCloseOnEscape(showCustomProviderImport, () => {
+    setShowCustomProviderImport(false)
+    setEditingCustomProviderId(null)
+  })
+  useCloseOnEscape(Boolean(copyImportUrlProfile), () => setCopyImportUrlProfile(null))
+  usePreventBackgroundScroll(showSettings, copyImportUrlProfile ? copyImportUrlModalRef : showZipDownloadRouteManager ? zipDownloadRouteScrollBoundaryRef : showCustomProviderImport ? customProviderScrollBoundaryRef : settingsScrollBoundaryRef)
+  useDialogFocusTrap(showSettings && !hasNestedDialog, settingsScrollBoundaryRef)
+  useDialogFocusTrap(showZipDownloadRouteManager, zipDownloadRouteModalRef)
+  useDialogFocusTrap(showCustomProviderImport, customProviderModalRef)
+  useDialogFocusTrap(Boolean(copyImportUrlProfile), copyImportUrlModalRef)
 
   if (!showSettings) return null
 
@@ -1138,18 +1294,32 @@ export default function SettingsModal() {
     commitSettings(nextDraft)
   }
 
+  const openCreateCustomProvider = () => {
+    setEditingCustomProviderId(null)
+    setCustomProviderForm(createDefaultCustomProviderForm())
+    setShowCustomProviderImport(true)
+    setCustomProviderImportError(null)
+  }
+
   const handleProviderTypeChange = (value: string | number) => {
     if (value === ADD_CUSTOM_PROVIDER_VALUE) {
-      setEditingCustomProviderId(null)
-      setCustomProviderForm(createDefaultCustomProviderForm())
-      setShowCustomProviderImport(true)
-      setCustomProviderImportError(null)
+      openCreateCustomProvider()
       return
     }
 
     const provider = String(value) as ApiProfile['provider']
     const customProvider = draft.customProviders.find((item) => item.id === provider)
-    updateActiveProfile(switchApiProfileProvider(activeProfile, provider, customProvider), true)
+    const nextProfile = switchApiProfileProvider(activeProfile, provider, customProvider)
+    const nextDraft = getDraftWithActiveProfilePatch(nextProfile)
+    commitSettings(provider === 'openai' || !draft.agentShareApiParameters
+      ? nextDraft
+      : {
+          ...nextDraft,
+          agentShareApiParameters: false,
+          agentUseCustomProfile: true,
+          agentProfileId: null,
+          agentProfile: { ...draft.agentProfile, provider: 'openai', apiMode: 'responses' },
+        })
   }
 
   const updateCustomProviderForm = (patch: Partial<CustomProviderForm>) => {
@@ -1299,24 +1469,27 @@ export default function SettingsModal() {
   }
 
   return (
-        <div data-no-drag-select className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+        <div data-no-drag-select className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in"
+        className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none"
         onClick={handleClose}
       />
       <div
         ref={settingsScrollBoundaryRef}
-        className="relative z-10 w-full max-w-3xl rounded-3xl border border-white/50 bg-white/95 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex h-[85vh] sm:h-[600px] flex-col overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        className="ds-modal-surface relative z-10 flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border animate-modal-in motion-reduce:animate-none sm:h-[600px]"
       >
         {/* Header */}
         <div className="flex items-center justify-between shrink-0 p-5 border-b border-gray-100 dark:border-white/[0.08]">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+          <h2 id="settings-dialog-title" className="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
             <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             设置
-          </h3>
+          </h2>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-400 dark:text-gray-500 font-mono select-none">v{__APP_VERSION__}</span>
             <button
@@ -1332,8 +1505,13 @@ export default function SettingsModal() {
         <div className="flex flex-1 min-h-0 flex-col sm:flex-row">
           {/* Sidebar */}
           <div className="w-full sm:w-48 shrink-0 flex flex-col border-b sm:border-b-0 sm:border-r border-gray-100 dark:border-white/[0.08] bg-gray-50/50 dark:bg-white/[0.02]">
-            <nav className="flex-1 overflow-x-auto sm:overflow-y-auto custom-scrollbar p-3 space-x-1 sm:space-x-0 sm:space-y-1 flex sm:flex-col">
+            <nav role="tablist" aria-label="设置分类" className="flex-1 overflow-x-auto sm:overflow-y-auto custom-scrollbar p-3 space-x-1 sm:space-x-0 sm:space-y-1 flex sm:flex-col">
               <button
+                role="tab"
+                aria-selected={activeTab === 'api'}
+                tabIndex={activeTab === 'api' ? 0 : -1}
+                data-settings-tab="api"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'api')}
                 onClick={() => setActiveTab('api')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'api' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1343,6 +1521,11 @@ export default function SettingsModal() {
                 API 配置
               </button>
               <button
+                role="tab"
+                aria-selected={activeTab === 'general'}
+                tabIndex={activeTab === 'general' ? 0 : -1}
+                data-settings-tab="general"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'general')}
                 onClick={() => setActiveTab('general')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'general' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1352,17 +1535,11 @@ export default function SettingsModal() {
                 习惯配置
               </button>
               <button
-                onClick={() => setActiveTab('agent')}
-                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'agent' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8V4H8" />
-                  <rect width="16" height="12" x="4" y="8" rx="2" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2 14h2M20 14h2M15 13v2M9 13v2" />
-                </svg>
-                Agent 配置
-              </button>
-              <button
+                role="tab"
+                aria-selected={activeTab === 'data'}
+                tabIndex={activeTab === 'data' ? 0 : -1}
+                data-settings-tab="data"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'data')}
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'data' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1372,6 +1549,11 @@ export default function SettingsModal() {
                 数据管理
               </button>
               <button
+                role="tab"
+                aria-selected={activeTab === 'backup'}
+                tabIndex={activeTab === 'backup' ? 0 : -1}
+                data-settings-tab="backup"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'backup')}
                 onClick={() => setActiveTab('backup')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'backup' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1382,6 +1564,11 @@ export default function SettingsModal() {
                 备份管理
               </button>
               <button
+                role="tab"
+                aria-selected={activeTab === 'about'}
+                tabIndex={activeTab === 'about' ? 0 : -1}
+                data-settings-tab="about"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'about')}
                 onClick={() => setActiveTab('about')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'about' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1395,9 +1582,22 @@ export default function SettingsModal() {
 
           {/* Content */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative overflow-hidden">
-            <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 sm:p-6">
+            <div className="flex flex-1 flex-col overflow-y-auto overscroll-contain custom-scrollbar p-5 sm:p-6">
             {activeTab === 'general' && (
               <div className="space-y-4">
+                <div className="block">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">配色预设</span>
+                  </div>
+                  <ColorPresetGrid
+                    value={draft.colorScheme}
+                    onChange={(val) => commitSettings({ ...draft, colorScheme: val })}
+                    columns={4}
+                  />
+                  <div data-selectable-text className="mt-2 text-xs text-gray-500 dark:text-gray-500">
+                    切换整体配色皮肤（中性色 + 主色 + 强调渐变），不影响布局与间距。
+                  </div>
+                </div>
                 <div className="hidden sm:block">
                   <div className="mb-1 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">任务提交方式</span>
@@ -1409,7 +1609,7 @@ export default function SettingsModal() {
                           { label: navigator.userAgent.includes('Mac') ? '⌘ + Enter' : 'Ctrl + Enter', value: 'ctrl-enter' },
                           { label: 'Enter', value: 'enter' }
                         ]}
-                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
                       />
                     </div>
                   </div>
@@ -1428,7 +1628,7 @@ export default function SettingsModal() {
                           { label: '发送按钮', value: 'button' },
                           { label: '回车/发送按钮', value: 'enter' }
                         ]}
-                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
                       />
                     </div>
                   </div>
@@ -1466,7 +1666,7 @@ export default function SettingsModal() {
                           { label: '替换参考图', value: 'replace-reference' },
                           { label: '添加遮罩', value: 'add-mask' },
                         ]}
-                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
                       />
                     </div>
                   </div>
@@ -1582,289 +1782,418 @@ export default function SettingsModal() {
               </div>
             )}
 
-            {activeTab === 'agent' && (
-              <div className="space-y-4">
-                <div>
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像生成模式</span>
+            {activeTab === 'api' && (
+              <section
+                aria-labelledby="image-api-settings-title"
+                className="order-1 space-y-4 rounded-2xl border border-gray-200/70 bg-white/70 p-4 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.025]"
+              >
+                <SectionHeader
+                  id="image-api-settings-title"
+                  title="生图 API"
+                  description="选择服务连接，填写密钥和图像模型后即可生成。"
+                  actions={(
+                    <button
+                      type="button"
+                      onClick={createNewProfile}
+                      className="min-h-9 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-blue-500 dark:hover:bg-blue-400"
+                    >
+                      添加生图服务
+                    </button>
+                  )}
+                />
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <span className="block text-sm font-medium text-gray-700 dark:text-gray-200">服务连接</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={duplicateActiveProfile}
+                        className="min-h-8 rounded-lg px-2 text-xs font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                      >
+                        复制
+                      </button>
+                      {draft.profiles.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => deleteProfile(activeProfile.id)}
+                          className="min-h-8 rounded-lg px-2 text-xs font-medium text-gray-500 transition hover:bg-red-50 hover:text-red-600 dark:text-gray-400 dark:hover:bg-red-500/10 dark:hover:text-red-300"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   <Select
-                    value={draft.agentApiConfigMode}
-                    onChange={(value) => commitSettings({ ...draft, agentApiConfigMode: value as 'native' | 'hybrid' })}
-                    options={[
-                      { label: '原生 Responses 工具', value: 'native' },
-                      { label: '混合模式（文本 Agent + 画廊图像配置）', value: 'hybrid' },
-                    ]}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                    value={activeProfile.id}
+                    onChange={(value) => switchProfile(String(value))}
+                    options={draft.profiles.map((profile) => ({
+                      label: `${profile.name}（${getApiProviderLabel(draft, profile.provider)}）`,
+                      value: profile.id,
+                    }))}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
-                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                    混合模式使用本页配置进行 Agent 对话，并使用当前画廊配置生成图片，适用于文本模型不支持原生 image_generation 工具的情况。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">允许改写图像提示词</span>
-                    <button
-                      type="button"
-                      onClick={() => commitSettings({ ...draft, allowPromptRewrite: !draft.allowPromptRewrite })}
-                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.allowPromptRewrite ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.allowPromptRewrite}
-                      aria-label="允许改写图像提示词"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.allowPromptRewrite ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    默认关闭，Agent 会要求图像工具严格使用原提示词；开启后允许模型为生成效果优化提示词。
-                  </div>
-                </div>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">使用独立配置</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
-                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
-                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
-                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
-                        commitSettings({ ...draft, agentMaxToolRounds, agentUseCustomProfile: !draft.agentUseCustomProfile })
-                      }}
-                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentUseCustomProfile ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.agentUseCustomProfile}
-                      aria-label="使用独立配置"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentUseCustomProfile ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    开启后，Agent 模式将使用下方独立配置的 API 参数，不再跟随画廊配置。
-                  </div>
                 </div>
 
-                {!draft.agentUseCustomProfile && (
-                  <div>
-                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 专用配置</span>
-                    <div className="w-full">
-                      <Select
-                        value={draft.agentProfileId ?? '__gallery__'}
-                        onChange={(val) => {
-                          const nextAgentProfileId = val === '__gallery__' ? null : String(val)
-                          commitSettings({ ...draft, agentProfileId: nextAgentProfileId })
-                        }}
-                        options={[
-                          { label: '跟随画廊配置', value: '__gallery__' },
-                          ...draft.profiles.map((profile) => ({
-                            label: `${profile.name}（${getApiProviderLabel(draft, profile.provider)}）`,
-                            value: profile.id,
-                          })),
-                        ]}
-                        className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-                      />
-                    </div>
-                    <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                      选择 Agent 模式使用的 API 配置。选择「跟随画廊配置」时，Agent 模式使用与画廊模式相同的配置。
-                    </div>
-                  </div>
+                {draft.profiles.length > 1 && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">配置名称</span>
+                    <input
+                      value={activeProfile.name}
+                      onChange={(event) => updateActiveProfile({ name: event.target.value })}
+                      onBlur={(event) => commitActiveProfilePatch({ name: event.target.value.trim() })}
+                      type="text"
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </label>
                 )}
 
-                {draft.agentUseCustomProfile && (
-                  <>
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">服务商类型</span>
+                    <button
+                      type="button"
+                      onClick={openCreateCustomProvider}
+                      className="min-h-8 rounded-lg px-2 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
+                    >
+                      新建服务商
+                    </button>
+                  </div>
+                  <Select
+                    value={activeProfile.provider}
+                    onChange={handleProviderTypeChange}
+                    onReorder={handleProviderReorder}
+                    options={providerOptions}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </div>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                  <div className="relative">
+                    <input
+                      value={activeProfile.apiKey}
+                      onChange={(event) => updateActiveProfile({ apiKey: event.target.value })}
+                      onBlur={(event) => commitActiveProfilePatch({ apiKey: event.target.value.trim() })}
+                      type={showApiKey ? 'text' : 'password'}
+                      placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-14 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((visible) => !visible)}
+                      className="absolute right-2 top-1/2 min-h-9 -translate-y-1/2 rounded-lg px-2 text-xs text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                      aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+                    >
+                      {showApiKey ? '隐藏' : '显示'}
+                    </button>
+                  </div>
+                </label>
+
+                {activeProviderUsesApiUrl && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API URL</span>
                     <div>
+                      <input
+                        value={activeProfile.baseUrl}
+                        onChange={(event) => updateActiveProfile({ baseUrl: event.target.value })}
+                        onBlur={(event) => commitActiveProfilePatch({ baseUrl: event.target.value.trim() })}
+                        disabled={apiProxyEnabled}
+                        type="url"
+                        placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
+                        aria-label="API URL"
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                      {apiProxyEnabled && <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">当前由服务器代理接管 API 地址。</p>}
+                    </div>
+                  </label>
+                )}
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图片模型</span>
+                  <input
+                    value={activeProfile.model}
+                    onChange={(event) => updateActiveProfile({ model: event.target.value })}
+                    onBlur={(event) => commitActiveProfilePatch({ model: event.target.value.trim() })}
+                    list="compact-image-model-options"
+                    type="text"
+                    placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode)}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <datalist id="compact-image-model-options">
+                    {apiModels.map((model) => <option key={model.id} value={model.id} />)}
+                  </datalist>
+                </label>
+
+                {activeProviderIsOpenAICompatible && <ApiConnectionPanel
+                  loading={apiModelsLoading}
+                  feedback={apiConnectionFeedback}
+                  models={apiModels}
+                  onInspect={() => void requestModelCatalog(activeProfile, 'api')}
+                  onSelectModel={selectApiModel}
+                  selectedModelId={activeProfile.model}
+                />}
+              </section>
+            )}
+
+            {activeTab === 'api' && (
+              <section
+                aria-labelledby="agent-api-settings-title"
+                className="order-2 mt-5 space-y-4 rounded-2xl border border-gray-200/70 bg-white/70 p-4 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.025]"
+              >
+                <SectionHeader
+                  id="agent-api-settings-title"
+                  title="Agent API"
+                  description="可复用生图连接，也可为文本 Agent 单独配置 OpenAI 兼容服务。"
+                />
+
+                <div>
+                  <span className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">连接方式</span>
+                  <Select
+                    value={draft.agentShareApiParameters ? 'shared' : 'independent'}
+                    onChange={(value) => {
+                      const agentShareApiParameters = value === 'shared'
+                      commitSettings({
+                        ...draft,
+                        agentShareApiParameters,
+                        agentUseCustomProfile: !agentShareApiParameters,
+                        agentProfileId: null,
+                        agentProfile: { ...draft.agentProfile, provider: 'openai', apiMode: 'responses' },
+                      })
+                    }}
+                    options={[
+                      ...(activeProfile.provider === 'openai'
+                        ? [{ label: `复用生图服务（${activeProfile.name}）`, value: 'shared' }]
+                        : []),
+                      { label: '独立 Agent 服务', value: 'independent' },
+                    ]}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <p className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    {draft.agentShareApiParameters
+                      ? 'API URL、密钥和网络参数跟随生图服务，Agent 模型仍单独设置。'
+                      : '独立服务适合为 Agent 使用不同的中转地址、密钥或模型。'}
+                  </p>
+                </div>
+
+                {!draft.agentShareApiParameters && (
+                  <>
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">服务名称</span>
+                      <input
+                        value={draft.agentProfile.name}
+                        onChange={(event) => updateAgentProfile({ name: event.target.value })}
+                        onBlur={(event) => commitAgentProfilePatch({ name: event.target.value.trim() || 'Agent 服务' })}
+                        type="text"
+                        placeholder="例如：Agent 中转服务"
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                    </label>
+
+                    <label className="block">
                       <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API URL</span>
                       <input
                         value={draft.agentProfile.baseUrl}
-                        onChange={(e) => updateAgentProfile({ baseUrl: e.target.value })}
-                        onBlur={() => commitAgentProfilePatch({ baseUrl: draft.agentProfile.baseUrl.trim() })}
-                        type="text"
-                        placeholder="https://api.openai.com"
+                        onChange={(event) => updateAgentProfile({ baseUrl: event.target.value })}
+                        onBlur={(event) => commitAgentProfilePatch({ baseUrl: event.target.value.trim() })}
+                        type="url"
+                        placeholder="https://api.openai.com/v1"
                         className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                       />
-                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        支持 OpenAI 格式 API 的 URL。
-                      </div>
-                    </div>
+                    </label>
 
-                    <div>
+                    <label className="block">
                       <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
                       <div className="relative">
                         <input
                           value={draft.agentProfile.apiKey}
-                          onChange={(e) => updateAgentProfile({ apiKey: e.target.value })}
-                          onBlur={() => commitAgentProfilePatch({ apiKey: draft.agentProfile.apiKey.trim() })}
+                          onChange={(event) => updateAgentProfile({ apiKey: event.target.value })}
+                          onBlur={(event) => commitAgentProfilePatch({ apiKey: event.target.value.trim() })}
                           type={showAgentApiKey ? 'text' : 'password'}
                           placeholder="sk-..."
-                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-14 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowAgentApiKey(!showAgentApiKey)}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
-                          aria-label={showAgentApiKey ? '隐藏 API Key' : '显示 API Key'}
+                          onClick={() => setShowAgentApiKey((visible) => !visible)}
+                          className="absolute right-2 top-1/2 min-h-9 -translate-y-1/2 rounded-lg px-2 text-xs text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                          aria-label={showAgentApiKey ? '隐藏 Agent API Key' : '显示 Agent API Key'}
                         >
-                          {showAgentApiKey ? (
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          ) : (
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                              <line x1="1" y1="1" x2="23" y2="23" />
-                            </svg>
-                          )}
+                          {showAgentApiKey ? '隐藏' : '显示'}
                         </button>
                       </div>
-                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        用于调用 Agent API 的密钥。
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型</span>
-                      <div className="relative">
-                        <div className="flex gap-2">
-                          <input
-                            value={draft.agentProfile.model}
-                            onChange={(e) => updateAgentProfile({ model: e.target.value })}
-                            onFocus={() => setAgentModelMenuOpen(true)}
-                            onBlur={() => commitAgentProfilePatch({ model: draft.agentProfile.model.trim() })}
-                            type="text"
-                            placeholder="gpt-4o"
-                            className="min-w-0 flex-1 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setAgentModelMenuOpen((open) => !open)}
-                            disabled={agentModelsLoading || agentModels.length === 0}
-                            className="rounded-xl border border-gray-200/70 bg-white/60 px-3 text-sm text-gray-500 transition hover:bg-white disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
-                            aria-label="选择模型"
-                          >
-                            <ChevronDownIcon className={`h-4 w-4 transition-transform ${agentModelMenuOpen ? 'rotate-180' : ''}`} />
-                          </button>
-                        </div>
-                        {agentModelMenuOpen && (
-                          <div className="absolute z-30 mt-1.5 max-h-56 w-full overflow-y-auto rounded-xl border border-gray-200/60 bg-white/95 p-1 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
-                            {agentModelsLoading ? (
-                              <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">正在拉取模型...</div>
-                            ) : agentModels.length > 0 ? (
-                              agentModels.map((model) => (
-                                <button
-                                  key={model.id}
-                                  type="button"
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={() => {
-                                    updateAgentProfile({ model: model.id }, true)
-                                    setAgentModelMenuOpen(false)
-                                  }}
-                                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition hover:bg-gray-100 dark:hover:bg-white/[0.06] ${draft.agentProfile.model === model.id ? 'text-blue-600 dark:text-blue-300' : 'text-gray-700 dark:text-gray-200'}`}
-                                >
-                                  <span className="min-w-0 truncate font-mono text-xs">{model.id}</span>
-                                  <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${getModelTypeClass(model.type)}`}>
-                                    {MODEL_TYPE_LABELS[model.type]}
-                                  </span>
-                                </button>
-                              ))
-                            ) : (
-                              <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
-                                {agentModelsError ? '模型列表拉取失败，可手动输入模型' : '暂无可选模型，可手动输入模型'}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        {agentModelsLoading ? '正在自动拉取可用模型。' : agentModelsError ? '模型列表拉取失败，仍可手动输入模型名称。' : '支持 Responses API 的模型名称，可从已拉取模型中选择。'}
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">超时时间</span>
-                      <input
-                        value={agentTimeoutInput}
-                        onChange={(e) => setAgentTimeoutInput(e.target.value)}
-                        onBlur={() => {
-                          const nextTimeout = agentTimeoutInput.trim() === '' || Number.isNaN(Number(agentTimeoutInput))
-                            ? DEFAULT_SETTINGS.agentProfile.timeout
-                            : Number(agentTimeoutInput)
-                          setAgentTimeoutInput(String(nextTimeout))
-                          updateAgentProfile({ timeout: nextTimeout }, true)
-                        }}
-                        type="number"
-                        min={1}
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                      />
-                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        请求超时时间（秒）。
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 模式</span>
-                      <div className="w-full">
-                        <Select
-                          value={draft.agentProfile.apiMode}
-                          onChange={(val) => commitAgentProfilePatch({ apiMode: val as 'images' | 'responses' })}
-                          options={[
-                            { label: 'Images API', value: 'images' },
-                            { label: 'Responses API', value: 'responses' },
-                          ]}
-                          className="w-full px-3 py-2 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-sm transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-                        />
-                      </div>
-                      <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                        Images API 用于图像生成，Responses API 用于 Agent 对话。
-                      </div>
-                    </div>
+                    </label>
                   </>
                 )}
+
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <span className="text-sm text-gray-600 dark:text-gray-300">Agent 模型</span>
+                    {agentCatalogModels.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setAgentModelManualEntry((manual) => !manual)}
+                        className="min-h-8 rounded-lg px-2 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
+                      >
+                        {agentModelManualEntry ? '从列表选择' : '手动输入'}
+                      </button>
+                    )}
+                  </div>
+                  {agentCatalogModels.length > 0 && !agentModelManualEntry ? (
+                    <Select
+                      value={draft.agentProfile.model}
+                      onChange={(value) => selectAgentModel(String(value))}
+                      options={agentCatalogModels.map((model) => ({
+                        label: model.id,
+                        value: model.id,
+                      }))}
+                      ariaLabel="选择 Agent 模型"
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  ) : (
+                    <input
+                      value={draft.agentProfile.model}
+                      onChange={(event) => updateAgentProfile({ model: event.target.value, provider: 'openai', apiMode: 'responses' })}
+                      onBlur={(event) => commitAgentProfilePatch({ model: event.target.value.trim(), provider: 'openai', apiMode: 'responses' })}
+                      type="text"
+                      placeholder={DEFAULT_RESPONSES_MODEL}
+                      aria-label="手动输入 Agent 模型"
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  )}
+                </div>
+
+                <ApiConnectionPanel
+                  loading={agentModelsLoading}
+                  feedback={agentConnectionFeedback}
+                  models={agentModels}
+                  onInspect={() => void requestModelCatalog(effectiveAgentProfile, 'agent')}
+                  onSelectModel={selectAgentModel}
+                  selectedModelId={draft.agentProfile.model}
+                />
+
+                <div className="border-t border-gray-200/70 pt-4 dark:border-white/[0.08]">
+                  <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Agent 行为</h3>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">以下参数仅影响 Agent 的工具调用方式，不影响生图连接。</p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像生成模式</span>
+                    <Select
+                      value={draft.agentApiConfigMode}
+                      onChange={(value) => {
+                        const agentApiConfigMode = value as 'native' | 'hybrid'
+                        commitSettings({
+                          ...draft,
+                          agentApiConfigMode,
+                          agentTextProtocol: agentApiConfigMode === 'native' ? 'responses' : draft.agentTextProtocol,
+                        })
+                      }}
+                      options={[
+                        { label: '原生 Responses 工具', value: 'native' },
+                        { label: '混合模式', value: 'hybrid' },
+                      ]}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </div>
+                  <div>
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">文本协议</span>
+                    <Select
+                      value={draft.agentTextProtocol}
+                      onChange={(value) => commitSettings({ ...draft, agentTextProtocol: value as 'responses' | 'chat-completions' })}
+                      disabled={draft.agentApiConfigMode !== 'hybrid'}
+                      options={[
+                        { label: 'Responses API', value: 'responses' },
+                        { label: 'Chat Completions', value: 'chat-completions' },
+                      ]}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-55 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </div>
+                </div>
+
                 <label className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
                   <input
                     value={agentMaxToolRoundsInput}
-                    onChange={(e) => setAgentMaxToolRoundsInput(e.target.value)}
+                    onChange={(event) => setAgentMaxToolRoundsInput(event.target.value)}
                     onBlur={commitAgentMaxToolRounds}
                     type="number"
                     min={1}
                     max={50}
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
-                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                    默认 15。用于限制 Agent 连续调用工具时的最大轮数，防止无限循环。
-                  </div>
+                  <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">限制连续工具调用，默认 15 轮。</p>
                 </label>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">网络搜索</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
-                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
-                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
-                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
-                        commitSettings({ ...draft, agentMaxToolRounds, agentWebSearch: !draft.agentWebSearch })
-                      }}
-                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentWebSearch ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.agentWebSearch}
-                      aria-label="网络搜索"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentWebSearch ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="block">
+                    <div className="mb-1 flex items-center justify-between gap-3">
+                      <span className="block text-sm text-gray-600 dark:text-gray-300">网络搜索</span>
+                      <button
+                        type="button"
+                        onClick={() => commitSettings({ ...draft, agentWebSearch: !draft.agentWebSearch })}
+                        className={`relative inline-flex h-4 w-7 shrink-0 items-center overflow-hidden rounded-full transition-colors ${draft.agentWebSearch ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                        role="switch"
+                        aria-checked={draft.agentWebSearch}
+                        aria-label="网络搜索"
+                      >
+                        <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${draft.agentWebSearch ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                      </button>
+                    </div>
+                    <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-500">Responses API 可调用网络搜索，可能产生额外费用。</p>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    启用 Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/[0.06]">web_search</code> 工具。模型每次调用此工具会产生少量固定价格的额外计费。
+                  <div className="block">
+                    <div className="mb-1 flex items-center justify-between gap-3">
+                      <span className="block text-sm text-gray-600 dark:text-gray-300">允许改写提示词</span>
+                      <button
+                        type="button"
+                        onClick={() => commitSettings({ ...draft, allowPromptRewrite: !draft.allowPromptRewrite })}
+                        className={`relative inline-flex h-4 w-7 shrink-0 items-center overflow-hidden rounded-full transition-colors ${draft.allowPromptRewrite ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                        role="switch"
+                        aria-checked={draft.allowPromptRewrite}
+                        aria-label="允许改写图像提示词"
+                      >
+                        <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${draft.allowPromptRewrite ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                      </button>
+                    </div>
+                    <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-500">允许 Agent 为生成效果优化图像提示词。</p>
                   </div>
                 </div>
-              </div>
+
+                {!draft.agentShareApiParameters && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">Agent 请求超时（秒）</span>
+                    <input
+                      value={agentTimeoutInput}
+                      onChange={(event) => setAgentTimeoutInput(event.target.value)}
+                      onBlur={() => {
+                        const nextTimeout = agentTimeoutInput.trim() === '' || Number.isNaN(Number(agentTimeoutInput))
+                          ? DEFAULT_SETTINGS.agentProfile.timeout
+                          : Number(agentTimeoutInput)
+                        setAgentTimeoutInput(String(nextTimeout))
+                        updateAgentProfile({ timeout: nextTimeout }, true)
+                      }}
+                      type="number"
+                      min={1}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </label>
+                )}
+              </section>
             )}
             
             {activeTab === 'api' && (
-              <div className="space-y-4">
-                <div>
+              <section
+                aria-labelledby="api-runtime-settings-title"
+                className="order-3 mt-5 space-y-4 rounded-2xl border border-gray-200/70 bg-white/70 p-4 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.025]"
+              >
+                <SectionHeader
+                  id="api-runtime-settings-title"
+                  title="运行与兼容参数"
+                  description="按常用程度排列。默认值通常无需修改。"
+                />
+                <div className="hidden" aria-hidden="true">
+                  <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">当前配置</span>
                     <span className="relative inline-flex">
@@ -2011,7 +2340,7 @@ export default function SettingsModal() {
                                       e.stopPropagation()
                                       confirmCopyProfileImportUrl(profile)
                                     }}
-                                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 opacity-60 transition-all hover:bg-gray-100 hover:text-gray-600 hover:opacity-100 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 opacity-60 transition hover:bg-gray-100 hover:text-gray-600 hover:opacity-100 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
                                     aria-label={`复制导入配置「${profile.name}」的 URL`}
                                     title="复制导入 URL"
                                   >
@@ -2029,7 +2358,7 @@ export default function SettingsModal() {
                                           action: () => deleteProfile(profile.id)
                                         })
                                       }}
-                                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 opacity-60 transition-all hover:bg-red-50 hover:text-red-500 hover:opacity-100 dark:hover:bg-red-500/10"
+                                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 opacity-60 transition hover:bg-red-50 hover:text-red-500 hover:opacity-100 dark:hover:bg-red-500/10"
                                       aria-label="删除配置"
                                     >
                                       <TrashIcon className="h-3.5 w-3.5" />
@@ -2159,7 +2488,19 @@ export default function SettingsModal() {
                 </div>
               </div>
 
+              {activeProviderIsOpenAICompatible && <ApiConnectionPanel
+                loading={apiModelsLoading}
+                feedback={apiConnectionFeedback}
+                models={apiModels}
+                onInspect={() => void requestModelCatalog(activeProfile, 'api')}
+                onSelectModel={selectApiModel}
+              />}
+                </div>
+
               {/* 6. API 接口（Images/Responses） */}
+              <div className="border-t border-gray-200/70 pt-4 dark:border-white/[0.08]">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">协议与传输</h3>
+              </div>
               {activeProfile.provider === 'openai' && (
                 <div className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 接口</span>
@@ -2185,19 +2526,79 @@ export default function SettingsModal() {
                 </div>
               )}
 
+              {apiProxyAvailable && activeProviderIsOpenAICompatible && !activeCustomProviderAsync && !isElectronEnv() && (
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">API 代理</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!apiProxyLocked) updateActiveProfile({ apiProxy: !activeProfile.apiProxy }, true)
+                      }}
+                      disabled={apiProxyLocked}
+                      className={`relative inline-flex h-4 w-7 shrink-0 items-center overflow-hidden rounded-full transition-colors ${apiProxyChecked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'} ${apiProxyLocked ? 'cursor-not-allowed opacity-70' : ''}`}
+                      role="switch"
+                      aria-checked={apiProxyChecked}
+                      aria-label="API 代理"
+                    >
+                      <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${apiProxyChecked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    {apiProxyLocked ? '部署端已锁定代理，请求由服务器转发。' : '浏览器跨域失败时再开启；开启后生图 API URL 由部署端接管。'}
+                  </p>
+                </div>
+              )}
+
+              {/* API 请求通道与远端任务恢复 */}
+              <div className="block space-y-3">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 请求通道</span>
+                  <Select
+                    value={draft.apiTransportMode}
+                    onChange={(value) => commitSettings({ ...draft, apiTransportMode: value as AppSettings['apiTransportMode'] })}
+                    options={[
+                      { label: '自动（推荐）', value: 'auto' },
+                      { label: '浏览器直连（故障排查）', value: 'renderer' },
+                    ]}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    {draft.apiTransportMode === 'renderer'
+                      ? '已强制使用浏览器直连。仅建议在中转服务与主进程传输不兼容时临时使用。'
+                      : isElectronEnv()
+                        ? '当前使用 Electron 主进程 Node/Undici 通道，支持连接复用、流式转发并绕过浏览器 CORS。Agent、生图、模型列表和结果下载共用此通道。'
+                        : '当前为 Web 环境，自动使用浏览器直连；安装版会自动切换到 Electron 主进程通道。'}
+                  </div>
+                </label>
+                <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-3 py-2.5 dark:border-emerald-500/20 dark:bg-emerald-500/[0.06]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-gray-700 dark:text-gray-200">远端任务恢复</span>
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">已开启</span>
+                  </div>
+                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    Fal 和配置了轮询的自定义服务商会先持久化远端任务 ID，再开始查询结果；应用重启后继续查询原任务，不会重复提交。
+                  </div>
+                </div>
+              </div>
+
               {/* 7. 模型 ID（紧跟接口选择） */}
-              <label className="block">
+              <label className="hidden" aria-hidden="true">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
-                  模型 ID
+                  {activeProfile.apiMode === 'responses' ? 'Responses 模型' : '画廊图像模型'}
                 </span>
                 <input
                   value={activeProfile.model}
                   onChange={(e) => updateActiveProfile({ model: e.target.value })}
                   onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
+                  list="active-api-model-options"
                   type="text"
                   placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
+                <datalist id="active-api-model-options">
+                  {apiModels.map((model) => <option key={model.id} value={model.id} />)}
+                </datalist>
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeProfile.provider === 'fal' ? (
                     <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
@@ -2215,6 +2616,10 @@ export default function SettingsModal() {
               </label>
 
               {/* 8. 流式传输 + 中间步骤图像数 */}
+              <div className="border-t border-gray-200/70 pt-4 dark:border-white/[0.08]">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">稳定性与效率</h3>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">生成超时、限流或批量任务较多时再调整。</p>
+              </div>
               {activeProfile.provider === 'openai' && (
                 <div className="block space-y-3">
                   <div>
@@ -2298,6 +2703,9 @@ export default function SettingsModal() {
               )}
 
               {/* 9. 返回 Base64 图片数据 */}
+              <div className="border-t border-gray-200/70 pt-4 dark:border-white/[0.08]">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">兼容选项</h3>
+              </div>
               {activeProviderIsOpenAICompatible && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
@@ -2356,7 +2764,7 @@ export default function SettingsModal() {
                   />
                 </label>
               )}
-            </div>
+            </section>
             )}
             
             {activeTab === 'data' && (
@@ -2451,7 +2859,7 @@ export default function SettingsModal() {
                   <button
                     onClick={() => exportData({ exportConfig, exportTasks, exportImages, includeSecrets: includeBackupSecrets })}
                     disabled={!exportConfig && !exportTasks && !exportImages}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     导出所选数据
                   </button>
@@ -2482,7 +2890,7 @@ export default function SettingsModal() {
                   <button
                     onClick={() => importInputRef.current?.click()}
                     disabled={(!importConfig && !importTasks && !importImages) || isImportingData}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isImportingData ? (
                       <>
@@ -2516,7 +2924,7 @@ export default function SettingsModal() {
                   <button
                     onClick={handleCleanupOrphaned}
                     disabled={isCleaningData}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isCleaningData ? (
                       <>
@@ -2560,7 +2968,7 @@ export default function SettingsModal() {
                       })
                     }
                     disabled={!clearConfig && !clearTasks}
-                    className="w-full rounded-xl border border-red-200/60 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-500 transition-all hover:bg-red-50 hover:border-red-200 hover:text-red-600 disabled:opacity-50 disabled:hover:bg-red-50/50 disabled:hover:border-red-200/60 disabled:hover:text-red-500 dark:border-red-500/15 dark:bg-red-500/5 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/30 dark:hover:text-red-300 dark:disabled:hover:bg-red-500/5 dark:disabled:hover:border-red-500/15 dark:disabled:hover:text-red-400"
+                    className="w-full rounded-xl border border-red-200/60 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-500 transition hover:bg-red-50 hover:border-red-200 hover:text-red-600 disabled:opacity-50 disabled:hover:bg-red-50/50 disabled:hover:border-red-200/60 disabled:hover:text-red-500 dark:border-red-500/15 dark:bg-red-500/5 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/30 dark:hover:text-red-300 dark:disabled:hover:bg-red-500/5 dark:disabled:hover:border-red-500/15 dark:disabled:hover:text-red-400"
                   >
                     清空所选数据
                   </button>
@@ -2977,7 +3385,7 @@ export default function SettingsModal() {
                         </p>
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                           <div
-                            className="h-full rounded-full bg-blue-500 transition-all"
+                            className="h-full rounded-full bg-blue-500 transition"
                             style={{ width: `${autoUpdate.progress || 0}%` }}
                           />
                         </div>
@@ -3024,7 +3432,7 @@ export default function SettingsModal() {
                 {isElectronEnv() && autoUpdate.status === 'idle' && (
                   <button
                     onClick={autoUpdate.check}
-                    className="mt-4 rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+                    className="mt-4 rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
                   >
                     检查更新
                   </button>
@@ -3063,17 +3471,21 @@ export default function SettingsModal() {
         {showZipDownloadRouteManager && createPortal(
           <div
             data-no-drag-select
-            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
             onClick={() => setShowZipDownloadRouteManager(false)}
           >
-            <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+            <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
             <div
-              className="relative z-10 w-full max-w-md rounded-3xl bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in flex flex-col max-h-[85vh] sm:max-h-[90vh]"
+              ref={zipDownloadRouteModalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="zip-download-route-title"
+              className="ds-modal-surface relative z-10 w-full max-w-md rounded-2xl border animate-confirm-in motion-reduce:animate-none flex flex-col max-h-[85vh] sm:max-h-[90vh]"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="shrink-0 p-6 pb-2">
                 <div className="mb-3 flex items-center justify-between gap-4">
-                  <h3 className="text-base font-bold text-gray-800 dark:text-gray-100">使用压缩包进行批量下载</h3>
+                  <h2 id="zip-download-route-title" className="text-base font-bold text-gray-800 dark:text-gray-100">使用压缩包进行批量下载</h2>
                   <button
                     type="button"
                     onClick={() => setShowZipDownloadRouteManager(false)}
@@ -3136,16 +3548,16 @@ export default function SettingsModal() {
         )}
 
         {showCustomProviderImport && createPortal(
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" onClick={() => {
+          <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4">
+            <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" onClick={() => {
               setShowCustomProviderImport(false)
               setEditingCustomProviderId(null)
             }} />
-            <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col h-[85vh] sm:h-[680px] max-h-[90vh] overflow-hidden">
+            <div ref={customProviderModalRef} role="dialog" aria-modal="true" aria-labelledby="custom-provider-title" className="ds-modal-surface relative z-10 w-full max-w-md rounded-2xl border p-5 animate-modal-in motion-reduce:animate-none flex flex-col h-[85vh] sm:h-[680px] max-h-[90vh] overflow-hidden">
               <div className="mb-5 flex items-center justify-between gap-4 shrink-0">
-                <h3 className="text-base font-bold text-gray-800 dark:text-gray-100">
+                <h2 id="custom-provider-title" className="text-base font-bold text-gray-800 dark:text-gray-100">
                   {editingCustomProviderId ? '编辑自定义服务商' : '创建自定义服务商'}
-                </h3>
+                </h2>
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
@@ -3263,7 +3675,7 @@ export default function SettingsModal() {
           , document.body)}
         {profileTouchDragPreview && createPortal(
           <div
-            className="fixed pointer-events-none z-[110] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
+            className="fixed pointer-events-none z-[var(--ds-z-tooltip)] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
             style={{
               left: profileTouchDragPreview.x - profileTouchDragPreview.offsetX,
               top: profileTouchDragPreview.y - profileTouchDragPreview.offsetY,
@@ -3284,12 +3696,16 @@ export default function SettingsModal() {
         {copyImportUrlProfile && createPortal(
           <div
             data-no-drag-select
-            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
             onClick={() => setCopyImportUrlProfile(null)}
           >
-            <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+            <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
             <div
-              className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
+              ref={copyImportUrlModalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="copy-import-url-title"
+              className="ds-modal-surface relative max-w-sm w-full p-6 z-10 rounded-2xl border animate-confirm-in motion-reduce:animate-none"
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -3301,10 +3717,10 @@ export default function SettingsModal() {
                 <CloseIcon className="h-5 w-5" />
               </button>
 
-              <h3 className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
+              <h2 id="copy-import-url-title" className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
                 <CopyIcon className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
                 <span>复制导入配置「{copyImportUrlProfile.name}」的 URL</span>
-              </h3>
+              </h2>
               <div className="text-[13px] text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
                 是否包含 API Key？如果选择「不包含」，可额外配置是否使用 New API 变量。
               </div>

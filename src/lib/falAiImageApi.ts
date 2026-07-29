@@ -1,6 +1,7 @@
 import { fal } from '@fal-ai/client'
 import type { ApiProfile, FalApiResponse, TaskParams } from '../types'
 import { DEFAULT_FAL_BASE_URL } from './apiProfiles'
+import { apiFetch } from './desktopApiFetch'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -41,6 +42,7 @@ function configureFal(profile: ApiProfile) {
   const config: Parameters<typeof fal.config>[0] = {
     credentials: profile.apiKey,
     suppressLocalCredentialsWarning: true,
+    fetch: apiFetch,
   }
   if (baseUrl !== DEFAULT_FAL_BASE_URL) config.proxyUrl = baseUrl
   fal.config(config)
@@ -213,15 +215,14 @@ export async function callFalAiImageApi(opts: CallApiOptions, profile: ApiProfil
     const isEdit = opts.inputImageDataUrls.length > 0
     const endpoint = mapFalEndpoint(profile.model, isEdit)
     const input = await createFalRequestInput(opts)
-    const result = await fal.subscribe(endpoint, {
+    const enqueued = await fal.queue.submit(endpoint, {
       input,
-      logs: true,
-      onEnqueue: (requestId) => {
-        opts.onFalRequestEnqueued?.({ requestId, endpoint })
-      },
     })
+    const requestId = enqueued.request_id
+    await opts.onFalRequestEnqueued?.({ requestId, endpoint })
+    await fal.queue.subscribeToStatus(endpoint, { requestId, logs: true })
+    const result = await fal.queue.result(endpoint, { requestId })
     const payload = result.data as FalApiResponse
-    opts.onFalRequestEnqueued?.({ requestId: result.requestId, endpoint })
     return parseFalResult(payload, opts.params, getFalCustomBaseUrlLabel(profile))
   } catch (err) {
     const falMessage = getFalErrorMessage(err)

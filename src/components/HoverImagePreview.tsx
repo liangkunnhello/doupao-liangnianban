@@ -10,17 +10,19 @@ export interface HoverPreviewState {
 interface Props {
   preview: HoverPreviewState
   sizeText?: string
+  zIndex?: number
 }
 
-export default function HoverImagePreview({ preview, sizeText }: Props) {
+export default function HoverImagePreview({ preview, sizeText, zIndex = 70 }: Props) {
   return (
     <div
-      className="pointer-events-none fixed z-[70] hidden overflow-hidden rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md md:block"
+      className="pointer-events-none fixed hidden overflow-hidden rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md md:block"
       style={{
         left: preview.left,
         top: preview.top,
         width: preview.width,
         height: preview.height,
+        zIndex,
       }}
     >
       <img

@@ -5,8 +5,20 @@ import type { AssistantActionPreferences } from './features/assistantActions/typ
 
 export type ApiMode = 'images' | 'responses'
 export type AgentApiConfigMode = 'native' | 'hybrid'
-export type AppMode = 'gallery' | 'agent' | 'postprocess'
+export type AgentTextProtocol = 'responses' | 'chat-completions'
+export type ApiTransportMode = 'auto' | 'renderer'
+export type AppMode = 'gallery' | 'strategy' | 'ordering' | 'agent' | 'postprocess'
 export type ThemeMode = 'light' | 'dark'
+/** 配色方案（皮肤）：整体视觉预设，不影响布局 */
+export type ColorScheme =
+  | 'default'
+  | 'apple'
+  | 'xiaomi'
+  | 'rose'
+  | 'lake'
+  | 'sunset'
+  | 'lavender'
+  | 'midnight'
 export type ImageSaveLayout = 'flat' | 'batch-folder'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -94,6 +106,8 @@ export interface ApiProfile {
 export interface AppSettings {
   /** 界面主题：手动浅色 / 深色 */
   themeMode: ThemeMode
+  /** 配色方案（皮肤）：默认 / Apple / 小米，仅改变主色调 */
+  colorScheme: ColorScheme
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
   apiKey: string
@@ -102,6 +116,8 @@ export interface AppSettings {
   apiMode: ApiMode
   codexCli: boolean
   apiProxy: boolean
+  /** Electron 榛樿浣跨敤涓昏繘绋?Node/Undici锛岃皟璇曟椂鍙垏鎹㈠洖娓叉煋杩涚▼銆?*/
+  apiTransportMode: ApiTransportMode
   streamImages?: boolean
   streamPartialImages?: number
   customProviders: CustomProviderDefinition[]
@@ -121,6 +137,7 @@ export interface AppSettings {
   agentMaxToolRounds: number
   agentWebSearch: boolean
   agentApiConfigMode: AgentApiConfigMode
+  agentTextProtocol: AgentTextProtocol
   allowPromptRewrite: boolean
   assistantActions: AssistantActionPreferences
   adNegativeRuleProfiles: AdNegativeRuleProfile[]
@@ -130,6 +147,8 @@ export interface AppSettings {
   profiles: ApiProfile[]
   activeProfileId: string
   agentProfileId: string | null
+  /** Agent 是否复用当前 API 配置的连接参数；模型仍由 agentProfile.model 独立指定 */
+  agentShareApiParameters: boolean
   agentUseCustomProfile: boolean
   agentProfile: ApiProfile
   backupInterval: number
@@ -319,9 +338,53 @@ export interface RemoteGenerationRequest {
   error?: string
 }
 
+export interface SopBatchTaskMeta {
+  batchId: string
+  snapshotId?: string
+  sopId: string
+  sopName: string
+  promptId?: string
+  promptIndex: number
+  promptCount: number
+  imagesPerPrompt?: number
+}
+
+export interface SopBatchSnapshot {
+  id: string
+  batchId: string
+  workspaceTabId: string | null
+  createdAt: number
+  updatedAt?: number
+  status?: 'generating' | 'ready' | 'submitted' | 'failed'
+  pinned?: boolean
+  batchIds?: string[]
+  taskIds?: string[]
+  sop: {
+    id: string
+    name: string
+    description: string
+    content: string
+  }
+  brief: string
+  referenceImageIds: string[]
+  promptCount: number
+  imagesPerPrompt: number
+  prompts: Array<{
+    id: string
+    text: string
+    origin: 'ai' | 'manual'
+    edited: boolean
+    sourceId?: string
+    deleted?: boolean
+  }>
+  params: TaskParams
+}
+
 export interface TaskRecord {
   id: string
   prompt: string
+  /** 画廊 SOP 批量生成任务标识；每个任务固定对应一条提示词，可生成多张图片。 */
+  sopBatch?: SopBatchTaskMeta
   params: TaskParams
   /** Immutable copy of the business compliance rule used for this request. */
   adNegativeRuleSnapshot?: Pick<AdNegativeRuleProfile, 'id' | 'name' | 'content' | 'version'>
@@ -732,6 +795,7 @@ export interface ExportData {
   includesSecrets?: boolean
   settings?: AppSettings
   tasks?: TaskRecord[]
+  sopPromptRuns?: SopBatchSnapshot[]
   favoriteCollections?: FavoriteCollection[]
   defaultFavoriteCollectionId?: string | null
   agentConversations?: AgentConversation[]

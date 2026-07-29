@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
-import { callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments } from './agentApi'
+import { callAgentApi, callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments } from './agentApi'
 
 describe('callAgentResponsesApi', () => {
   afterEach(() => {
@@ -118,6 +118,99 @@ describe('callAgentResponsesApi', () => {
     ]))
   })
 
+  it('uses Chat Completions tool calls in hybrid compatibility mode', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      id: 'chat_1',
+      choices: [{
+        message: {
+          content: '我来生成。',
+          tool_calls: [{
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'generate_image', arguments: '{"id":"hero","prompt":"blue cat"}' },
+          }],
+        },
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: false })
+
+    const result = await callAgentApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        agentApiConfigMode: 'hybrid',
+        agentTextProtocol: 'chat-completions',
+      },
+      profile,
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: '生成蓝猫' }] }],
+    })
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/chat/completions')
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
+    expect(body.messages[0]).toMatchObject({ role: 'system' })
+    expect(body.messages[1]).toEqual({ role: 'user', content: '生成蓝猫' })
+    expect(body.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'function',
+        function: expect.objectContaining({ name: 'generate_image' }),
+      }),
+    ]))
+    expect(result).toMatchObject({
+      responseId: 'chat_1',
+      text: '我来生成。',
+      outputItems: [
+        expect.objectContaining({ type: 'message' }),
+        expect.objectContaining({
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'generate_image',
+        }),
+      ],
+    })
+  })
+
+  it('assembles streamed Chat Completions text and tool arguments', async () => {
+    const streamBody = [
+      'data: {"id":"chat_stream","choices":[{"delta":{"content":"开始"}}]}',
+      '',
+      'data: {"id":"chat_stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_stream","function":{"name":"generate_image","arguments":"{\\"id\\":\\"hero\\","}}]}}]}',
+      '',
+      'data: {"id":"chat_stream","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"prompt\\":\\"cat\\"}"}}]}}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const deltas: string[] = []
+
+    const result = await callAgentApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        agentApiConfigMode: 'hybrid',
+        agentTextProtocol: 'chat-completions',
+      },
+      profile: createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: true }),
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: '生成猫' }],
+      onTextDelta: (delta) => deltas.push(delta),
+    })
+
+    expect(deltas).toEqual(['开始'])
+    expect(result.outputItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'function_call',
+        call_id: 'call_stream',
+        arguments: '{"id":"hero","prompt":"cat"}',
+      }),
+    ]))
+  })
+
   it('extracts image_generation results from base64 object fields', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{
@@ -215,6 +308,29 @@ describe('callAgentResponsesApi', () => {
     expect(body.stream).toBeUndefined()
     expect(body.input[0].content[0].text).toContain('帮我生成一张橘猫头像，要赛博朋克风格')
     expect(title).toBe('生成猫咪头像')
+  })
+
+  it('generates conversation titles through Chat Completions compatibility mode', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '<title>稳定生图</title>' } }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({ apiKey: 'test-key' })
+
+    const title = await callAgentConversationTitleApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        agentApiConfigMode: 'hybrid',
+        agentTextProtocol: 'chat-completions',
+      },
+      profile,
+      prompt: '分析接口稳定性',
+    })
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/chat/completions')
+    expect(title).toBe('稳定生图')
   })
 
   it('requests web search and applies citations', async () => {

@@ -5,6 +5,7 @@ import {
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
+  DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
@@ -34,12 +35,63 @@ describe('backup settings', () => {
   })
 })
 
+describe('API transport mode', () => {
+  it('defaults to automatic transport and preserves the renderer fallback', () => {
+    expect(normalizeSettings({}).apiTransportMode).toBe('auto')
+    expect(normalizeSettings({ apiTransportMode: 'renderer' }).apiTransportMode).toBe('renderer')
+    expect(normalizeSettings({ apiTransportMode: 'invalid' as never }).apiTransportMode).toBe('auto')
+  })
+})
+
 describe('Agent API configuration mode', () => {
   it('defaults to native mode and preserves hybrid mode', () => {
     expect(normalizeSettings({}).agentApiConfigMode).toBe('native')
     expect(normalizeSettings({ agentApiConfigMode: 'hybrid' }).agentApiConfigMode).toBe('hybrid')
     expect(normalizeSettings({}).allowPromptRewrite).toBe(false)
     expect(normalizeSettings({ allowPromptRewrite: true }).allowPromptRewrite).toBe(true)
+    expect(normalizeSettings({}).agentTextProtocol).toBe('responses')
+    expect(normalizeSettings({ agentTextProtocol: 'chat-completions' }).agentTextProtocol).toBe('chat-completions')
+  })
+
+  it('shares connection parameters while keeping a separate Agent model', () => {
+    const imageProfile = createDefaultOpenAIProfile({
+      id: 'gallery-image',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'shared-key',
+      model: 'image-model',
+      timeout: 180,
+    })
+    const settings = normalizeSettings({
+      profiles: [imageProfile],
+      activeProfileId: imageProfile.id,
+      agentShareApiParameters: true,
+      agentProfile: createDefaultOpenAIProfile({
+        id: 'agent-text',
+        model: 'text-model',
+        apiMode: 'responses',
+      }),
+    })
+
+    expect(getAgentTextApiProfile(settings)).toMatchObject({
+      id: 'agent-text',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'shared-key',
+      model: 'text-model',
+      timeout: 180,
+      apiMode: 'responses',
+    })
+    expect(getAgentImageApiProfile(settings).model).toBe('text-model')
+  })
+
+  it('migrates the legacy shared Agent default to a Responses model', () => {
+    const settings = normalizeSettings({
+      agentUseCustomProfile: false,
+      agentProfile: createDefaultOpenAIProfile({ id: 'agent-default', name: 'Agent 默认' }),
+    })
+
+    expect(settings.agentShareApiParameters).toBe(true)
+    expect(settings.agentProfile.model).toBe(DEFAULT_RESPONSES_MODEL)
+    expect(settings.agentProfile.apiMode).toBe('responses')
   })
 
   it('uses the Agent profile for text and the active gallery profile for hybrid images', () => {
