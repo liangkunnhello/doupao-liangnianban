@@ -98,6 +98,14 @@ function getRunUpdatedAt(run: SopBatchSnapshot) {
   return run.updatedAt ?? run.createdAt
 }
 
+function getRunStatusLabel(run: SopBatchSnapshot) {
+  const status = run.status ?? (run.batchId ? 'submitted' : 'ready')
+  if (status === 'generating') return '生成中'
+  if (status === 'submitted') return '已生图'
+  if (status === 'failed') return '有失败'
+  return '可复用'
+}
+
 export function getGallerySopPromptRunStorageKey(tabId: string | null) {
   return `doupao.gallery-sop-prompt-run.${tabId ?? 'default'}`
 }
@@ -520,6 +528,7 @@ export default function GallerySopBatchModal({
         .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || getRunUpdatedAt(b) - getRunUpdatedAt(a))
         .slice(0, 30)
       setRecentRuns(matchingRuns)
+      setShowRunHistory(matchingRuns.length > 0)
 
       let persisted: Partial<PersistedSopPromptRun> | null = null
       try {
@@ -808,13 +817,15 @@ export default function GallerySopBatchModal({
     if (failCount === 0) resetCompletedRun()
   }
 
-  const generateForSources = async (retrySourceId?: string) => {
+  const generateForSources = async (retrySourceId?: string, freshRun = false) => {
     if (!selectedSop) {
       setStatus('error')
       setStatusMessage('无法生成提示词')
       setError('请先选择一个 SOP')
       return
     }
+    const currentSources = freshRun ? [] : sources
+    const currentPrompts = freshRun ? [] : prompts
     generationAbortRef.current?.abort(new DOMException('已开始新的提示词生成', 'AbortError'))
     const generationController = new AbortController()
     generationAbortRef.current = generationController
@@ -822,7 +833,7 @@ export default function GallerySopBatchModal({
     releasePauseWaiters()
     const allocations = allocateSopPromptCounts(targetCount, selectedSources.length)
     const retrySource = retrySourceId
-      ? sources.find((entry) => entry.source.id === retrySourceId)?.source
+      ? currentSources.find((entry) => entry.source.id === retrySourceId)?.source
       : undefined
     const isRetryTarget = (source: SopPromptSource) => !retrySourceId
       || source.id === retrySourceId
@@ -832,11 +843,11 @@ export default function GallerySopBatchModal({
       || Boolean(source.imageId && item.referenceImageIds?.[0] === source.imageId)
       || (source.kind === 'text' && !(item.referenceImageIds?.length))
     const plannedSources: SourceRun[] = selectedSources.map((source, index) => {
-      const previous = sources.find((entry) =>
+      const previous = currentSources.find((entry) =>
         entry.source.id === source.id
         || Boolean(source.imageId && entry.source.imageId === source.imageId))
       const requestedCount = allocations[index] ?? 0
-      const currentCount = prompts.filter((item) =>
+      const currentCount = currentPrompts.filter((item) =>
         !item.deleted && item.promptText.trim() && promptBelongsToSource(item, source)).length
       const shouldGenerate = isRetryTarget(source) && currentCount < requestedCount
       return {
@@ -859,9 +870,9 @@ export default function GallerySopBatchModal({
         ? `正在生成 ${targetCount} 条文生图提示词`
         : `正在逐张参考 ${selectedSources.length} 张图片生成 ${targetCount} 条提示词`)
     setError('')
-    persistPromptRun(retrySourceId ? prompts : [], plannedSources, autoGenerate, 'generating')
-    const existingPrompts = prompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
-    const nextPrompts = retrySourceId ? [...prompts] : []
+    persistPromptRun(retrySourceId ? currentPrompts : [], plannedSources, autoGenerate, 'generating')
+    const existingPrompts = currentPrompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
+    const nextPrompts = retrySourceId ? [...currentPrompts] : []
     const nextSources = [...plannedSources]
     const progressiveDispatch = autoGenerateRef.current && !retrySourceId
     const progressiveBatchId = progressiveDispatch ? `sop-batch-${Date.now().toString(36)}` : ''
@@ -1102,10 +1113,27 @@ export default function GallerySopBatchModal({
     }
   }
 
-  const generatePromptList = () => {
+  const generatePromptList = async () => {
     if (running || !selectedSop) return
-    if (visiblePrompts.length > 0 && !window.confirm('重新生成会替换当前提示词列表，是否继续？')) return
-    void generateForSources()
+    const replacingCurrent = visiblePrompts.length > 0
+    if (replacingCurrent && !window.confirm('将创建一份新的提示词列表；当前列表会保留在“提示词历史”中。是否继续？')) return
+    if (replacingCurrent) {
+      await flushPromptRunSnapshot()
+      const nextRunId = promptRunId()
+      setCurrentRunId(nextRunId)
+      setSources([])
+      setPrompts([])
+      writeRunPointer(
+        nextRunId,
+        [],
+        autoGenerateRef.current,
+        brief,
+        targetCount,
+        targetImagesPerPrompt,
+        secondReferenceRef.current,
+      )
+    }
+    void generateForSources(undefined, replacingCurrent)
   }
 
   const addManualPrompt = (sourceId: string) => {
@@ -1270,7 +1298,7 @@ export default function GallerySopBatchModal({
                 </>}
                 {sources.length > 0 && <button
                   type="button"
-                  onClick={generatePromptList}
+                  onClick={() => void generatePromptList()}
                   disabled={running || !selectedSop}
                   aria-label={`重新生成 ${targetCount} 条 SOP 提示词`}
                   className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-500/30 dark:bg-white/[0.06] dark:text-violet-200 dark:hover:bg-violet-500/10"
@@ -1278,7 +1306,7 @@ export default function GallerySopBatchModal({
                   <Sparkles size={14} />
                   重新生成提示词
                 </button>}
-                <button type="button" onClick={() => setShowRunHistory((current) => !current)} aria-expanded={showRunHistory} className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"><History size={14} />最近运行 {recentRuns.length}</button>
+                <button type="button" onClick={() => setShowRunHistory((current) => !current)} aria-expanded={showRunHistory} className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"><History size={14} />提示词历史 {recentRuns.length}</button>
                 <button type="button" onClick={() => void toggleActiveRunPinned()} disabled={running || visiblePrompts.length === 0} aria-pressed={Boolean(activeRun?.pinned)} className={`flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 ${activeRun?.pinned ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]'}`}><Bookmark size={14} fill={activeRun?.pinned ? 'currentColor' : 'none'} />{activeRun?.pinned ? '已收藏' : '收藏提示词集'}</button>
                 <Switch
                   checked={autoGenerate}
@@ -1315,14 +1343,14 @@ export default function GallerySopBatchModal({
 
           {showRunHistory && (
             <section className="mb-4 max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 dark:border-white/[0.1] dark:bg-gray-900">
-              <div className="mb-2 flex items-center justify-between"><div><h3 className="text-sm font-semibold">最近运行</h3><p className="mt-0.5 text-[11px] text-gray-500">加载历史记录可继续编辑；收藏的提示词集会固定在顶部。</p></div></div>
+              <div className="mb-2 flex items-center justify-between"><div><h3 className="text-sm font-semibold">提示词历史</h3><p className="mt-0.5 text-[11px] leading-5 text-gray-500">每次生成都会自动保存到本机应用数据；加载后可查看、编辑或再次生图，收藏记录会固定在顶部。</p></div></div>
               <div className="space-y-2">
                 {recentRuns.map((run) => {
                   const available = run.prompts.filter((item) => !item.deleted && item.text.trim()).length
                   return (
                     <div key={run.id} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${run.id === activeRunId ? 'border-violet-300 bg-violet-50/60 dark:border-violet-500/40 dark:bg-violet-950/20' : 'border-gray-200 dark:border-white/[0.08]'}`}>
                       <Bookmark size={14} className={run.pinned ? 'shrink-0 text-amber-500' : 'shrink-0 text-gray-300 dark:text-gray-600'} fill={run.pinned ? 'currentColor' : 'none'} />
-                      <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{new Date(getRunUpdatedAt(run)).toLocaleString()} · {available} 条提示词</p><p className="mt-0.5 truncate text-[11px] text-gray-500">{run.brief || '未填写本次要求'} · {run.status ?? (run.batchId ? 'submitted' : 'ready')}</p></div>
+                      <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{new Date(getRunUpdatedAt(run)).toLocaleString()} · {available} 条提示词</p><p className="mt-0.5 truncate text-[11px] text-gray-500">{run.brief || '未填写本次要求'} · {getRunStatusLabel(run)}</p></div>
                       <button type="button" onClick={() => void applyPromptRun(run, `已加载历史提示词列表，当前可用 ${available} 条`)} disabled={running || run.id === activeRunId} className="h-8 rounded-lg px-2 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-950/40">加载</button>
                       <button type="button" onClick={() => void toggleRunPinned(run)} disabled={running} className="h-8 rounded-lg px-2 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40 dark:text-gray-300 dark:hover:bg-white/[0.06]">{run.pinned ? '取消收藏' : '收藏'}</button>
                       <button type="button" onClick={() => void deleteRun(run)} disabled={running || Boolean(run.taskIds?.length || run.batchId)} title={run.taskIds?.length || run.batchId ? '已关联生图任务，需随任务生命周期保留' : '删除运行记录'} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-red-950/30"><Trash2 size={14} /></button>
@@ -1406,7 +1434,7 @@ export default function GallerySopBatchModal({
                   <p className="mt-1 max-w-md text-xs leading-5">系统会根据当前 SOP 和输入区中的本次要求生成提示词，生成后可先检查、修改，再开始生图。</p>
                   <button
                     type="button"
-                    onClick={generatePromptList}
+                    onClick={() => void generatePromptList()}
                     disabled={running || !selectedSop}
                     aria-label={`生成 ${targetCount} 条 SOP 提示词`}
                     className="mt-4 flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-4 text-xs font-medium text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-violet-200 dark:disabled:bg-violet-500/20 dark:disabled:text-violet-300"

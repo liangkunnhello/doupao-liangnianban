@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpenCheckIcon as BookOpenCheck,
+  CheckIcon as Check,
   CloseIcon as X,
+  CopyIcon as Copy,
   ExpandIcon as Expand,
   FolderOpenIcon as FolderOpen,
   Grid2X2Icon as Grid2X2,
@@ -19,8 +21,11 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
 import { getHoverPreviewPosition, getHoverPreviewSize } from '../lib/hoverPreviewPosition'
 import HoverImagePreview, { type HoverPreviewState } from './HoverImagePreview'
+import ViewportTooltip from './ViewportTooltip'
 import { isModalBackdropEvent } from '../lib/modalBackdrop'
 import TaskParamSummary from './TaskParamSummary'
+import { useTooltip } from '../hooks/useTooltip'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import {
   getExplicitImageSaveDirectory,
   getLocalImageSaveDirectory,
@@ -87,6 +92,34 @@ type ResultItem = {
   task: TaskRecord
   imageId: string
   variantIndex: number
+}
+
+function PromptPreview({ prompt, promptIndex }: { prompt: string; promptIndex: number }) {
+  const tooltip = useTooltip()
+
+  return (
+    <span className="relative block min-w-0">
+      <button
+        type="button"
+        {...tooltip.handlers}
+        aria-label={`查看第 ${promptIndex} 条完整提示词`}
+        className="-mx-1 block w-[calc(100%+0.5rem)] rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:hover:bg-white/[0.06]"
+      >
+        <span className="line-clamp-2 text-xs leading-5 text-gray-600 dark:text-gray-300">{prompt}</span>
+      </button>
+      <ViewportTooltip
+        visible={tooltip.visible}
+        className="w-[min(30rem,calc(100vw-2rem))] max-w-none whitespace-normal p-0 text-left shadow-xl"
+      >
+        <span className="block border-b border-gray-200 px-3 py-2 font-medium text-gray-800 dark:border-white/[0.08] dark:text-gray-100">
+          第 {promptIndex} 条完整提示词
+        </span>
+        <span className="block whitespace-pre-wrap break-words px-3 py-2.5 leading-5 text-gray-600 dark:text-gray-200">
+          {prompt}
+        </span>
+      </ViewportTooltip>
+    </span>
+  )
 }
 
 function ResultPreview({
@@ -191,6 +224,8 @@ export default function SopBatchDetailModal({
   const [snapshot, setSnapshot] = useState<SopBatchSnapshot | null>(null)
   const [largeView, setLargeView] = useState(getStoredSopBatchModalMode)
   const [imageViewSize, setImageViewSize] = useState(getStoredSopBatchImageViewSize)
+  const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null)
+  const copyFeedbackTimerRef = useRef<number | null>(null)
   const allResults = useMemo(() => tasks.flatMap(getTaskResultItems), [tasks])
   const isRunning = tasks.some((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)
   const modalSizeStyle = largeView
@@ -220,6 +255,25 @@ export default function SopBatchDetailModal({
       return next
     })
   }
+
+  const copyPrompt = async (task: TaskRecord) => {
+    try {
+      await copyTextToClipboard(task.prompt)
+      setCopiedPromptId(task.id)
+      if (copyFeedbackTimerRef.current != null) window.clearTimeout(copyFeedbackTimerRef.current)
+      copyFeedbackTimerRef.current = window.setTimeout(() => {
+        setCopiedPromptId((current) => current === task.id ? null : current)
+        copyFeedbackTimerRef.current = null
+      }, 1800)
+      showToast('提示词已复制', 'success')
+    } catch (error) {
+      showToast(getClipboardFailureMessage('复制提示词失败', error), 'error')
+    }
+  }
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current != null) window.clearTimeout(copyFeedbackTimerRef.current)
+  }, [])
 
   const openBatchOutputFolder = async () => {
     if (!isElectron()) {
@@ -401,13 +455,31 @@ export default function SopBatchDetailModal({
                 <div data-testid="sop-batch-results-grid" style={imageGridStyle} className="grid items-start gap-3">
                   {tasks.map((task) => {
                     const results = getTaskResultItems(task)
+                    const promptIndex = task.sopBatch?.promptIndex ?? 1
+                    const promptCopied = copiedPromptId === task.id
                     return (
                       <article key={task.id} className="rounded-2xl border border-gray-200 p-3 dark:border-white/[0.08]">
-                        <div className="mb-3 flex items-start gap-3">
-                          <span className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-violet-50 px-2 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{task.sopBatch?.promptIndex ?? 1}</span>
-                          <p className="line-clamp-2 flex-1 text-xs leading-5 text-gray-600 dark:text-gray-300" title={task.prompt}>{task.prompt}</p>
-                          <span className="shrink-0 text-[11px] text-gray-400">{task.outputImages.length}/{task.params.n ?? 1} 张</span>
-                          <button type="button" onClick={() => void retryTask(task)} disabled={task.status === 'running' || task.falRecoverable || task.customRecoverable} aria-label={`再次生成第 ${task.sopBatch?.promptIndex ?? 1} 条提示词`} className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-950/30"><RefreshCw size={12} />再次生成</button>
+                        <div className="mb-3 flex items-start gap-2.5">
+                          <span className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-lg bg-violet-50 px-2 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{promptIndex}</span>
+                          <div className="min-w-0 flex-1">
+                            <PromptPreview prompt={task.prompt} promptIndex={promptIndex} />
+                            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[11px] tabular-nums text-gray-400">{task.outputImages.length}/{task.params.n ?? 1} 张</span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => void copyPrompt(task)}
+                                  aria-label={promptCopied ? `第 ${promptIndex} 条提示词已复制` : `复制第 ${promptIndex} 条提示词`}
+                                  title={promptCopied ? '已复制' : '复制完整提示词'}
+                                  className={`flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${promptCopied ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-100'}`}
+                                >
+                                  {promptCopied ? <Check size={12} /> : <Copy size={12} />}
+                                  {promptCopied ? '已复制' : '复制'}
+                                </button>
+                                <button type="button" onClick={() => void retryTask(task)} disabled={task.status === 'running' || task.falRecoverable || task.customRecoverable} aria-label={`再次生成第 ${promptIndex} 条提示词`} className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-950/30"><RefreshCw size={12} />再次生成</button>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                         {results.length > 0
                           ? <div className={`grid items-start gap-2 ${results.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>{results.map((item) => renderPreview(item))}</div>

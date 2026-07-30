@@ -320,6 +320,89 @@ describe('GallerySopBatchModal background generation', () => {
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
   })
 
+  it('shows saved prompt history without starting a new generation', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'sop-run-history',
+      batchId: 'sop-batch-history',
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      updatedAt: 20,
+      status: 'submitted',
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+      brief: '历史要求',
+      referenceImageIds: [],
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      prompts: [{ id: 'prompt-history', text: '可查看的历史提示词', origin: 'ai', edited: false }],
+      params: { ...DEFAULT_PARAMS },
+    }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" initialSopId="sop-1" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findAllByType('h3').some((node) => node.children.join('') === '提示词历史')).toBe(true)
+    expect(renderer!.root.findAllByType('button').some((button) => button.children.includes('加载'))).toBe(true)
+    expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('keeps the current prompt set in history when generating a new version', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'sop-run-current',
+      batchId: '',
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      updatedAt: 20,
+      status: 'ready',
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+      brief: '当前要求',
+      referenceImageIds: [],
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      prompts: [{ id: 'prompt-current', text: '原提示词', origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+      params: { ...DEFAULT_PARAMS },
+    }
+    window.localStorage.setItem(getGallerySopPromptRunStorageKey('tab-a'), JSON.stringify({
+      version: 4,
+      activeRunId: storedRun.id,
+      selectedSopId: 'sop-1',
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      availablePrompts: 1,
+    }))
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+    dbMocks.getSopBatchSnapshot.mockResolvedValue(storedRun)
+    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['新提示词'])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" initialSopId="sop-1" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const regenerateButton = renderer!.root.findByProps({ 'aria-label': '重新生成 1 条 SOP 提示词' })
+    await act(async () => {
+      regenerateButton.props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(confirmSpy).toHaveBeenCalledWith('将创建一份新的提示词列表；当前列表会保留在“提示词历史”中。是否继续？')
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledOnce()
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' }).props.value).toBe('新提示词')
+    const pointer = JSON.parse(window.localStorage.getItem(getGallerySopPromptRunStorageKey('tab-a')) ?? '{}')
+    expect(pointer.activeRunId).not.toBe(storedRun.id)
+    confirmSpy.mockRestore()
+  })
+
   it('does not restore prompts or parameters saved by a different SOP', async () => {
     const previousRun: SopBatchSnapshot = {
       id: 'sop-run-previous',

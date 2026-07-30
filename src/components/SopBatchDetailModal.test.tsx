@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
 import { act, create } from 'react-test-renderer'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import HoverImagePreview from './HoverImagePreview'
 import SopBatchDetailModal from './SopBatchDetailModal'
+import ViewportTooltip from './ViewportTooltip'
 
 const storeMocks = vi.hoisted(() => ({
   ensureImageCached: vi.fn(),
@@ -30,10 +32,18 @@ const localSaveMocks = vi.hoisted(() => ({
   joinPath: vi.fn(async (...parts: string[]) => parts.join('\\')),
   openInExplorer: vi.fn(),
 }))
+const clipboardMocks = vi.hoisted(() => ({
+  copyTextToClipboard: vi.fn(),
+  getClipboardFailureMessage: vi.fn((fallback: string) => fallback),
+}))
 
 vi.mock('../store', () => storeMocks)
 vi.mock('../lib/db', () => ({ getSopBatchSnapshot: vi.fn() }))
 vi.mock('../lib/localSave', () => localSaveMocks)
+vi.mock('../lib/clipboard', () => clipboardMocks)
+vi.mock('./ViewportTooltip', () => ({
+  default: ({ visible, children }: { visible: boolean; children: ReactNode }) => visible ? <div>{children}</div> : null,
+}))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -161,6 +171,65 @@ describe('SopBatchDetailModal hover preview', () => {
 
     act(() => imageButton!.props.onPointerLeave())
     expect(renderer!.root.findAllByType(HoverImagePreview)).toHaveLength(0)
+  })
+
+  it('shows the complete prompt on hover or focus and copies it with feedback', async () => {
+    storeMocks.ensureImageThumbnailCached.mockResolvedValue(undefined)
+    clipboardMocks.copyTextToClipboard.mockResolvedValue(undefined)
+    const longPrompt = '9:16 竖屏画面，严格三行三列九宫格结构，横纵间距均衡，整体形成稳定统一的视觉秩序。'
+    const task = { ...createTask(), prompt: longPrompt }
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[task]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const promptButton = renderer!.root.findByProps({ 'aria-label': '查看第 1 条完整提示词' })
+    expect(promptButton.props.title).toBeUndefined()
+
+    act(() => promptButton.props.onMouseEnter())
+    let promptTooltip = renderer!.root.findByType(ViewportTooltip)
+    expect(promptTooltip.props.visible).toBe(true)
+    expect(promptTooltip.findAllByType('span').some((node) => node.children.includes(longPrompt))).toBe(true)
+
+    act(() => promptButton.props.onMouseLeave())
+    promptTooltip = renderer!.root.findByType(ViewportTooltip)
+    expect(promptTooltip.props.visible).toBe(false)
+
+    act(() => promptButton.props.onFocus())
+    expect(renderer!.root.findByType(ViewportTooltip).props.visible).toBe(true)
+
+    const copyButton = renderer!.root.findByProps({ 'aria-label': '复制第 1 条提示词' })
+    await act(async () => {
+      copyButton.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(clipboardMocks.copyTextToClipboard).toHaveBeenCalledWith(longPrompt)
+    expect(storeMocks.showToast).toHaveBeenCalledWith('提示词已复制', 'success')
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词已复制' })).toBeTruthy()
+  })
+
+  it('reports a prompt copy failure without changing the copied state', async () => {
+    storeMocks.ensureImageThumbnailCached.mockResolvedValue(undefined)
+    clipboardMocks.copyTextToClipboard.mockRejectedValueOnce(new Error('denied'))
+    clipboardMocks.getClipboardFailureMessage.mockReturnValueOnce('复制提示词失败')
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const copyButton = renderer!.root.findByProps({ 'aria-label': '复制第 1 条提示词' })
+    await act(async () => {
+      copyButton.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(storeMocks.showToast).toHaveBeenCalledWith('复制提示词失败', 'error')
+    expect(renderer!.root.findAllByProps({ 'aria-label': '第 1 条提示词已复制' })).toHaveLength(0)
   })
 
   it('does not open a hover-only preview for touch pointers', async () => {

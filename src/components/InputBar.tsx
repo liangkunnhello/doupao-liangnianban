@@ -2897,8 +2897,8 @@ export default function InputBar() {
     const promptListActionLabel = gallerySopIsRunning
       ? '查看提示词进度'
       : gallerySopHasPromptList
-        ? `查看提示词列表 · ${gallerySopAvailablePromptCount}`
-        : '生成提示词'
+        ? `提示词管理 · ${gallerySopAvailablePromptCount}`
+        : '提示词管理'
     return (
       <>
         <button
@@ -2992,7 +2992,7 @@ export default function InputBar() {
         </>}
         <button
           type="button"
-          onClick={() => openGallerySopBatch(!gallerySopIsRunning && !gallerySopHasPromptList)}
+          onClick={() => openGallerySopBatch(false)}
           aria-label={`${promptListActionLabel}，${progressLabel}`}
           title={`${promptListActionLabel}，${progressLabel}`}
           className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs font-semibold text-gray-700 transition-[background-color,transform,box-shadow] duration-150 hover:bg-white active:scale-[0.97] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
