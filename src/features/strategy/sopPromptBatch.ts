@@ -1,6 +1,5 @@
 import type { SopLibraryItem } from './types'
 
-export const MAX_DEFAULT_SOP_PROMPT_SOURCES = 3
 export const MAX_SOP_PROMPTS_PER_MODEL_REQUEST = 10
 export const SOP_PROMPT_BATCH_MAX_ATTEMPTS = 2
 export const MAX_SOP_IMAGES_PER_PROMPT = 20
@@ -37,10 +36,6 @@ export function getSopRunCounts(promptCount: number, imagesPerPrompt: number) {
 export function getSopTotalImageCount(promptCount: number, imagesPerPrompt: number) {
   const normalized = getSopRunCounts(promptCount, imagesPerPrompt)
   return normalized.promptCount * normalized.imagesPerPrompt
-}
-
-export function selectSharedSopPromptSources<T extends SopPromptSourceLike>(sources: T[]) {
-  return [...sources]
 }
 
 export function getSopPromptBatchSizes(
@@ -86,7 +81,7 @@ export function selectSopPromptSources<T extends SopPromptSourceLike>(
   const count = normalizeSopPromptCount(targetPromptCount)
   const mentionedIndexes = getMentionedSopSourceIndexes(brief, sources.length)
   if (mentionedIndexes.length > 0) return mentionedIndexes.slice(0, count).map((index) => sources[index])
-  return sources.slice(0, Math.min(sources.length, count, MAX_DEFAULT_SOP_PROMPT_SOURCES))
+  return sources.slice(0, Math.min(sources.length, count))
 }
 
 export function normalizeSopPromptCandidates(candidates: string[], limit: number, existingPrompts: string[] = []) {

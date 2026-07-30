@@ -9,7 +9,6 @@ import {
   getSopTotalImageCount,
   parseSopPromptBatchResponse,
   selectSopPromptSources,
-  selectSharedSopPromptSources,
 } from './sopPromptBatch'
 import type { SopLibraryItem } from './types'
 
@@ -189,17 +188,11 @@ describe('SOP prompt batch', () => {
     expect(selectSopPromptSources(sources, 1, '@图3 @图1')).toEqual([{ id: 'c' }])
   })
 
-  it('uses at most three default sources without mentions', () => {
+  it('uses one source per prompt without dropping later references', () => {
     const sources = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
 
-    expect(selectSopPromptSources(sources, 10, '')).toEqual([{ id: 'a' }, { id: 'b' }, { id: 'c' }])
+    expect(selectSopPromptSources(sources, 10, '')).toEqual(sources)
     expect(selectSopPromptSources(sources, 2, '')).toEqual([{ id: 'a' }, { id: 'b' }])
-  })
-
-  it('keeps every shared reference in source order', () => {
-    const sources = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
-
-    expect(selectSharedSopPromptSources(sources)).toEqual(sources)
   })
 
   it('normalizes prompt and per-prompt image counts independently', () => {

@@ -21,8 +21,11 @@ import {
   TrashIcon as Trash2,
   XCircleIcon as XCircle,
 } from '../../design-system/icons'
+import type { TaskRecord } from '../../types'
 import { MAX_SOP_REFERENCE_IMAGES, type GenerateSop, type SopReferenceImage } from './sopGeneration'
 import { sopLibraryId } from './sopLibrary'
+import { getSopCoverCandidates } from './sopCover'
+import SopCoverImage from './SopCoverImage'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction } from './types'
 import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 
@@ -54,6 +57,7 @@ export default function SopManagementCenter({
   minimized,
   groups,
   items,
+  tasks = [],
   metaInstructions,
   currentUserId,
   onSaveGroup,
@@ -76,6 +80,7 @@ export default function SopManagementCenter({
   minimized: boolean
   groups: SopGroup[]
   items: SopLibraryItem[]
+  tasks?: TaskRecord[]
   metaInstructions: SopMetaInstruction[]
   currentUserId: string
   onSaveGroup: (group: SopGroup) => void
@@ -113,6 +118,7 @@ export default function SopManagementCenter({
   const [referenceImages, setReferenceImages] = useState<Array<SopReferenceImage & { id: string }>>([])
   const [job, setJob] = useState<GenerationJob>({ status: 'idle', message: '等待生成' })
   const [elapsed, setElapsed] = useState(0)
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false)
 
   const filteredItems = useMemo(() => {
     const groupedItems = selectedGroupId === 'favorites'
@@ -134,8 +140,13 @@ export default function SopManagementCenter({
     itemDraft.name !== persistedItem.name ||
     itemDraft.description !== persistedItem.description ||
     itemDraft.content !== persistedItem.content ||
-    itemDraft.groupId !== persistedItem.groupId
+    itemDraft.groupId !== persistedItem.groupId ||
+    itemDraft.coverImageId !== persistedItem.coverImageId
   ))
+  const coverCandidates = useMemo(
+    () => getSopCoverCandidates(itemDraft?.id ?? '', tasks),
+    [itemDraft?.id, tasks],
+  )
   const itemApplied = Boolean(itemDraft && selectedSopId === itemDraft.id)
   const itemEditorHint = itemDirty
     ? itemApplied
@@ -225,6 +236,14 @@ export default function SopManagementCenter({
     if (item.id !== selectedItemId && !confirmDraftChange()) return
     setSelectedItemId(item.id)
     setItemDraft(item)
+    setCoverPickerOpen(false)
+  }
+
+  const openCoverPickerForItem = (item: SopLibraryItem) => {
+    if (item.id !== selectedItemId && !confirmDraftChange()) return
+    setSelectedItemId(item.id)
+    setItemDraft(item)
+    setCoverPickerOpen(true)
   }
 
   const applyItem = (item: SopLibraryItem) => {
@@ -393,7 +412,7 @@ export default function SopManagementCenter({
     <div className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="sop-center-title" onMouseDown={(event) => {
       if (isModalBackdropEvent(event)) closeSafely()
     }}>
-      <div className="sop-center-dialog animate-modal-in flex w-full flex-col overflow-hidden">
+      <div className="sop-center-dialog relative animate-modal-in flex w-full flex-col overflow-hidden">
         <header className="sop-center-header">
           <div>
             <h2 id="sop-center-title" className="text-lg font-semibold tracking-tight">SOP 管理中心</h2>
@@ -462,8 +481,28 @@ export default function SopManagementCenter({
               <div className="mt-4 space-y-2">
                 {filteredItems.map((item) => (
                   <div key={item.id} className="sop-center-card group" data-selected={selectedItemId === item.id || undefined}>
-                    <button type="button" onClick={() => selectItem(item)} className="w-full text-left"><h4 className="truncate text-sm font-semibold">{item.name}</h4><p className="sop-center-quiet-text mt-1 line-clamp-2 text-xs leading-5">{item.description || '暂无说明'}</p></button>
-                    <div className="mt-3 flex items-center justify-between"><span className="sop-center-badge">{item.source === 'generated' ? 'AI 生成' : item.source === 'legacy-preset' ? '历史预设' : '手动'}</span><span className="flex gap-1"><button type="button" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${item.favorite ? 'text-amber-500' : 'text-[hsl(var(--ds-color-text-subtle))] hover:text-amber-500'}`}><Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /></button>{onApply && <button type="button" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${selectedSopId === item.id ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text))]'}`}><MousePointerClick size={14} /></button>}<button type="button" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button><button type="button" onClick={() => window.confirm(`删除 SOP「${item.name}」？`) && onDeleteItem(item.id)} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button></span></div>
+                    <div className="flex w-full min-w-0 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => selectItem(item)}
+                        onDoubleClick={(event) => {
+                          event.stopPropagation()
+                          openCoverPickerForItem(item)
+                        }}
+                        aria-label={`双击选择 ${item.name} 的封面`}
+                        title="双击选择封面"
+                        className="shrink-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ds-color-focus))]"
+                      >
+                        <SopCoverImage imageId={selectedItemId === item.id ? itemDraft?.coverImageId : item.coverImageId} alt={`${item.name} 封面`} fallbackText={item.name.trim().slice(0, 1) || 'S'} className="h-14 w-14 rounded-lg" />
+                      </button>
+                      <button type="button" onClick={() => selectItem(item)} className="min-w-0 flex-1 text-left">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">{item.name}</span>
+                        <span className="sop-center-quiet-text mt-1 line-clamp-2 text-xs leading-5">{item.description || '暂无说明'}</span>
+                      </span>
+                      </button>
+                    </div>
+                    <div className={`mt-3 flex items-center ${item.source === 'manual' ? 'justify-end' : 'justify-between'}`}>{item.source !== 'manual' && <span className="sop-center-badge">{item.source === 'generated' ? 'AI 生成' : '历史预设'}</span>}<span className="flex gap-1"><button type="button" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${item.favorite ? 'text-amber-500' : 'text-[hsl(var(--ds-color-text-subtle))] hover:text-amber-500'}`}><Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /></button>{onApply && <button type="button" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${selectedSopId === item.id ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text))]'}`}><MousePointerClick size={14} /></button>}<button type="button" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button><button type="button" onClick={() => window.confirm(`删除 SOP「${item.name}」？`) && onDeleteItem(item.id)} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button></span></div>
                   </div>
                 ))}
                 {filteredItems.length === 0 && <div className="rounded-xl border border-dashed border-[hsl(var(--ds-color-border))] p-8 text-center text-sm text-[hsl(var(--ds-color-text-muted))]">当前分组暂无 SOP</div>}
@@ -606,6 +645,69 @@ export default function SopManagementCenter({
                 </div>
               </div>
             </aside>
+          </div>
+        )}
+
+        {coverPickerOpen && itemDraft && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-[hsl(var(--ds-color-scrim)/0.62)] p-4"
+            onMouseDown={(event) => {
+              if (isModalBackdropEvent(event)) setCoverPickerOpen(false)
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="sop-cover-picker-title"
+              className="flex max-h-[min(76vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] shadow-2xl"
+            >
+              <header className="flex items-start justify-between gap-4 border-b border-[hsl(var(--ds-color-border))] px-5 py-4">
+                <div className="min-w-0">
+                  <h3 id="sop-cover-picker-title" className="truncate text-base font-semibold">选择「{itemDraft.name}」的封面</h3>
+                  <p className="sop-center-quiet-text mt-1 text-xs">从该 SOP 已生成的图片中选择，保存修改后生效。</p>
+                </div>
+                <button type="button" onClick={() => setCoverPickerOpen(false)} aria-label="关闭 SOP 封面选择" className="sop-center-icon-button sop-center-icon-button--secondary shrink-0"><X size={17} /></button>
+              </header>
+              <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                {coverCandidates.length > 0
+                  ? (
+                    <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">
+                      {coverCandidates.map((candidate) => {
+                        const selected = itemDraft.coverImageId === candidate.imageId
+                        return (
+                          <button
+                            key={candidate.imageId}
+                            type="button"
+                            onClick={() => {
+                              setItemDraft({ ...itemDraft, coverImageId: candidate.imageId })
+                              setCoverPickerOpen(false)
+                            }}
+                            aria-label={`选择第 ${candidate.promptIndex} 条提示词的第 ${candidate.imageIndex} 张图片作为封面`}
+                            aria-pressed={selected}
+                            className="group/cover relative aspect-square overflow-hidden rounded-xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface))] transition hover:border-[hsl(var(--ds-color-border-strong))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ds-color-focus))]"
+                          >
+                            <SopCoverImage imageId={candidate.imageId} alt="" className="h-full w-full" />
+                            <span className="absolute inset-x-1.5 bottom-1.5 rounded-md bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">提示词 {candidate.promptIndex} · 图 {candidate.imageIndex}</span>
+                            {selected && <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))]"><Check size={13} /></span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                  : (
+                    <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-[hsl(var(--ds-color-border))] px-6 text-center">
+                      <FileImage size={24} className="text-[hsl(var(--ds-color-text-subtle))]" />
+                      <p className="mt-3 text-sm font-medium">暂无可选封面</p>
+                      <p className="sop-center-quiet-text mt-1 text-xs">先使用该 SOP 完成一次生图，再双击封面选择生成结果。</p>
+                    </div>
+                  )}
+              </div>
+              {itemDraft.coverImageId && (
+                <footer className="flex justify-end border-t border-[hsl(var(--ds-color-border))] px-5 py-3">
+                  <button type="button" onClick={() => { setItemDraft({ ...itemDraft, coverImageId: undefined }); setCoverPickerOpen(false) }} className="sop-center-button sop-center-button--secondary text-xs">移除当前封面</button>
+                </footer>
+              )}
+            </section>
           </div>
         )}
       </div>

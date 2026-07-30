@@ -3,6 +3,7 @@ import {
   BookOpenCheckIcon as BookOpenCheck,
   CloseIcon as X,
   ExpandIcon as Expand,
+  FolderOpenIcon as FolderOpen,
   Grid2X2Icon as Grid2X2,
   ImageIcon,
   Layers3Icon as Layers3,
@@ -20,6 +21,13 @@ import { getHoverPreviewPosition, getHoverPreviewSize } from '../lib/hoverPrevie
 import HoverImagePreview, { type HoverPreviewState } from './HoverImagePreview'
 import { isModalBackdropEvent } from '../lib/modalBackdrop'
 import TaskParamSummary from './TaskParamSummary'
+import {
+  getExplicitImageSaveDirectory,
+  getLocalImageSaveDirectory,
+  isElectron,
+  joinPath,
+  openInExplorer,
+} from '../lib/localSave'
 
 const HOVER_PREVIEW_MAX_LONG_EDGE = 1024
 const SOP_BATCH_MODAL_MODE_STORAGE_KEY = 'doupao.sop-batch-detail-modal-mode'
@@ -172,6 +180,8 @@ export default function SopBatchDetailModal({
 }) {
   const modalRef = useRef<HTMLDivElement>(null)
   const lightboxImageId = useStore((state) => state.lightboxImageId)
+  const showToast = useStore((state) => state.showToast)
+  const workspaceTabs = useStore((state) => state.workspaceTabs)
   useCloseOnEscape(!lightboxImageId, onClose)
   usePreventBackgroundScroll(true, modalRef)
   useDialogFocusTrap(!lightboxImageId, modalRef)
@@ -209,6 +219,43 @@ export default function SopBatchDetailModal({
       storeSopBatchModalMode(next)
       return next
     })
+  }
+
+  const openBatchOutputFolder = async () => {
+    if (!isElectron()) {
+      showToast('仅桌面端支持打开图片目录', 'error')
+      return
+    }
+
+    try {
+      const savedImagePath = tasks
+        .flatMap((task) => Object.values(task.localSavedOutputImagePaths ?? {}))
+        .find(Boolean)
+      if (savedImagePath) {
+        await openInExplorer(savedImagePath)
+        return
+      }
+
+      const representativeTask = tasks[0]
+      const containingTab = workspaceTabs.find((tab) =>
+        tasks.some((task) => tab.tasks.some((candidate) => candidate.id === task.id)))
+      let directory = representativeTask?.scheduledOutputPath
+        ? await getExplicitImageSaveDirectory(representativeTask.scheduledOutputPath)
+        : await getLocalImageSaveDirectory(representativeTask?.scheduledOutputSubFolder ?? containingTab?.name)
+      if (directory && representativeTask?.localSaveBatchFolder) {
+        directory = await getExplicitImageSaveDirectory(
+          await joinPath(directory, representativeTask.localSaveBatchFolder),
+        )
+      }
+      if (!directory) {
+        showToast('未设置本地保存目录', 'error')
+        return
+      }
+      await openInExplorer(directory)
+    } catch (error) {
+      console.error(error)
+      showToast('打开图片目录失败', 'error')
+    }
   }
 
   useEffect(() => {
@@ -289,6 +336,7 @@ export default function SopBatchDetailModal({
               <p className="mt-1 text-xs text-gray-500">{tasks.length} 条提示词 · {allResults.length} 张结果</p>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <button type="button" onClick={() => void openBatchOutputFolder()} className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:text-gray-300 dark:hover:bg-white/[0.06]" aria-label="打开 SOP 批量任务图片目录"><FolderOpen size={15} />打开文件夹</button>
               <button type="button" onClick={() => void rerunSopBatchTasks(tasks)} disabled={isRunning} className="flex h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-violet-300 dark:hover:bg-violet-950/30"><RefreshCw size={14} />再次生成整批</button>
               <div className="flex rounded-lg bg-gray-100 p-1 dark:bg-gray-800" aria-label="结果视图">
                 <button type="button" aria-pressed={viewMode === 'grouped'} onClick={() => setViewMode('grouped')} className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition ${viewMode === 'grouped' ? 'bg-white text-violet-700 shadow-sm dark:bg-gray-700 dark:text-violet-300' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`}><Layers3 size={14} />按提示词</button>

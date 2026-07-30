@@ -81,7 +81,7 @@ export default function SopBatchTaskCard({
       {Array.from({ length: Math.max(0, 4 - previews.length) }, (_, index) => <div key={`empty-${index}`} className="sop-batch-thumbnail" />)}
     </div>
     <div className="gallery-task-body flex min-w-0 flex-1 flex-col p-3">
-      <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="gallery-sop-card__eyebrow flex items-center gap-1.5 text-xs font-medium"><BookOpenCheck size={14} />SOP 批量任务</p><h3 className="mt-1 truncate text-sm font-semibold">{sopName}</h3></div><Badge tone={statusTone}>{status}</Badge></div>
+      <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="gallery-sop-card__eyebrow flex items-center gap-1.5 text-xs font-medium"><BookOpenCheck size={14} />SOP 批量任务</p><h3 className="mt-1 truncate text-sm font-semibold">{sopName}</h3></div><Badge tone={statusTone} className="shrink-0 whitespace-nowrap">{status}</Badge></div>
       <p className="gallery-task-meta mt-2 truncate text-xs" title={`本批次耗时 ${elapsed}`}>图片 {imageCompleted}/{imageTotal} · 提示词 {summary.completed}/{summary.total} · 耗时 {elapsed}{summary.running ? ` · 生成中 ${summary.running}` : ''}{summary.failed ? ` · 失败 ${summary.failed}` : ''}</p>
       {representativeTask && <TaskParamSummary task={representativeTask} className="mt-2 hide-scrollbar mask-edge-r pr-2" />}
       <div aria-label="SOP 批量任务操作" className="mt-auto flex min-w-0 items-center gap-1 overflow-x-auto pt-2 hide-scrollbar">

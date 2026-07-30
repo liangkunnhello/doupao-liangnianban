@@ -435,13 +435,17 @@ describe('GallerySopBatchModal background generation', () => {
       String(node.children.join('')).includes('部分提示词未创建生图任务'))).toBe(true)
   })
 
-  it('uses the batch brief, all shared references, and the per-prompt image count', async () => {
+  it('generates and submits each prompt with only its corresponding reference image', async () => {
     storeState.inputImages = [
       { id: 'image-1', dataUrl: 'data:image/png;base64,one' },
       { id: 'image-2', dataUrl: 'data:image/png;base64,two' },
     ]
-    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['共同参考提示词'])
-    storeMocks.submitTaskWithData.mockResolvedValue('task-1')
+    generateMocks.generatePromptsFromSopStore.mockImplementation(async (_sop, _quantity, _brief, options) => [
+      `${options.context.sourceLabel}提示词`,
+    ])
+    storeMocks.submitTaskWithData
+      .mockResolvedValueOnce('task-1')
+      .mockResolvedValueOnce('task-2')
     let renderer: ReturnType<typeof create>
 
     await act(async () => {
@@ -449,7 +453,7 @@ describe('GallerySopBatchModal background generation', () => {
         <GallerySopBatchModal
           workspaceTabId="tab-a"
           initialSopId="sop-1"
-          initialPromptCount={1}
+          initialPromptCount={2}
           initialImagesPerPrompt={2}
           initialBrief="夏日清爽，不要人物"
           initialSecondReference
@@ -458,43 +462,59 @@ describe('GallerySopBatchModal background generation', () => {
         />,
       )
       await Promise.resolve()
+      await Promise.resolve()
     })
     mountedRenderers.push(renderer!)
 
-    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledWith(
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({ id: 'sop-1' }),
       1,
       '夏日清爽，不要人物',
       expect.objectContaining({
-        referenceImages: [
-          { name: '图1', dataUrl: 'data:image/png;base64,one' },
-          { name: '图2', dataUrl: 'data:image/png;base64,two' },
-        ],
+        referenceImages: [{ name: '图1', dataUrl: 'data:image/png;base64,one' }],
       }),
     )
-    const firstReferenceButton = renderer!.root.findByProps({ 'aria-label': '查看第 1 条提示词的参考图 1 大图' })
-    expect(renderer!.root.findByProps({ 'aria-label': '查看第 1 条提示词的参考图 2 大图' })).toBeTruthy()
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'sop-1' }),
+      1,
+      '夏日清爽，不要人物',
+      expect.objectContaining({
+        referenceImages: [{ name: '图2', dataUrl: 'data:image/png;base64,two' }],
+      }),
+    )
+    const firstReferenceButton = renderer!.root.findByProps({ title: '图1 · 点击查看大图' })
+    expect(renderer!.root.findByProps({ title: '图2 · 点击查看大图' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看第 1 条提示词的参考图 1 大图' })).toHaveLength(2)
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看第 1 条提示词的参考图 2 大图' })).toHaveLength(0)
 
     act(() => firstReferenceButton.props.onClick())
     expect(renderer!.root.findByProps({ 'aria-labelledby': 'gallery-sop-reference-preview-title' })).toBeTruthy()
-    expect(renderer!.root.findAllByProps({ alt: '图1' })).toHaveLength(2)
+    expect(renderer!.root.findAllByProps({ alt: '图1' })).toHaveLength(3)
 
     act(() => renderer!.root.findByProps({ 'aria-label': '关闭参考图大图预览' }).props.onClick())
     expect(renderer!.root.findAllByProps({ 'aria-label': '关闭参考图大图预览' })).toHaveLength(0)
 
-    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 2 张图片')
+    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 4 张图片')
     await act(async () => {
       startButton!.props.onClick()
       await Promise.resolve()
     })
 
-    expect(storeMocks.submitTaskWithData).toHaveBeenCalledWith(
+    expect(storeMocks.submitTaskWithData).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
-        inputImages: [
-          { id: 'image-1', dataUrl: 'data:image/png;base64,one' },
-          { id: 'image-2', dataUrl: 'data:image/png;base64,two' },
-        ],
-        params: expect.objectContaining({ n: 2, reference_mode: 'all' }),
+        inputImages: [{ id: 'image-1', dataUrl: 'data:image/png;base64,one' }],
+        params: expect.objectContaining({ n: 2, reference_mode: 'cycle' }),
+      }),
+      { silentSuccess: true },
+    )
+    expect(storeMocks.submitTaskWithData).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        inputImages: [{ id: 'image-2', dataUrl: 'data:image/png;base64,two' }],
+        params: expect.objectContaining({ n: 2, reference_mode: 'cycle' }),
       }),
       { silentSuccess: true },
     )
@@ -502,22 +522,25 @@ describe('GallerySopBatchModal background generation', () => {
       expect.objectContaining({
         brief: '夏日清爽，不要人物',
         referenceImageIds: ['image-1', 'image-2'],
-        promptCount: 1,
+        promptCount: 2,
         imagesPerPrompt: 2,
         prompts: [
-          expect.objectContaining({ referenceImageIds: ['image-1', 'image-2'] }),
+          expect.objectContaining({ referenceImageIds: ['image-1'] }),
+          expect.objectContaining({ referenceImageIds: ['image-2'] }),
         ],
-        params: expect.objectContaining({ n: 2, reference_mode: 'all' }),
+        params: expect.objectContaining({ n: 2, reference_mode: 'cycle' }),
       }),
     )
   })
 
-  it('accepts more than sixteen shared references for SOP prompts and second-reference generation', async () => {
+  it('supports more than sixteen references without combining them', async () => {
     storeState.inputImages = Array.from({ length: 17 }, (_, index) => ({
       id: `image-${index + 1}`,
       dataUrl: `data:image/png;base64,image-${index + 1}`,
     }))
-    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['多图共同参考提示词'])
+    generateMocks.generatePromptsFromSopStore.mockImplementation(async (_sop, _quantity, _brief, options) => [
+      `${options.context.sourceLabel}提示词`,
+    ])
     storeMocks.submitTaskWithData.mockResolvedValue('task-1')
     let renderer: ReturnType<typeof create>
 
@@ -526,26 +549,30 @@ describe('GallerySopBatchModal background generation', () => {
         <GallerySopBatchModal
           workspaceTabId="tab-a"
           initialSopId="sop-1"
-          initialPromptCount={1}
+          initialPromptCount={17}
           initialSecondReference
           autoStart
           onClose={vi.fn()}
         />,
       )
       await Promise.resolve()
+      await Promise.resolve()
     })
     mountedRenderers.push(renderer!)
 
-    const generationOptions = generateMocks.generatePromptsFromSopStore.mock.calls[0][3]
-    expect(generationOptions.referenceImages).toHaveLength(17)
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledTimes(17)
+    expect(generateMocks.generatePromptsFromSopStore.mock.calls.every((call) =>
+      call[3].referenceImages?.length === 1)).toBe(true)
 
-    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 1 张图片')
+    const startButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '生成 17 张图片')
     await act(async () => {
       startButton!.props.onClick()
       await Promise.resolve()
     })
 
-    expect(storeMocks.submitTaskWithData.mock.calls[0][0].inputImages).toHaveLength(17)
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledTimes(17)
+    expect(storeMocks.submitTaskWithData.mock.calls.every((call) =>
+      call[0].inputImages.length === 1)).toBe(true)
   })
 
   it('uses references for prompt generation only when second reference is off', async () => {

@@ -21,10 +21,11 @@ import type { InputImage, SopBatchSnapshot } from '../../../types'
 import { deleteSopBatchSnapshot, getAllSopBatchSnapshots, getSopBatchSnapshot, putSopBatchSnapshot } from '../../../lib/db'
 import { useRequirementPrototype } from '../../requirementPrototype/store'
 import {
+  allocateSopPromptCounts,
   getSopRunCounts,
   getSopTotalImageCount,
   normalizeSopPromptCandidates,
-  selectSharedSopPromptSources,
+  selectSopPromptSources,
   SOP_HIGH_VOLUME_WARNING_THRESHOLD,
 } from '../sopPromptBatch'
 import { generatePromptsFromSopStore } from './storeSopGeneration'
@@ -240,19 +241,10 @@ export default function GallerySopBatchModal({
   const targetCount = normalizedCounts.promptCount
   const targetImagesPerPrompt = normalizedCounts.imagesPerPrompt
   const totalImageCount = getSopTotalImageCount(targetCount, targetImagesPerPrompt)
-  const selectedSources = useMemo(() => selectSharedSopPromptSources(allSources), [allSources])
-  const selectedReferenceImageIds = useMemo(
-    () => selectedSources
-      .filter((source) => source.kind === 'image' && source.imageId)
-      .map((source) => source.imageId!),
-    [selectedSources],
+  const selectedSources = useMemo(
+    () => selectSopPromptSources(allSources, targetCount, brief),
+    [allSources, brief, targetCount],
   )
-  const sharedSource = useMemo<SopPromptSource>(() => {
-    const firstImage = selectedSources.find((source) => source.kind === 'image')
-    return firstImage
-      ? { ...firstImage, id: 'shared-reference', label: `共同参考 · ${selectedSources.length} 张` }
-      : { id: 'text-to-image', label: '文生图（无参考图）', kind: 'text' }
-  }, [selectedSources])
   const visiblePrompts = prompts.filter((item) => !item.deleted && item.promptText.trim())
   const aiCount = prompts.filter((item) => !item.deleted && item.origin === 'ai' && item.promptText.trim()).length
   const missingCount = Math.max(0, targetCount - visiblePrompts.length)
@@ -262,7 +254,7 @@ export default function GallerySopBatchModal({
     const imageIds = item.referenceImageIds
       ?? (source?.kind === 'image' && source.imageId
         ? [source.imageId]
-        : item.sourceId === 'shared-reference' ? selectedReferenceImageIds : [])
+        : [])
     return imageIds.map((imageId, index) =>
       allSources.find((candidate) => candidate.imageId === imageId) ?? {
         id: `reference-${imageId}`,
@@ -403,7 +395,7 @@ export default function GallerySopBatchModal({
         referenceImageIds: item.referenceImageIds,
         deleted: Boolean(item.deleted),
       })),
-      params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
+      params: { ...params, n: targetImagesPerPrompt, reference_mode: 'cycle' },
       ...patch,
     }
   }
@@ -444,30 +436,47 @@ export default function GallerySopBatchModal({
   }
 
   const applyPromptRun = async (run: SopBatchSnapshot, message: string) => {
-    const sourceId = run.referenceImageIds.length ? 'shared-reference' : 'text-to-image'
-    const restoredPrompts: PromptDraft[] = run.prompts.map((item) => ({
-      id: item.id,
-      sourceId: item.sourceId ?? sourceId,
-      referenceImageIds: item.referenceImageIds ?? run.referenceImageIds,
-      promptText: item.text,
-      origin: item.origin,
-      edited: item.edited,
-      deleted: item.deleted,
-    }))
-    const restoredSource: SopPromptSource = run.referenceImageIds.length
-      ? {
-          id: 'shared-reference',
-          label: `共同参考 · ${run.referenceImageIds.length} 张`,
-          kind: 'image',
-          imageId: run.referenceImageIds[0],
-        }
-      : { id: 'text-to-image', label: '文生图（无参考图）', kind: 'text' }
-    const restoredSources: SourceRun[] = [{
-      source: restoredSource,
-      requestedCount: run.promptCount,
-      status: 'completed',
-      attempts: 0,
-    }]
+    const sourceByImageId = new Map(run.referenceImageIds.map((imageId, index) => [
+      imageId,
+      {
+        id: `restored-${imageId}`,
+        label: `图${index + 1}`,
+        kind: 'image' as const,
+        imageId,
+      },
+    ]))
+    const textSource: SopPromptSource = { id: 'text-to-image', label: '文生图（无参考图）', kind: 'text' }
+    const restoredPrompts: PromptDraft[] = run.prompts.map((item, index) => {
+      const imageId = item.referenceImageIds?.length === 1
+        ? item.referenceImageIds[0]
+        : run.referenceImageIds.length > 0
+          ? run.referenceImageIds[index % run.referenceImageIds.length]
+          : undefined
+      const source = imageId ? sourceByImageId.get(imageId) : textSource
+      return {
+        id: item.id,
+        sourceId: source?.id ?? textSource.id,
+        referenceImageIds: imageId ? [imageId] : [],
+        promptText: item.text,
+        origin: item.origin,
+        edited: item.edited,
+        deleted: item.deleted,
+      }
+    })
+    const restoredSourceMap = new Map<string, SourceRun>()
+    for (const item of restoredPrompts) {
+      const imageId = item.referenceImageIds?.[0]
+      const source = imageId ? sourceByImageId.get(imageId) : textSource
+      if (!source) continue
+      const existing = restoredSourceMap.get(source.id)
+      restoredSourceMap.set(source.id, {
+        source,
+        requestedCount: (existing?.requestedCount ?? 0) + 1,
+        status: 'completed',
+        attempts: 0,
+      })
+    }
+    const restoredSources = [...restoredSourceMap.values()]
     const restoredImages = (await Promise.all(run.referenceImageIds.map(async (imageId): Promise<InputImage | null> => {
       const dataUrl = await ensureImageCached(imageId)
       return dataUrl ? { id: imageId, dataUrl } : null
@@ -683,15 +692,26 @@ export default function GallerySopBatchModal({
     })
   }
 
-  const loadSharedInputImages = async () => {
-    const imageSources = selectedSources.filter((source) => source.kind === 'image' && source.imageId)
-    const loaded = await Promise.all(imageSources.map(async (source): Promise<InputImage | null> => {
-      if (!source.imageId) return null
-      const dataUrl = source.dataUrl ?? await ensureImageCached(source.imageId)
-      return dataUrl ? { id: source.imageId, dataUrl } : null
+  const loadPromptInputImages = async (items: PromptDraft[]) => {
+    const imageIds = [...new Set(items.flatMap((item) => {
+      const source = allSources.find((candidate) => candidate.id === item.sourceId)
+      return (item.referenceImageIds
+        ?? (source?.kind === 'image' && source.imageId ? [source.imageId] : [])).slice(0, 1)
+    }))]
+    const loaded = await Promise.all(imageIds.map(async (imageId): Promise<InputImage | null> => {
+      const source = allSources.find((candidate) => candidate.imageId === imageId)
+      const dataUrl = source?.dataUrl ?? await ensureImageCached(imageId)
+      return dataUrl ? { id: imageId, dataUrl } : null
     }))
-    if (loaded.some((image) => !image)) throw new Error('部分共同参考图已不存在，请移除后重试')
+    if (loaded.some((image) => !image)) throw new Error('部分参考图已不存在，请移除后重试')
     return loaded.filter((image): image is InputImage => Boolean(image))
+  }
+
+  const loadSourceInputImage = async (source: SopPromptSource): Promise<InputImage | null> => {
+    if (source.kind !== 'image' || !source.imageId) return null
+    const dataUrl = source.dataUrl ?? await ensureImageCached(source.imageId)
+    if (!dataUrl) throw new Error(`参考图「${source.label}」已不存在，请移除后重试`)
+    return { id: source.imageId, dataUrl }
   }
 
   const submitPromptList = async (itemsToSubmit = visiblePrompts) => {
@@ -712,7 +732,7 @@ export default function GallerySopBatchModal({
     let promptInputImages: InputImage[]
     let submittingSnapshot: SopBatchSnapshot | null = null
     try {
-      promptInputImages = secondReferenceRef.current ? await loadSharedInputImages() : []
+      promptInputImages = secondReferenceRef.current ? await loadPromptInputImages(usablePrompts) : []
       await flushPromptRunSnapshot()
       const existingSnapshot = await getSopBatchSnapshot(snapshotId)
       submittingSnapshot = buildPromptRunSnapshot(snapshotId, itemsToSubmit, sources, 'ready', {
@@ -725,12 +745,14 @@ export default function GallerySopBatchModal({
     } catch (cause) {
       setStatus('error')
       setStatusMessage('批次提交前检查失败')
-      setError(cause instanceof Error ? cause.message : '共同参考图或批次快照保存失败')
+      setError(cause instanceof Error ? cause.message : '参考图或批次快照保存失败')
       return
     }
     const promptInputImageById = new Map(promptInputImages.map((image) => [image.id, image]))
     const results = await Promise.allSettled(usablePrompts.map(async (item, index) => {
-      const itemReferenceImageIds = item.referenceImageIds ?? promptInputImages.map((image) => image.id)
+      const source = allSources.find((candidate) => candidate.id === item.sourceId)
+      const itemReferenceImageIds = (item.referenceImageIds
+        ?? (source?.kind === 'image' && source.imageId ? [source.imageId] : [])).slice(0, 1)
       const itemInputImages = secondReferenceRef.current
         ? itemReferenceImageIds.flatMap((imageId) => {
             const image = promptInputImageById.get(imageId)
@@ -741,7 +763,7 @@ export default function GallerySopBatchModal({
         prompt: item.promptText.trim(),
         inputImages: itemInputImages,
         inputImageFolder: null,
-        params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
+        params: { ...params, n: targetImagesPerPrompt, reference_mode: 'cycle' },
         maskDraft: null,
         targetTabId: targetWorkspaceTabId,
         scheduledOutputPath: customOutputPath.trim() || undefined,
@@ -798,23 +820,49 @@ export default function GallerySopBatchModal({
     generationAbortRef.current = generationController
     generationPausedRef.current = false
     releasePauseWaiters()
-    const previous = sources.find((entry) => entry.source.id === sharedSource.id)
-    const plannedSources: SourceRun[] = [{
-      source: sharedSource,
-      requestedCount: targetCount,
-      status: 'running',
-      attempts: (previous?.attempts ?? 0) + 1,
-    }]
+    const allocations = allocateSopPromptCounts(targetCount, selectedSources.length)
+    const retrySource = retrySourceId
+      ? sources.find((entry) => entry.source.id === retrySourceId)?.source
+      : undefined
+    const isRetryTarget = (source: SopPromptSource) => !retrySourceId
+      || source.id === retrySourceId
+      || Boolean(source.imageId && retrySource?.imageId === source.imageId)
+    const promptBelongsToSource = (item: PromptDraft, source: SopPromptSource) =>
+      item.sourceId === source.id
+      || Boolean(source.imageId && item.referenceImageIds?.[0] === source.imageId)
+      || (source.kind === 'text' && !(item.referenceImageIds?.length))
+    const plannedSources: SourceRun[] = selectedSources.map((source, index) => {
+      const previous = sources.find((entry) =>
+        entry.source.id === source.id
+        || Boolean(source.imageId && entry.source.imageId === source.imageId))
+      const requestedCount = allocations[index] ?? 0
+      const currentCount = prompts.filter((item) =>
+        !item.deleted && item.promptText.trim() && promptBelongsToSource(item, source)).length
+      const shouldGenerate = isRetryTarget(source) && currentCount < requestedCount
+      return {
+        source,
+        requestedCount,
+        status: shouldGenerate
+          ? 'running'
+          : currentCount >= requestedCount
+            ? 'completed'
+            : previous?.status ?? 'pending',
+        attempts: (previous?.attempts ?? 0) + (shouldGenerate ? 1 : 0),
+        error: shouldGenerate ? undefined : previous?.error,
+      }
+    }).filter((source) => source.requestedCount > 0)
     setSources(plannedSources)
     setStatus('generating')
-    setStatusMessage(retrySourceId ? `正在重试提示词缺口` : sharedSource.kind === 'text' ? `正在生成 ${targetCount} 条文生图提示词` : `正在使用 ${selectedSources.length} 张共同参考图生成 ${targetCount} 条提示词`)
+    setStatusMessage(retrySourceId
+      ? '正在重试当前参考图的提示词缺口'
+      : selectedSources[0]?.kind === 'text'
+        ? `正在生成 ${targetCount} 条文生图提示词`
+        : `正在逐张参考 ${selectedSources.length} 张图片生成 ${targetCount} 条提示词`)
     setError('')
     persistPromptRun(retrySourceId ? prompts : [], plannedSources, autoGenerate, 'generating')
     const existingPrompts = prompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
     const nextPrompts = retrySourceId ? [...prompts] : []
     const nextSources = [...plannedSources]
-    const existingForSource = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
-    const deficit = Math.max(0, targetCount - existingForSource.length)
     const progressiveDispatch = autoGenerateRef.current && !retrySourceId
     const progressiveBatchId = progressiveDispatch ? `sop-batch-${Date.now().toString(36)}` : ''
     const progressiveSnapshotId = activeRunIdRef.current
@@ -839,21 +887,34 @@ export default function GallerySopBatchModal({
       }
     }
 
-    if (deficit > 0) {
+    for (const sourceRun of plannedSources.filter((entry) => isRetryTarget(entry.source))) {
+      const sourceIndex = nextSources.findIndex((entry) => entry.source.id === sourceRun.source.id)
+      const existingForSource = nextPrompts.filter((item) =>
+        !item.deleted && item.promptText.trim() && promptBelongsToSource(item, sourceRun.source))
+      const deficit = Math.max(0, sourceRun.requestedCount - existingForSource.length)
+      if (deficit === 0) {
+        nextSources[sourceIndex] = { ...nextSources[sourceIndex], status: 'completed', error: undefined }
+        continue
+      }
       try {
-        const sharedImages = await loadSharedInputImages()
-        const sharedReferenceImageIds = sharedImages.map((image) => image.id)
-        const generationInputImages = progressiveDispatch && secondReferenceRef.current ? sharedImages : []
+        const sourceImage = await loadSourceInputImage(sourceRun.source)
+        const referenceImageIds = sourceImage ? [sourceImage.id] : []
+        const generationInputImages = progressiveDispatch && secondReferenceRef.current && sourceImage ? [sourceImage] : []
+        const sourcePosition = plannedSources.findIndex((entry) => entry.source.id === sourceRun.source.id) + 1
+        const generatedBeforeRequest = nextPrompts.filter((item) =>
+          !item.deleted && item.promptText.trim() && promptBelongsToSource(item, sourceRun.source)).length
         const generated = await generatePromptsFromSopStore(selectedSop, deficit, brief, {
           context: {
-            sourceLabel: sharedImages.length ? `共同参考图（${sharedImages.length} 张）` : undefined,
+            sourceLabel: sourceImage ? sourceRun.source.label : undefined,
+            sourceIndex: sourceImage ? sourcePosition : undefined,
+            sourceCount: sourceImage ? plannedSources.length : undefined,
             totalPromptCount: targetCount,
           },
-          referenceImages: sharedImages.length
-            ? sharedImages.map((image, index) => ({ name: `图${index + 1}`, dataUrl: image.dataUrl }))
+          referenceImages: sourceImage
+            ? [{ name: sourceRun.source.label, dataUrl: sourceImage.dataUrl }]
             : undefined,
           exact: false,
-          existingPrompts: [...existingPrompts, ...nextPrompts.map((item) => item.promptText)],
+          existingPrompts: [...existingPrompts, ...nextPrompts.map((item) => item.promptText.trim()).filter(Boolean)],
           maxBatchSize: progressiveDispatch ? 1 : undefined,
           beforeBatch: waitWhileGenerationPaused,
           signal: generationController.signal,
@@ -865,9 +926,9 @@ export default function GallerySopBatchModal({
                   : new DOMException('提示词生成已取消', 'AbortError')
               }
               const item: PromptDraft = {
-                id: promptItemId(sharedSource.id),
-                sourceId: sharedSource.id,
-                referenceImageIds: sharedReferenceImageIds,
+                id: promptItemId(sourceRun.source.id),
+                sourceId: sourceRun.source.id,
+                referenceImageIds,
                 promptText: prompt,
                 origin: 'ai',
               }
@@ -883,7 +944,7 @@ export default function GallerySopBatchModal({
                     prompt: item.promptText.trim(),
                     inputImages: generationInputImages,
                     inputImageFolder: null,
-                    params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
+                    params: { ...params, n: targetImagesPerPrompt, reference_mode: 'cycle' },
                     maskDraft: null,
                     targetTabId: targetWorkspaceTabId,
                     scheduledOutputPath: customOutputPath.trim() || undefined,
@@ -930,11 +991,14 @@ export default function GallerySopBatchModal({
           },
           onProgress: (completed, total) => {
             if (!progressiveDispatch) {
-              const completedCount = Math.min(existingForSource.length + completed, targetCount)
-              const totalCount = Math.min(existingForSource.length + total, targetCount)
+              const completedCount = Math.min(
+                nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length,
+                targetCount,
+              )
+              const totalCount = Math.min(completedCount + Math.max(0, total - completed), targetCount)
               setStatusMessage(generationPausedRef.current
                 ? `提示词生成已暂停，当前可用 ${completedCount}/${totalCount} 条`
-                : `正在生成提示词 ${completedCount}/${totalCount}`)
+                : `正在参考 ${sourceRun.source.label} 生成提示词 ${completedCount}/${totalCount}`)
             }
           },
         })
@@ -945,30 +1009,52 @@ export default function GallerySopBatchModal({
         }
         const candidates = normalizeSopPromptCandidates(generated, deficit, [...existingPrompts, ...nextPrompts.map((item) => item.promptText)])
         nextPrompts.push(...candidates.map((prompt) => ({
-          id: promptItemId(sharedSource.id),
-          sourceId: sharedSource.id,
-          referenceImageIds: sharedReferenceImageIds,
+          id: promptItemId(sourceRun.source.id),
+          sourceId: sourceRun.source.id,
+          referenceImageIds,
           promptText: prompt,
           origin: 'ai' as const,
         })))
-        const generatedCount = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length - existingForSource.length
-        nextSources[0] = { ...nextSources[0], status: generatedCount >= deficit ? 'completed' : 'partial', error: generatedCount >= deficit ? undefined : `缺少 ${deficit - generatedCount} 条` }
+        const generatedCount = nextPrompts.filter((item) =>
+          !item.deleted && item.promptText.trim() && promptBelongsToSource(item, sourceRun.source)).length - generatedBeforeRequest
+        nextSources[sourceIndex] = {
+          ...nextSources[sourceIndex],
+          status: generatedCount >= deficit ? 'completed' : 'partial',
+          error: generatedCount >= deficit ? undefined : `缺少 ${deficit - generatedCount} 条`,
+        }
       } catch (cause) {
         if (generationController.signal.aborted || isAbortError(cause)) {
           generationCancelled = true
-          const generatedCount = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length - existingForSource.length
-          nextSources[0] = { ...nextSources[0], status: generatedCount > 0 ? 'partial' : 'pending', error: undefined }
+          const generatedCount = nextPrompts.filter((item) =>
+            !item.deleted && item.promptText.trim() && promptBelongsToSource(item, sourceRun.source)).length - existingForSource.length
+          nextSources[sourceIndex] = {
+            ...nextSources[sourceIndex],
+            status: generatedCount > 0 ? 'partial' : 'pending',
+            error: undefined,
+          }
+          break
         } else {
-          nextSources[0] = { ...nextSources[0], status: 'failed', error: cause instanceof Error ? cause.message : '提示词生成失败' }
+          nextSources[sourceIndex] = {
+            ...nextSources[sourceIndex],
+            status: 'failed',
+            error: cause instanceof Error ? cause.message : '提示词生成失败',
+          }
         }
       }
     }
 
     if (!componentActiveRef.current) return
+    if (generationCancelled) {
+      for (let index = 0; index < nextSources.length; index += 1) {
+        if (nextSources[index].status === 'running') {
+          nextSources[index] = { ...nextSources[index], status: 'pending', error: undefined }
+        }
+      }
+    }
     setPrompts(nextPrompts)
     setSources(nextSources)
     const available = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length
-    const failed = nextSources.some((item) => item.status === 'failed') ? 1 : 0
+    const failed = nextSources.filter((item) => item.status === 'failed').length
     const missing = Math.max(0, targetCount - available)
     if (generationAbortRef.current === generationController) generationAbortRef.current = null
     generationPausedRef.current = false
@@ -1026,7 +1112,7 @@ export default function GallerySopBatchModal({
     const source = allSources.find((candidate) => candidate.id === sourceId)
     const referenceImageIds = source?.kind === 'image' && source.imageId
       ? [source.imageId]
-      : sourceId === 'shared-reference' ? selectedReferenceImageIds : []
+      : []
     updatePrompts((current) => [...current, { id: promptItemId(sourceId), sourceId, referenceImageIds, promptText: '', origin: 'manual' }])
   }
 
@@ -1040,18 +1126,28 @@ export default function GallerySopBatchModal({
     setStatusMessage('正在重新生成这一条提示词')
     setError('')
     try {
-      const sharedImages = await loadSharedInputImages()
-      const sharedReferenceImageIds = sharedImages.map((image) => image.id)
+      const source = allSources.find((candidate) =>
+        candidate.id === item.sourceId
+        || Boolean(candidate.imageId && candidate.imageId === item.referenceImageIds?.[0]))
+      const sourceImage = source
+        ? await loadSourceInputImage(source)
+        : item.referenceImageIds?.[0]
+          ? await ensureImageCached(item.referenceImageIds[0]).then((dataUrl) =>
+              dataUrl ? { id: item.referenceImageIds![0], dataUrl } : null)
+          : null
+      const referenceImageIds = sourceImage ? [sourceImage.id] : []
       const existingPrompts = prompts
         .filter((entry) => entry.id !== item.id && !entry.deleted && entry.promptText.trim())
         .map((entry) => entry.promptText.trim())
       const generated = await generatePromptsFromSopStore(selectedSop, 1, brief, {
         context: {
-          sourceLabel: sharedImages.length ? `共同参考图（${sharedImages.length} 张）` : undefined,
+          sourceLabel: sourceImage ? source?.label ?? '参考图' : undefined,
+          sourceIndex: sourceImage && source ? selectedSources.findIndex((candidate) => candidate.id === source.id) + 1 : undefined,
+          sourceCount: sourceImage ? selectedSources.length : undefined,
           totalPromptCount: targetCount,
         },
-        referenceImages: sharedImages.length
-          ? sharedImages.map((image, index) => ({ name: `图${index + 1}`, dataUrl: image.dataUrl }))
+        referenceImages: sourceImage
+          ? [{ name: source?.label ?? '参考图', dataUrl: sourceImage.dataUrl }]
           : undefined,
         exact: true,
         existingPrompts,
@@ -1060,7 +1156,7 @@ export default function GallerySopBatchModal({
       })
       if (generationController.signal.aborted) return
       updatePrompts((current) => current.map((entry) => entry.id === item.id
-        ? { ...entry, referenceImageIds: sharedReferenceImageIds, promptText: generated[0] ?? entry.promptText, origin: 'ai', edited: false }
+        ? { ...entry, referenceImageIds, promptText: generated[0] ?? entry.promptText, origin: 'ai', edited: false }
         : entry))
       setStatus('ready')
       setStatusMessage(`已重新生成第 ${visiblePrompts.findIndex((entry) => entry.id === item.id) + 1} 条提示词`)

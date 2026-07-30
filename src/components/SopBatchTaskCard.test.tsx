@@ -71,6 +71,9 @@ describe('SopBatchTaskCard', () => {
     expect(rerunButton.props.className).toContain('shrink-0')
     expect(renderer!.root.findByProps({ 'aria-label': 'SOP 批量任务操作' }).props.className).toContain('overflow-x-auto')
     expect(renderer!.root.findByProps({ 'aria-label': '任务参数' })).toBeTruthy()
+    const statusBadge = renderer!.root.findAllByType('span').find((node) => node.children.includes('已完成'))
+    expect(statusBadge?.props.className).toContain('whitespace-nowrap')
+    expect(statusBadge?.props.className).toContain('shrink-0')
 
     const deleteButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '删除 SOP 批量任务 天体图')
     act(() => deleteButton!.props.onClick({ stopPropagation: vi.fn() }))

@@ -11,6 +11,7 @@ import {
 import { useCloseOnEscape } from '../../hooks/useCloseOnEscape'
 import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 import type { SopGroup, SopLibraryItem } from './types'
+import SopCoverImage from './SopCoverImage'
 
 const UNGROUPED_GROUP_ID = 'ungrouped'
 
@@ -175,7 +176,7 @@ export default function SopPresetPickerModal({
                   return <article key={item.id} draggable={Boolean(onSaveItem)} onDragStart={(event) => handleDragStart(event, item)} onDragEnd={() => { setDraggedSopId(''); setDropGroupId('') }} aria-grabbed={draggedSopId === item.id} className={`rounded-lg border transition ${draggedSopId === item.id ? 'opacity-50' : ''} ${selected ? 'border-violet-400 bg-violet-50/60 dark:border-violet-400/50 dark:bg-violet-500/10' : 'border-gray-200/80 bg-white dark:border-white/[0.08] dark:bg-white/[0.02]'}`}>
                     <div className="flex min-w-0 items-center gap-2.5 px-2.5 py-2">
                       {onSaveItem && <span aria-hidden="true" className="shrink-0 cursor-grab text-gray-300 active:cursor-grabbing dark:text-gray-600"><GripVertical size={14} /></span>}
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-gray-600 dark:bg-white/[0.06] dark:text-gray-200">{item.name.trim().slice(0, 1) || 'S'}</span>
+                      <SopCoverImage imageId={item.coverImageId} alt={`${item.name} 封面`} fallbackText={item.name.trim().slice(0, 1) || 'S'} className="h-10 w-12 rounded-lg" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold">{item.name}</p>
                         <p className="truncate text-[11px] leading-4 text-gray-500">{item.description || item.content || '未填写说明'}</p>

@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, create, type ReactTestInstance } from 'react-test-renderer'
 import SopManagementCenter from './SopManagementCenter'
 import type { SopLibraryItem } from './types'
+import { DEFAULT_PARAMS, type TaskRecord } from '../../types'
+
+const imageStoreMocks = vi.hoisted(() => ({
+  ensureImageThumbnailCached: vi.fn().mockResolvedValue(undefined),
+  subscribeImageThumbnail: vi.fn(() => () => {}),
+}))
+
+vi.mock('../../store', () => imageStoreMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -26,7 +34,7 @@ function findButton(root: ReactTestInstance, label: string) {
   return root.findAllByType('button').find((button) => textContent(button).includes(label))
 }
 
-function renderCenter(options: { selectedSopId?: string } = {}) {
+function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[] } = {}) {
   const onSaveItem = vi.fn()
   const onApply = vi.fn()
   const renderer = create(
@@ -34,6 +42,7 @@ function renderCenter(options: { selectedSopId?: string } = {}) {
       minimized={false}
       groups={[]}
       items={[item]}
+      tasks={options.tasks}
       metaInstructions={[]}
       currentUserId="user-1"
       onSaveGroup={vi.fn()}
@@ -103,6 +112,49 @@ describe('SopManagementCenter apply and save actions', () => {
 
     expect(findButton(result.renderer.root, '已应用')?.props.disabled).toBe(true)
     expect(findButton(result.renderer.root, '保存修改')?.props.disabled).toBe(true)
+    result.renderer.unmount()
+  })
+
+  it('uses a square list cover and opens cover selection by double-clicking it', () => {
+    const generatedTask: TaskRecord = {
+      id: 'task-1',
+      prompt: '生成结果',
+      params: { ...DEFAULT_PARAMS },
+      inputImageIds: [],
+      outputImages: ['image-1'],
+      status: 'done',
+      error: null,
+      createdAt: 2,
+      finishedAt: 3,
+      elapsed: 1,
+      sopBatch: { batchId: 'batch-1', sopId: item.id, sopName: item.name, promptIndex: 1, promptCount: 1 },
+    }
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ tasks: [generatedTask] })
+    })
+
+    const coverButton = result.renderer.root.findByProps({ 'aria-label': `双击选择 ${item.name} 的封面` })
+    const cover = coverButton.findAll((node) => String(node.props.className).includes('h-14 w-14'))[0]
+    expect(cover.props.className).toContain('h-14')
+    expect(cover.props.className).toContain('w-14')
+    expect(result.renderer.root.findAllByProps({ 'aria-label': 'SOP 封面' })).toHaveLength(0)
+    expect(result.renderer.root.findAll((node) => String(node.props.className).includes('sop-center-badge'))).toHaveLength(0)
+
+    act(() => coverButton.props.onDoubleClick({ stopPropagation: vi.fn() }))
+    expect(result.renderer.root.findByProps({ 'aria-labelledby': 'sop-cover-picker-title' })).toBeTruthy()
+    const candidate = result.renderer.root.findByProps({ 'aria-label': '选择第 1 条提示词的第 1 张图片作为封面' })
+    act(() => candidate.props.onClick())
+    expect(result.renderer.root.findByProps({ 'data-sop-cover-image-id': 'image-1' })).toBeTruthy()
+
+    const saveButton = findButton(result.renderer.root, '保存修改')
+    expect(saveButton?.props.disabled).toBe(false)
+    act(() => saveButton!.props.onClick())
+
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: item.id,
+      coverImageId: 'image-1',
+    }))
     result.renderer.unmount()
   })
 })

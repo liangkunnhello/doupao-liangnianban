@@ -130,6 +130,7 @@ import { shouldDeleteOrphanImage } from './lib/storageCleanup'
 import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/workspaceBackup'
 import { buildGeneratedImageFileNameBase, findNextGeneratedImageSequence } from './lib/generatedImageFilename'
 import { assignMissingGeneratedImageBatches, getNextGeneratedImageBatch } from './lib/generatedImageBatch'
+import { useRequirementPrototype } from './features/requirementPrototype/store'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -1629,6 +1630,7 @@ interface AppState {
 }
 
 function isImageReferencedByState(state: AppState, imageId: string) {
+  if (useRequirementPrototype.getState().sopLibrary.some((item) => item.coverImageId === imageId)) return true
   if (state.inputImages.some((img) => img.id === imageId)) return true
   if (state.galleryInputDraft?.inputImages.some((img) => img.id === imageId)) return true
   if (Object.values(state.agentInputDrafts).some((draft) => draft.inputImages.some((img) => img.id === imageId))) return true
@@ -4224,6 +4226,7 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   // 收集所有任务引用的图片 id
   const referencedIds = new Set<string>()
   const state = useStore.getState()
+  addSopCoverReferencedImageIds(referencedIds)
   const persistedInputImages = state.inputImages
   const galleryInputDraft = state.galleryInputDraft
   const agentConversations = state.agentConversations
@@ -5005,6 +5008,12 @@ function addSopRunReferencedImageIds(target: Set<string>, runs: SopBatchSnapshot
   }
 }
 
+function addSopCoverReferencedImageIds(target: Set<string>) {
+  for (const item of useRequirementPrototype.getState().sopLibrary) {
+    if (item.coverImageId) target.add(item.coverImageId)
+  }
+}
+
 async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
@@ -5012,6 +5021,7 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const { tasks, inputImages, galleryInputDraft } = useStore.getState()
   const stillUsed = new Set<string>()
   for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
+  addSopCoverReferencedImageIds(stillUsed)
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
@@ -5040,6 +5050,7 @@ export async function getAllOrphanedImageIds(): Promise<string[]> {
   const { tasks, inputImages, galleryInputDraft, workspaceTabs } = useStore.getState()
   const stillUsed = new Set<string>()
   for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
+  addSopCoverReferencedImageIds(stillUsed)
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
   for (const img of inputImages) stillUsed.add(img.id)
@@ -9077,6 +9088,7 @@ export async function exportDataToPath(
       ? [...new Set([
           ...collectReferencedExportImageIds(allTasks, state.agentConversations),
           ...sopPromptRuns.flatMap((run) => run.referenceImageIds),
+          ...useRequirementPrototype.getState().sopLibrary.flatMap((item) => item.coverImageId ? [item.coverImageId] : []),
         ])]
       : []
     const entries = await buildElectronImageExportEntries(ids, getImage)

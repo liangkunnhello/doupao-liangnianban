@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useRequirementPrototype } from '../../requirementPrototype/store'
+import { useStore } from '../../../store'
 import SopManagementCenter from '../SopManagementCenter'
 import { generateSopFromStore } from './storeSopGeneration'
 import type { SopLibraryItem } from '../types'
@@ -19,6 +20,7 @@ export default function GallerySopManagementCenter({
   const sessionUserId = useRequirementPrototype((state) => state.sessionUserId)
   const groups = useRequirementPrototype((state) => state.sopGroups)
   const items = useRequirementPrototype((state) => state.sopLibrary)
+  const tasks = useStore((state) => state.tasks)
   const metaInstructions = useRequirementPrototype((state) => state.sopMetaInstructions)
   const saveGroup = useRequirementPrototype((state) => state.saveSopGroup)
   const duplicateGroup = useRequirementPrototype((state) => state.duplicateSopGroup)
@@ -34,6 +36,7 @@ export default function GallerySopManagementCenter({
     minimized={minimized}
     groups={groups}
     items={items}
+    tasks={tasks}
     metaInstructions={metaInstructions}
     currentUserId={sessionUserId ?? 'user-admin'}
     onSaveGroup={saveGroup}

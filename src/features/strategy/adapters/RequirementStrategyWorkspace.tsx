@@ -360,6 +360,7 @@ export default function StrategyWorkspace() {
         minimized={sopCenterMinimized}
         groups={sopGroups}
         items={sopLibrary}
+        tasks={tasks}
         metaInstructions={sopMetaInstructions}
         currentUserId={sessionUserId ?? 'user-admin'}
         onSaveGroup={saveSopGroup}

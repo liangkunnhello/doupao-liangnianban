@@ -153,6 +153,7 @@ export const legacyComponentCoverage: LegacyComponentCoverage[] = [
   { module: 'src/features/strategy/adapters/RequirementStrategyWorkspace.tsx', responsibility: '需求策略工作区适配器', decision: 'retain', targets: ['PageHeader', 'SplitPane', 'Panel'] },
   { module: 'src/features/strategy/adapters/StoreStrategyImage.tsx', responsibility: '策略图片存储适配', decision: 'retain', targets: ['Thumbnail', 'AspectRatio'] },
   { module: 'src/features/strategy/SopManagementCenter.tsx', responsibility: 'SOP 列表、搜索和管理中心', decision: 'retain', targets: ['PageHeader', 'SearchField', 'ListRow', 'Panel', 'EmptyState'] },
+  { module: 'src/features/strategy/SopCoverImage.tsx', responsibility: 'SOP 封面缩略图', decision: 'compose', targets: ['Thumbnail', 'EmptyState'] },
   { module: 'src/features/strategy/SopPresetPickerModal.tsx', responsibility: 'SOP 预设选择弹窗', decision: 'compose', targets: ['Dialog', 'SearchField', 'ListRow', 'EmptyState'] },
   { module: 'src/features/strategy/StrategyEditor.tsx', responsibility: '策略配置编辑器', decision: 'retain', targets: ['Fieldset', 'TextField', 'TextArea', 'Switch', 'Disclosure'] },
   { module: 'src/features/strategy/StrategyGrid.tsx', responsibility: '策略卡片网格', decision: 'compose', targets: ['Grid', 'Card', 'StatusIndicator', 'EmptyState'] },

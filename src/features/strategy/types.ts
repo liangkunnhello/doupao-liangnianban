@@ -115,6 +115,7 @@ export interface SopGroup {
 export interface SopLibraryItem {
   id: string
   groupId?: string
+  coverImageId?: string
   name: string
   description: string
   content: string

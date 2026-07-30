@@ -12,11 +12,28 @@ const storeMocks = vi.hoisted(() => ({
   subscribeImageThumbnail: vi.fn(() => () => {}),
   retryTask: vi.fn(),
   rerunSopBatchTasks: vi.fn(),
-  useStore: (selector: (state: { lightboxImageId: string | null }) => unknown) => selector({ lightboxImageId: null }),
+  showToast: vi.fn(),
+  useStore: (selector: (state: {
+    lightboxImageId: string | null
+    showToast: (message: string, tone: string) => void
+    workspaceTabs: Array<{ id: string; name: string; tasks: TaskRecord[] }>
+  }) => unknown) => selector({
+    lightboxImageId: null,
+    showToast: storeMocks.showToast,
+    workspaceTabs: [],
+  }),
+}))
+const localSaveMocks = vi.hoisted(() => ({
+  getExplicitImageSaveDirectory: vi.fn(),
+  getLocalImageSaveDirectory: vi.fn(),
+  isElectron: vi.fn(() => true),
+  joinPath: vi.fn(async (...parts: string[]) => parts.join('\\')),
+  openInExplorer: vi.fn(),
 }))
 
 vi.mock('../store', () => storeMocks)
 vi.mock('../lib/db', () => ({ getSopBatchSnapshot: vi.fn() }))
+vi.mock('../lib/localSave', () => localSaveMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -164,6 +181,27 @@ describe('SopBatchDetailModal hover preview', () => {
 
     expect(renderer!.root.findAllByType(HoverImagePreview)).toHaveLength(0)
     expect(storeMocks.ensureImageCached).not.toHaveBeenCalled()
+  })
+
+  it('opens the saved batch image in Explorer from the detail toolbar', async () => {
+    storeMocks.ensureImageThumbnailCached.mockResolvedValue(undefined)
+    const savedTask = {
+      ...createTask(),
+      localSavedOutputImagePaths: { '0:image-1': 'D:\\outputs\\image-1.png' },
+    }
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[savedTask]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '打开 SOP 批量任务图片目录' }).props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(localSaveMocks.openInExplorer).toHaveBeenCalledWith('D:\\outputs\\image-1.png')
   })
 
   it('keeps proportional result images in the adjustable grid across both view modes', async () => {
