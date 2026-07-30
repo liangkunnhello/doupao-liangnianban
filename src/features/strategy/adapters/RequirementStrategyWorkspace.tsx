@@ -22,6 +22,7 @@ import StrategyTree, { type StrategyTreeSelection } from '../StrategyTree'
 import SopManagementCenter from '../SopManagementCenter'
 import StoreStrategyImage from './StoreStrategyImage'
 import { generateSopFromStore } from './storeSopGeneration'
+import { isModalBackdropEvent } from '../../../lib/modalBackdrop'
 
 function PresetManager({
   presets,
@@ -41,7 +42,9 @@ function PresetManager({
   const [value, setValue] = useState('')
 
   return (
-    <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-label="全局策略预设管理">
+    <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-label="全局策略预设管理" onMouseDown={(event) => {
+      if (isModalBackdropEvent(event)) onClose()
+    }}>
       <div className="animate-modal-in flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-2xl dark:border-white/[0.1] dark:bg-gray-900">
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
           <div>

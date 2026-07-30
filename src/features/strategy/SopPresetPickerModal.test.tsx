@@ -25,6 +25,31 @@ const item: SopLibraryItem = {
 }
 
 describe('SopPresetPickerModal', () => {
+  it('closes only when the backdrop itself is pressed', () => {
+    const onClose = vi.fn()
+    let renderer: ReturnType<typeof create>
+
+    act(() => {
+      renderer = create(
+        <SopPresetPickerModal
+          items={[item]}
+          groups={[]}
+          onSelect={vi.fn()}
+          onClose={onClose}
+        />,
+      )
+    })
+    mountedRenderers.push(renderer!)
+
+    const layer = renderer!.root.findByProps({ role: 'dialog' })
+    const content = {}
+    act(() => layer.props.onMouseDown({ target: content, currentTarget: layer }))
+    expect(onClose).not.toHaveBeenCalled()
+
+    act(() => layer.props.onMouseDown({ target: layer, currentTarget: layer }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
   it('offers a clear SOP action and a management entry', () => {
     const onClear = vi.fn()
     const onManage = vi.fn()

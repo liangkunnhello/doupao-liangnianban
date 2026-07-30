@@ -8,10 +8,251 @@
  * src/theme/registry.ts 注册。
  */
 @import './skins/default.css';
-@import './skins/apple.css';
-@import './skins/xiaomi.css';
-@import './skins/rose.css';
-@import './skins/lake.css';
-@import './skins/sunset.css';
-@import './skins/lavender.css';
-@import './skins/midnight.css';
+@import './skins/handdrawn.css';
+@import './skins/glass.css';
+@import './skins/retro.css';
+@import './skins/eyecare.css';
+
+/* ============================================================
+ * 全局工具类重映射（glass / retro / eyecare / handdrawn 四套自定义皮肤）
+ * ------------------------------------------------------------
+ * 根因：主框架大量使用写死的 Tailwind 中性 / 蓝色工具类
+ * （bg-white、bg-gray-*、text-gray-*、border-gray-*、bg-blue-* 等），
+ * 它们不消费设计系统 Token，导致切换皮肤时只有 .ds-* 组件变、大块界面不变，
+ * 观感不协调。
+ * 这里在皮肤作用域内把这些常用工具类重定向到「本皮肤」的 Token，使整体协调。
+ * 这是旧组件的迁移兼容桥；新代码应直接消费语义 Token，不再扩充选择器清单。
+ * 选择器特异性（:root + [data-skin] + 类 = 0,3,0）高于 Tailwind 单类工具类，无需 !important。
+ * 该段仅作用域于四套自定义皮肤，不影响默认皮肤的既有外观。
+ *
+ * 规范约束（见 skin-authoring-guide.md §6.8 / §6.10）：
+ *  - 图标（currentColor）随 text-* 着色，故此段必须把 gray / slate / zinc / neutral /
+ *    blue 全部重定向到皮肤 Token，图标才会跟随皮肤；
+ *  - 必须作用于全局（含弹窗 / 侧栏 / 按钮使用的工具类），故 handdrawn 也纳入。
+ * ============================================================ */
+
+/* 浅色：中性表面（白 / 浅灰 → 皮肤 surface） */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-white, .bg-gray-50, .bg-gray-100) {
+  background-color: var(--ds-color-surface);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-gray-200, .bg-gray-300) {
+  background-color: var(--ds-color-surface-subtle);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-gray-900, .bg-gray-950) {
+  background-color: var(--ds-color-scrim);
+}
+
+/* 浅色：文字（灰阶 → 皮肤 text / muted / subtle）。
+ * 注意：text-gray-400 多为次要/占位文字与图标，映射到 -muted 以保证普通文字可读性（≥4.5:1），
+ * 不要把正文级灰阶压到 -subtle（§6.9：subtle 不得用于正文）。 */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+  color: var(--ds-color-text);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-gray-600, .text-gray-500, .text-gray-400) {
+  color: var(--ds-color-text-muted);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-gray-300, .text-gray-200) {
+  color: var(--ds-color-text-subtle);
+}
+
+/* 浅色：图标常用灰阶（slate / zinc / neutral → 皮肤文字层级）。
+ * lucide 等图标用 currentColor 着色，颜色由 text-* 类决定；若不覆盖这些灰阶，
+ * 图标会保持默认灰，在自定义皮肤上不跟随（§6.8）。 */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-slate-900, .text-slate-800, .text-slate-700,
+      .text-zinc-900, .text-zinc-800, .text-zinc-700,
+      .text-neutral-900, .text-neutral-800, .text-neutral-700) {
+  color: var(--ds-color-text);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-slate-600, .text-slate-500, .text-slate-400,
+      .text-zinc-600, .text-zinc-500, .text-zinc-400,
+      .text-neutral-600, .text-neutral-500, .text-neutral-400) {
+  color: var(--ds-color-text-muted);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-slate-300, .text-slate-200,
+      .text-zinc-300, .text-zinc-200,
+      .text-neutral-300, .text-neutral-200) {
+  color: var(--ds-color-text-subtle);
+}
+
+/* 浅色：描边（灰边 → 皮肤 border） */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+  border-color: var(--ds-color-border);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .border-gray-400 {
+  border-color: var(--ds-color-border-strong);
+}
+
+/* 浅色：蓝色品牌工具类 → 皮肤主色（含图标常用 text-blue-400/500，§6.8） */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-blue-50, .bg-blue-100) {
+  background-color: var(--ds-color-primary-subtle);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-blue-500, .bg-blue-600) {
+  background-color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .bg-blue-700 {
+  background-color: var(--ds-color-primary-hover);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-violet-500, .bg-violet-600, .bg-violet-700) {
+  background-color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.text-blue-400, .text-blue-500, .text-blue-600, .text-blue-700) {
+  color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.ring-blue-100, .ring-blue-400, .ring-blue-500, .ring-blue-950) {
+  --tw-ring-color: var(--ds-color-focus);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .hover\:bg-gray-100:hover,
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .hover\:bg-gray-50:hover,
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .hover\:bg-gray-700:hover {
+  background-color: var(--ds-color-surface-subtle);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  .focus\:border-blue-500 {
+  border-color: var(--ds-color-focus);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.focus\:ring-blue-100, .focus\:ring-blue-500, .focus\:ring-blue-950) {
+  --tw-ring-color: var(--ds-color-focus);
+}
+
+/* 浅色：带透明度的中性 / 白色工具类（bg-white/55、bg-white/90、bg-white/[0.03]、border-gray-200/70 等）
+ * 提示词输入框、@提及菜单、收藏批量条等均使用这类「带透明度」变体，必须单独覆盖，
+ * 否则仍保持默认白底，与皮肤割裂。 */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.bg-white\/55, .bg-white\/90, .bg-white\/95, .bg-white\/10,
+      .bg-white\/\[0\.03\], .bg-white\/\[0\.04\], .bg-white\/\[0\.05\], .bg-white\/\[0\.06\], .bg-white\/\[0\.08\]) {
+  background-color: var(--ds-color-surface);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.border-gray-200\/70, .border-gray-200\/60, .border-gray-300,
+      .border-white\/\[0\.08\], .border-white\/\[0\.1\], .border-white\/10) {
+  border-color: var(--ds-color-border);
+}
+/* 浅色：聚焦态品牌强调（focus-within / focus: 的蓝色与 violet 变体） */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.focus-within\:border-blue-300, .focus-within\:border-blue-500\/40, .focus\:border-violet-500) {
+  border-color: var(--ds-color-focus);
+}
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn'])
+  :is(.focus-within\:ring-blue-100\/70, .focus-within\:ring-blue-500\/10, .focus\:ring-violet-100) {
+  --tw-ring-color: var(--ds-color-focus);
+}
+/* 圆角：容器描边形状跟随皮肤（玻璃大圆角 / 复古小圆角 / 像素直角） */
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn']) .rounded-2xl { border-radius: var(--ds-radius-xl); }
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn']) .rounded-xl { border-radius: var(--ds-radius-xl); }
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn']) .rounded-lg { border-radius: var(--ds-radius-lg); }
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn']) .rounded-md { border-radius: var(--ds-radius-md); }
+:is(:root[data-skin='glass'], :root[data-skin='retro'], :root[data-skin='eyecare'], :root[data-skin='handdrawn']) .rounded-sm { border-radius: var(--ds-radius-sm); }
+
+/* 深色：中性表面 / 文字 / 描边 / 蓝色 → 皮肤 Token */
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-gray-800) {
+  background-color: var(--ds-color-surface-subtle);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-gray-900, .dark\:bg-gray-950) {
+  background-color: var(--ds-color-scrim);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-gray-200, .dark\:bg-gray-100, .dark\:bg-white) {
+  background-color: var(--ds-color-surface);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:text-gray-900, .dark\:text-gray-800, .dark\:text-gray-700,
+      .dark\:text-gray-600, .dark\:text-gray-500, .dark\:text-gray-400, .dark\:text-gray-300) {
+  color: var(--ds-color-text);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:text-gray-200, .dark\:text-gray-100, .dark\:text-gray-50) {
+  color: var(--ds-color-text-muted);
+}
+/* 深色：图标灰阶（dark:text-slate/zinc/neutral → 皮肤亮文字）。
+ * 深色下这些类多为浅灰（本应可见），但也有文本型深色类（如 dark:text-slate-900）
+ * 落在深色背景上不可见，一律重定向为皮肤亮文字层级。 */
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:text-slate-900, .dark\:text-slate-800, .dark\:text-slate-700, .dark\:text-slate-600,
+      .dark\:text-slate-500, .dark\:text-slate-400, .dark\:text-slate-300, .dark\:text-slate-200,
+      .dark\:text-zinc-900, .dark\:text-zinc-800, .dark\:text-zinc-700, .dark\:text-zinc-600,
+      .dark\:text-zinc-500, .dark\:text-zinc-400, .dark\:text-zinc-300, .dark\:text-zinc-200,
+      .dark\:text-neutral-900, .dark\:text-neutral-800, .dark\:text-neutral-700, .dark\:text-neutral-600,
+      .dark\:text-neutral-500, .dark\:text-neutral-400, .dark\:text-neutral-300, .dark\:text-neutral-200) {
+  color: var(--ds-color-text);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:text-slate-100, .dark\:text-slate-50,
+      .dark\:text-zinc-100, .dark\:text-zinc-50,
+      .dark\:text-neutral-100, .dark\:text-neutral-50) {
+  color: var(--ds-color-text-muted);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:border-gray-200, .dark\:border-gray-800, .dark\:border-gray-700) {
+  border-color: var(--ds-color-border);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-blue-500, .dark\:bg-blue-600) {
+  background-color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-violet-500, .dark\:bg-violet-600, .dark\:bg-violet-700) {
+  background-color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:text-blue-400, .dark\:text-blue-500, .dark\:text-blue-600, .dark\:text-blue-300) {
+  color: var(--ds-color-primary);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:ring-blue-950, .dark\:ring-blue-500) {
+  --tw-ring-color: var(--ds-color-focus);
+}
+/* 深色：带透明度的白色 / 描边工具类（dark:bg-white/[0.03]、dark:bg-gray-900/95 等） */
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:bg-white\/\[0\.03\], .dark\:bg-white\/\[0\.04\], .dark\:bg-white\/\[0\.05\],
+      .dark\:bg-white\/\[0\.06\], .dark\:bg-white\/\[0\.08\], .dark\:bg-white\/10,
+      .dark\:bg-gray-800\/90, .dark\:bg-gray-900\/95) {
+  background-color: var(--ds-color-surface);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:border-white\/\[0\.08\], .dark\:border-white\/\[0\.1\], .dark\:border-white\/10) {
+  border-color: var(--ds-color-border);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:focus-within\:border-blue-500\/40, .dark\:focus\:border-blue-500) {
+  border-color: var(--ds-color-focus);
+}
+:is(:root[data-skin='glass'].dark, :root[data-skin='retro'].dark, :root[data-skin='eyecare'].dark, :root[data-skin='handdrawn'].dark)
+  :is(.dark\:focus-within\:ring-blue-500\/10, .dark\:focus\:ring-blue-950) {
+  --tw-ring-color: var(--ds-color-focus);
+}
+
+/* 玻璃拟态兼容桥：常用旧工具类只改为半透明表面，不批量创建模糊合成层。 */
+:is(:root[data-skin='glass']) :is(.bg-white, .bg-gray-50, .bg-gray-100,
+    .bg-white\/55, .bg-white\/90, .bg-white\/95) {
+  background-color: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+:is(:root[data-skin='glass'].dark)
+  :is(.dark\:bg-gray-900, .dark\:bg-gray-950, .dark\:bg-gray-800,
+      .dark\:bg-white\/\[0\.03\], .dark\:bg-white\/\[0\.04\], .dark\:bg-white\/\[0\.05\],
+      .dark\:bg-gray-800\/90, .dark\:bg-gray-900\/95) {
+  background-color: rgba(30, 26, 56, 0.5);
+}

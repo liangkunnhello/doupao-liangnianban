@@ -3585,12 +3585,12 @@ export default function InputBar() {
                     disabled={activeAgentIsRunning ? false : gallerySopModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
                     className={`flex min-w-[116px] items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition-[background-color,transform,box-shadow,opacity] duration-150 shadow-sm hover:shadow active:scale-[0.97] ${
                       activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                      : gallerySopModeActive
-                        ? 'bg-violet-600 text-white hover:bg-violet-700 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'bg-[hsl(var(--ds-color-danger))] text-white hover:bg-[hsl(var(--ds-color-danger-hover))]'
+                        : gallerySopModeActive
+                        ? 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'bg-[hsl(var(--ds-color-surface-subtle))] text-[hsl(var(--ds-color-text-muted))] dark:bg-[hsl(var(--ds-color-surface-subtle))] cursor-pointer'
+                        : 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
@@ -3713,12 +3713,12 @@ export default function InputBar() {
                     aria-label={submitButtonAriaLabel}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition shadow-sm ${
                       activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
+                        ? 'bg-[hsl(var(--ds-color-danger))] text-white hover:bg-[hsl(var(--ds-color-danger-hover))]'
                         : gallerySopModeActive
-                        ? 'bg-violet-600 text-white hover:bg-violet-700 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
+                        ? 'bg-[hsl(var(--ds-color-surface-subtle))] text-[hsl(var(--ds-color-text-muted))] dark:bg-[hsl(var(--ds-color-surface-subtle))] cursor-pointer'
+                        : 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                     }`}
                   >
                     {activeAgentIsRunning ? (

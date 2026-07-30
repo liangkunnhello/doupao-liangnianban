@@ -16,6 +16,7 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
 import { getHoverPreviewPosition, getHoverPreviewSize } from '../lib/hoverPreviewPosition'
 import HoverImagePreview, { type HoverPreviewState } from './HoverImagePreview'
+import { isModalBackdropEvent } from '../lib/modalBackdrop'
 
 const HOVER_PREVIEW_MAX_LONG_EDGE = 1024
 
@@ -193,7 +194,9 @@ export default function SopBatchDetailModal({
 
   return (
     <>
-      <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 animate-overlay-in motion-reduce:animate-none">
+      <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 animate-overlay-in motion-reduce:animate-none" onMouseDown={(event) => {
+        if (isModalBackdropEvent(event)) onClose()
+      }}>
         <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
         <div ref={modalRef} className="ds-modal-surface relative z-10 flex h-[min(86vh,820px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border animate-modal-in motion-reduce:animate-none" role="dialog" aria-modal="true" aria-labelledby="sop-batch-detail-title">
           <header className="flex items-center justify-between gap-4 border-b border-gray-200/80 px-5 py-4 dark:border-white/[0.08]">

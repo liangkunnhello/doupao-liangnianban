@@ -24,6 +24,7 @@ import {
 import { MAX_SOP_REFERENCE_IMAGES, type GenerateSop, type SopReferenceImage } from './sopGeneration'
 import { sopLibraryId } from './sopLibrary'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction } from './types'
+import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 
 type CenterTab = 'library' | 'meta' | 'generate'
 type GenerationJob = {
@@ -208,6 +209,9 @@ export default function SopManagementCenter({
   const cancelRenameGroup = () => setEditingGroupId(null)
 
   const confirmDraftChange = () => !itemDirty || window.confirm('当前 SOP 有未保存修改，确认放弃这些修改吗？')
+  const closeSafely = () => {
+    if (job.status !== 'running' && confirmDraftChange()) onClose()
+  }
 
   const selectItem = (item: SopLibraryItem) => {
     if (item.id !== selectedItemId && !confirmDraftChange()) return
@@ -378,7 +382,9 @@ export default function SopManagementCenter({
   }
 
   return (
-    <div className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="sop-center-title">
+    <div className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="sop-center-title" onMouseDown={(event) => {
+      if (isModalBackdropEvent(event)) closeSafely()
+    }}>
       <div className="sop-center-dialog animate-modal-in flex w-full flex-col overflow-hidden">
         <header className="sop-center-header">
           <div>
@@ -387,7 +393,7 @@ export default function SopManagementCenter({
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onMinimize} className="sop-center-button sop-center-button--secondary"><Minus size={16} />最小化</button>
-            <button type="button" onClick={() => confirmDraftChange() && onClose()} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" className="sop-center-icon-button sop-center-icon-button--secondary"><X size={18} /></button>
+            <button type="button" onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" className="sop-center-icon-button sop-center-icon-button--secondary"><X size={18} /></button>
           </div>
         </header>
 

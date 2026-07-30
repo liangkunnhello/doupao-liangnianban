@@ -23,6 +23,7 @@ import type {
   StrategyTestOrder as RequirementOrder,
 } from './contracts'
 import type { StrategyAsset } from './types'
+import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 
 export interface StrategyImageProps {
   imageId?: string
@@ -298,7 +299,9 @@ export default function StrategyGrid({
       </div>
 
       {resultsModalStrategy && (
-        <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="strategy-test-results-title">
+        <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="strategy-test-results-title" onMouseDown={(event) => {
+          if (isModalBackdropEvent(event)) setResultsModalStrategyId('')
+        }}>
           <div className="animate-modal-in flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-2xl dark:border-white/[0.1] dark:bg-gray-900">
             <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
               <div className="min-w-0">
@@ -348,7 +351,9 @@ export default function StrategyGrid({
       )}
 
       {coverPickerId && (
-        <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-label="替换策略封面">
+        <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-label="替换策略封面" onMouseDown={(event) => {
+          if (isModalBackdropEvent(event)) setCoverPickerId('')
+        }}>
           <div className="animate-modal-in max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-2xl dark:border-white/[0.1] dark:bg-gray-900">
             <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-800">
               <div><h3 className="font-semibold">替换策略封面</h3><p className="mt-1 text-xs text-gray-500">选择该策略之前生成的图片，或从本地导入。</p></div>

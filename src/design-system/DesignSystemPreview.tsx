@@ -123,11 +123,11 @@ function Section({
 export default function DesignSystemPreview() {
   const [dark, setDark] = useState(document.documentElement.classList.contains('dark'))
   const [scheme, setScheme] = useState<ColorSchemeValue>(
-    (document.documentElement.getAttribute('data-color-scheme') as ColorSchemeValue) || 'default',
+    (document.documentElement.getAttribute('data-skin') as ColorSchemeValue) || 'default',
   )
   const handleSchemeChange = (next: ColorSchemeValue) => {
     setScheme(next)
-    document.documentElement.setAttribute('data-color-scheme', next)
+    document.documentElement.setAttribute('data-skin', next)
   }
   const [checked, setChecked] = useState(true)
   const [switchOn, setSwitchOn] = useState(true)
@@ -226,7 +226,7 @@ export default function DesignSystemPreview() {
           </div>
         </Section>
 
-        <Section title="配色方案（皮肤）" description="整体视觉皮肤：一次性切换中性色、表面、主色与强调渐变，共 8 套预设。">
+        <Section title="视觉皮肤" description="一次性切换颜色、字体、圆角、阴影与表面质感，与全局皮肤注册表完全同步。">
           <div className="grid gap-4">
             <ColorPresetGrid value={scheme} onChange={handleSchemeChange} columns={4} />
             <ColorSchemeSwitcher value={scheme} onChange={handleSchemeChange} />

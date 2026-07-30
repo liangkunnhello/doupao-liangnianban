@@ -30,6 +30,7 @@ import { generatePromptsFromSopStore } from './storeSopGeneration'
 import { useCloseOnEscape } from '../../../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../../../hooks/usePreventBackgroundScroll'
 import { Switch, useDialogFocusTrap } from '../../../design-system'
+import { isModalBackdropEvent } from '../../../lib/modalBackdrop'
 
 type BatchStatus = 'idle' | 'generating' | 'ready' | 'submitting' | 'success' | 'error'
 type SourceStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
@@ -826,7 +827,9 @@ export default function GallerySopBatchModal({
         : 'text-gray-500 dark:text-gray-400'
 
   return (
-    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 animate-overlay-in motion-reduce:animate-none">
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 animate-overlay-in motion-reduce:animate-none" onMouseDown={(event) => {
+      if (isModalBackdropEvent(event)) closeSafely()
+    }}>
       <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
       <div ref={modalRef} className="ds-modal-surface relative z-10 animate-modal-in motion-reduce:animate-none flex h-[min(88vh,920px)] w-full max-w-[1440px] flex-col overflow-hidden rounded-2xl border" role="dialog" aria-modal="true" aria-labelledby="gallery-sop-title">
         <header className="flex items-center justify-between border-b border-gray-200/80 px-5 py-4 dark:border-white/[0.08] sm:px-6">

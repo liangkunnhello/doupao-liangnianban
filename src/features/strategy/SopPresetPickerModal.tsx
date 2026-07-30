@@ -9,6 +9,7 @@ import {
   SaveIcon as Save,
 } from '../../design-system/icons'
 import { useCloseOnEscape } from '../../hooks/useCloseOnEscape'
+import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 import type { SopGroup, SopLibraryItem } from './types'
 
 const UNGROUPED_GROUP_ID = 'ungrouped'
@@ -120,7 +121,9 @@ export default function SopPresetPickerModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[var(--ds-z-modal)] flex items-center justify-center bg-black/40 p-4 animate-overlay-in motion-reduce:animate-none" role="dialog" aria-modal="true" aria-labelledby="sop-preset-dialog-title">
+    <div className="fixed inset-0 z-[var(--ds-z-modal)] flex items-center justify-center bg-black/40 p-4 animate-overlay-in motion-reduce:animate-none" role="dialog" aria-modal="true" aria-labelledby="sop-preset-dialog-title" onMouseDown={(event) => {
+      if (isModalBackdropEvent(event)) onClose()
+    }}>
       <div className="flex h-[min(82vh,760px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl animate-modal-in motion-reduce:animate-none dark:border-white/[0.1] dark:bg-gray-900">
         <header className="flex items-start justify-between gap-4 border-b border-gray-200/80 p-5 dark:border-white/[0.08]">
           <div>

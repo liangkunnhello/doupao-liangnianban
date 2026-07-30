@@ -123,6 +123,13 @@ export async function authorizeCompositeOutputRoot(
   authorizedRoots.add(outputRoot)
 }
 
+function setExportingActive(active: boolean) {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  if (active) root.setAttribute('data-exporting', 'true')
+  else root.removeAttribute('data-exporting')
+}
+
 export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, callbacks: CompositeV2ExportRuntimeCallbacks) {
   const api = window.electronAPI
   if (!api) throw new Error('当前环境不支持本地导出')
@@ -131,7 +138,9 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
   callbacks.onProgress(0, items.length)
   let completed = 0
 
-  for (const item of items) {
+  setExportingActive(true)
+  try {
+    for (const item of items) {
     await waitWhilePaused(callbacks.shouldPause, callbacks.shouldCancel)
     if (callbacks.shouldCancel()) break
     try {
@@ -174,5 +183,8 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
     }
     completed += 1
     callbacks.onProgress(completed, items.length)
+  }
+  } finally {
+    setExportingActive(false)
   }
 }

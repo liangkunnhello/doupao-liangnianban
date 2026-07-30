@@ -1587,7 +1587,7 @@ export default function SettingsModal() {
               <div className="space-y-4">
                 <div className="block">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">配色预设</span>
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">视觉皮肤</span>
                   </div>
                   <ColorPresetGrid
                     value={draft.skinId}
@@ -1595,7 +1595,7 @@ export default function SettingsModal() {
                     columns={4}
                   />
                   <div data-selectable-text className="mt-2 text-xs text-gray-500 dark:text-gray-500">
-                    切换整体配色皮肤（中性色 + 主色 + 强调渐变），不影响布局与间距。
+                    切换颜色、字体、圆角、阴影与表面质感；不改变功能和页面布局。
                   </div>
                 </div>
                 <div className="hidden sm:block">

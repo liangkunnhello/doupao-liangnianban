@@ -11,6 +11,7 @@ import { applyAgentBatchPreset, createAgentBatchPreset, loadAgentBatchDraft, loa
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
+import { isModalBackdropEvent } from '../lib/modalBackdrop'
 
 type SortKey = 'source' | 'sku' | 'product' | 'channel' | 'quantity'
 
@@ -412,7 +413,9 @@ export default function AgentBatchPlannerModal({ onClose }: { onClose: () => voi
   const visibleSelected = visibleRows.length > 0 && visibleRows.every(({ index }) => selectedRows.has(index))
 
   return (
-    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-2">
+    <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-2" onMouseDown={(event) => {
+      if (isModalBackdropEvent(event)) onClose()
+    }}>
       <div className="ds-modal-scrim pointer-events-none absolute inset-0" />
       <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="agent-batch-planner-title" className="ds-modal-surface relative z-10 flex h-[94vh] w-[min(1680px,99vw)] flex-col overflow-hidden rounded-2xl border">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-white/10">
