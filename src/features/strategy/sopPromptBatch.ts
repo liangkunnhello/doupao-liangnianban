@@ -1,6 +1,5 @@
 import type { SopLibraryItem } from './types'
 
-export const MAX_SOP_BATCH_PROMPTS = 50
 export const MAX_DEFAULT_SOP_PROMPT_SOURCES = 3
 export const MAX_SOP_PROMPTS_PER_MODEL_REQUEST = 10
 export const SOP_PROMPT_BATCH_MAX_ATTEMPTS = 2
@@ -18,9 +17,19 @@ export interface SopPromptBatchContext {
   totalPromptCount?: number
 }
 
+function throwIfSopPromptGenerationAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new DOMException('提示词生成已取消', 'AbortError')
+}
+
+function normalizeSopPromptCount(value: number) {
+  if (!Number.isFinite(value)) return 1
+  return Math.max(1, Math.trunc(value))
+}
+
 export function getSopRunCounts(promptCount: number, imagesPerPrompt: number) {
   return {
-    promptCount: Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(promptCount || 1))),
+    promptCount: normalizeSopPromptCount(promptCount),
     imagesPerPrompt: Math.max(1, Math.min(MAX_SOP_IMAGES_PER_PROMPT, Math.trunc(imagesPerPrompt || 1))),
   }
 }
@@ -38,8 +47,8 @@ export function getSopPromptBatchSizes(
   totalPromptCount: number,
   maxBatchSize = MAX_SOP_PROMPTS_PER_MODEL_REQUEST,
 ) {
-  const total = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(totalPromptCount || 1)))
-  const batchSize = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(maxBatchSize || 1)))
+  const total = normalizeSopPromptCount(totalPromptCount)
+  const batchSize = Math.max(1, Math.min(MAX_SOP_PROMPTS_PER_MODEL_REQUEST, Math.trunc(maxBatchSize || 1)))
   const sizes: number[] = []
   for (let remaining = total; remaining > 0; remaining -= batchSize) {
     sizes.push(Math.min(batchSize, remaining))
@@ -48,7 +57,7 @@ export function getSopPromptBatchSizes(
 }
 
 export function allocateSopPromptCounts(totalPromptCount: number, sourceCount: number) {
-  const count = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(totalPromptCount || 1)))
+  const count = normalizeSopPromptCount(totalPromptCount)
   const sources = Math.max(0, Math.trunc(sourceCount || 0))
   if (sources === 0) return []
   const base = Math.floor(count / sources)
@@ -74,7 +83,7 @@ export function selectSopPromptSources<T extends SopPromptSourceLike>(
   targetPromptCount: number,
   brief: string,
 ) {
-  const count = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(targetPromptCount || 1)))
+  const count = normalizeSopPromptCount(targetPromptCount)
   const mentionedIndexes = getMentionedSopSourceIndexes(brief, sources.length)
   if (mentionedIndexes.length > 0) return mentionedIndexes.slice(0, count).map((index) => sources[index])
   return sources.slice(0, Math.min(sources.length, count, MAX_DEFAULT_SOP_PROMPT_SOURCES))
@@ -102,9 +111,12 @@ export async function generateSopPromptBatches(
     maxBatchSize?: number
     maxAttempts?: number
     onProgress?: (completed: number, total: number) => void
+    onBatch?: (prompts: string[], completed: number, total: number) => void | Promise<void>
+    beforeBatch?: () => void | Promise<void>
+    signal?: AbortSignal
   } = {},
 ) {
-  const expected = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(totalPromptCount || 1)))
+  const expected = normalizeSopPromptCount(totalPromptCount)
   const sizes = getSopPromptBatchSizes(expected, options.maxBatchSize)
   const maxAttempts = Math.max(1, Math.trunc(options.maxAttempts ?? SOP_PROMPT_BATCH_MAX_ATTEMPTS))
   const generated: string[] = []
@@ -116,13 +128,17 @@ export async function generateSopPromptBatches(
     let lastError: unknown
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await options.beforeBatch?.()
+      throwIfSopPromptGenerationAborted(options.signal)
       const existingPrompts = [...(options.existingPrompts ?? []), ...generated]
       try {
         const candidates = await generateBatch(quantity, existingPrompts)
+        throwIfSopPromptGenerationAborted(options.signal)
         batch = normalizeSopPromptCandidates(candidates, quantity, existingPrompts)
         if (!batch.length) throw new Error('模型未返回新的可用提示词')
         break
       } catch (error) {
+        throwIfSopPromptGenerationAborted(options.signal)
         lastError = error
       }
     }
@@ -133,6 +149,7 @@ export async function generateSopPromptBatches(
       throw new Error(`提示词批次生成失败，已自动尝试 ${maxAttempts} 次：${message}`)
     }
     generated.push(...batch)
+    await options.onBatch?.([...batch], generated.length, expected)
     options.onProgress?.(generated.length, expected)
   }
 
@@ -148,7 +165,7 @@ export function buildSopPromptBatchRequest(
   brief: string,
   context: SopPromptBatchContext = {},
 ) {
-  const count = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(quantity)))
+  const count = normalizeSopPromptCount(quantity)
   return [
     `请严格执行以下 SOP，并生成 ${count} 条彼此不同、可直接用于图片生成模型的完整中文提示词。`,
     context.totalPromptCount ? `本轮总目标提示词数量：${context.totalPromptCount} 条。当前只生成分配给本参考图的 ${count} 条。` : '',
@@ -183,7 +200,7 @@ export function parseSopPromptBatchResponse(
   const prompts = Array.isArray((parsed as { prompts?: unknown })?.prompts)
     ? (parsed as { prompts: unknown[] }).prompts.map((item) => String(item).trim()).filter(Boolean)
     : []
-  const expected = Math.max(1, Math.min(MAX_SOP_BATCH_PROMPTS, Math.trunc(quantity)))
+  const expected = normalizeSopPromptCount(quantity)
   const normalized = normalizeSopPromptCandidates(prompts, expected, options.existingPrompts)
   if (options.exact !== false && normalized.length !== expected) throw new Error(`模型应返回 ${expected} 条提示词，实际返回 ${normalized.length} 条，请重试`)
   if (options.exact === false && normalized.length === 0) throw new Error('模型未返回可用提示词，请重试')

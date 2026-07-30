@@ -82,11 +82,8 @@ import { callImageApi } from './lib/api'
 import { callAgentChatCompletionsApi, callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { getDataUrlDecodedByteSize, IMAGE_FETCH_CORS_HINT, isRetryableError, retryTransientRequest, runWithConcurrencyAndRetry } from './lib/imageApiShared'
+import { IMAGE_FETCH_CORS_HINT, isRetryableError, retryTransientRequest, runWithConcurrencyAndRetry } from './lib/imageApiShared'
 import {
-  formatInputImageLimitBytes,
-  MAX_ALL_REFERENCE_IMAGES,
-  MAX_ALL_REFERENCE_PAYLOAD_BYTES,
   MAX_DIRECT_INPUT_IMAGES,
   shouldCycleReferenceImages,
 } from './lib/inputImageLimits'
@@ -4480,36 +4477,6 @@ export async function submitTaskWithData(
   if (!prompt.trim()) {
     showToast('请输入提示词', 'error')
     return
-  }
-
-  if (params.reference_mode === 'all') {
-    const inputCount = inputImageFolder?.imageIds.length ?? inputImages.length
-    if (inputCount > MAX_ALL_REFERENCE_IMAGES) {
-      showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片，请减少图片或切换为逐张参考`, 'error')
-      return
-    }
-
-    try {
-      const inputDataUrls = inputImageFolder
-        ? await Promise.all(inputImageFolder.imageIds.map(async (imageId) => {
-            const dataUrl = await ensureImageCached(imageId)
-            if (!dataUrl) throw new Error('输入图片已不存在')
-            return dataUrl
-          }))
-        : inputImages.map((image) => image.dataUrl)
-      const totalBytes = inputDataUrls.reduce((sum, dataUrl) => sum + getDataUrlDecodedByteSize(dataUrl), 0) +
-        (maskDraft ? getDataUrlDecodedByteSize(maskDraft.maskDataUrl) : 0)
-      if (totalBytes > MAX_ALL_REFERENCE_PAYLOAD_BYTES) {
-        showToast(
-          `同时参考全部的图片总大小不能超过 ${formatInputImageLimitBytes(MAX_ALL_REFERENCE_PAYLOAD_BYTES)}，请压缩图片、减少图片或切换为逐张参考`,
-          'error',
-        )
-        return
-      }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-      return
-    }
   }
 
   let orderedInputImages = inputImages

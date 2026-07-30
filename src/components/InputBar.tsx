@@ -5,7 +5,6 @@ import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import {
-  MAX_ALL_REFERENCE_IMAGES,
   MAX_DIRECT_INPUT_IMAGES,
   MAX_FOLDER_IMAGES,
 } from '../lib/inputImageLimits'
@@ -28,7 +27,7 @@ import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
 import AgentBatchPlannerModal from './AgentBatchPlannerModal'
 import GallerySopBatchModal, { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/GallerySopBatchModal'
 import GallerySopManagementCenter from '../features/strategy/adapters/GallerySopManagementCenter'
-import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_BATCH_PROMPTS, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
+import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
 import { useRequirementPrototype } from '../features/requirementPrototype/store'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
 import { buildWordGroupName, resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
@@ -609,8 +608,24 @@ export default function InputBar() {
   const gallerySopTotalImages = getSopTotalImageCount(gallerySopPromptCount, gallerySopImagesPerPrompt)
   const gallerySopRunStatus = gallerySopRunStatusByTab[gallerySopScopeId]
   const setGallerySopId = useCallback((id: string) => {
+    if (id === gallerySopId) return
+    window.localStorage.removeItem(getGallerySopPromptRunStorageKey(activeWorkspaceTabId))
+    setSavedSopPromptCount(0)
+    setGallerySopPromptCountsByTab((current) => ({ ...current, [gallerySopScopeId]: 5 }))
+    setGallerySopImagesPerPromptByTab((current) => ({ ...current, [gallerySopScopeId]: 1 }))
+    setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: false }))
+    setGallerySopSecondReferenceByTab((current) => ({ ...current, [gallerySopScopeId]: false }))
+    setGallerySopRunStatusByTab((current) => {
+      const next = { ...current }
+      delete next[gallerySopScopeId]
+      return next
+    })
+    setGallerySopBatchTabIds((current) => current.filter((scopeId) => scopeId !== gallerySopScopeId))
+    setVisibleGallerySopBatchTabId((current) => current === gallerySopScopeId ? null : current)
+    setShowGallerySopBatch(false)
+    setGallerySopAutoStart(false)
     setGallerySopIdsByTab((current) => ({ ...current, [gallerySopScopeId]: id }))
-  }, [gallerySopScopeId])
+  }, [activeWorkspaceTabId, gallerySopId, gallerySopScopeId])
   const setGallerySopPromptCount = useCallback((value: number) => {
     const normalized = getSopRunCounts(value, gallerySopImagesPerPrompt).promptCount
     setGallerySopPromptCountsByTab((current) => ({ ...current, [gallerySopScopeId]: normalized }))
@@ -650,6 +665,7 @@ export default function InputBar() {
         return
       }
       const parsed = JSON.parse(raw) as {
+        selectedSopId?: string
         promptCount?: number
         quantity?: number
         imagesPerPrompt?: number
@@ -657,6 +673,10 @@ export default function InputBar() {
         secondReference?: boolean
         availablePrompts?: number
         prompts?: Array<{ deleted?: boolean; promptText?: unknown }>
+      }
+      if (parsed.selectedSopId !== gallerySopId) {
+        setSavedSopPromptCount(0)
+        return
       }
       const count = Array.isArray(parsed.prompts)
         ? parsed.prompts.filter((item) => !item.deleted && typeof item.promptText === 'string' && item.promptText.trim()).length
@@ -674,7 +694,7 @@ export default function InputBar() {
     } catch {
       setSavedSopPromptCount(0)
     }
-  }, [activeWorkspaceTabId, gallerySopScopeId])
+  }, [activeWorkspaceTabId, gallerySopId, gallerySopScopeId])
 
   useEffect(() => {
     if (gallerySopId && !sopItems.some((item) => item.id === gallerySopId)) {
@@ -1001,7 +1021,7 @@ export default function InputBar() {
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
   const gallerySopModeActive = appMode === 'gallery' && Boolean(activeGallerySop)
-  const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'submitting'
+  const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'paused' || gallerySopRunStatus?.phase === 'submitting'
   const gallerySopAvailablePromptCount = gallerySopRunStatus?.availablePrompts ?? savedSopPromptCount
   const gallerySopHasPromptList = gallerySopAvailablePromptCount > 0
   const canSubmit = gallerySopModeActive
@@ -2500,7 +2520,6 @@ export default function InputBar() {
   const renderImageThumbs = () => {
     if (inputImages.length > 4 && !imageThumbsExpanded) {
       const stackImages = inputImages.slice(0, 3)
-      const allModeUnavailable = inputImages.length > MAX_ALL_REFERENCE_IMAGES
       return (
         <div ref={imagesRef} className="mb-3 flex h-[60px] items-center gap-2">
           <button
@@ -2538,17 +2557,10 @@ export default function InputBar() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (allModeUnavailable) {
-                  showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片`, 'error')
-                  return
-                }
-                setParams({ reference_mode: 'all' })
-              }}
-              aria-disabled={allModeUnavailable}
+              onClick={() => setParams({ reference_mode: 'all' })}
               aria-pressed={params.reference_mode === 'all'}
-              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : allModeUnavailable ? 'cursor-not-allowed text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}
-              title={allModeUnavailable ? `同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片` : '每个生成请求同时携带全部参考图'}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
+              title="每个生成请求同时携带全部参考图"
             >
               同时参考全部
             </button>
@@ -2600,7 +2612,6 @@ export default function InputBar() {
   const renderReferenceModeControl = () => {
     const imageCount = inputImageFolder?.imageIds.length ?? inputImages.length
     if (imageCount === 0) return null
-    const allModeUnavailable = imageCount > MAX_ALL_REFERENCE_IMAGES
     return (
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
         <span className="text-[11px] text-gray-500 dark:text-gray-400">参考方式</span>
@@ -2615,17 +2626,10 @@ export default function InputBar() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (allModeUnavailable) {
-                showToast(`同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片`, 'error')
-                return
-              }
-              setParams({ reference_mode: 'all' })
-            }}
-            aria-disabled={allModeUnavailable}
+            onClick={() => setParams({ reference_mode: 'all' })}
             aria-pressed={params.reference_mode === 'all'}
-            className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : allModeUnavailable ? 'cursor-not-allowed text-gray-300 dark:text-gray-600' : 'text-gray-500 dark:text-gray-400'}`}
-            title={allModeUnavailable ? `同时参考全部最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张图片` : '每个生成请求同时携带全部参考图'}
+            className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
+            title="每个生成请求同时携带全部参考图"
           >
             同时参考全部
           </button>
@@ -2880,6 +2884,8 @@ export default function InputBar() {
     const progressLabel = gallerySopRunStatus
       ? gallerySopRunStatus.phase === 'generating'
         ? `提示词 ${gallerySopRunStatus.availablePrompts}/${gallerySopRunStatus.promptCount}`
+        : gallerySopRunStatus.phase === 'paused'
+          ? `已暂停 ${gallerySopRunStatus.availablePrompts}/${gallerySopRunStatus.promptCount}`
         : gallerySopRunStatus.phase === 'submitting'
           ? `正在提交 ${gallerySopRunStatus.totalImages} 张`
           : gallerySopRunStatus.phase === 'error'
@@ -2927,12 +2933,11 @@ export default function InputBar() {
             <input
               type="number"
               min={1}
-              max={MAX_SOP_BATCH_PROMPTS}
               disabled={gallerySopIsRunning}
               value={gallerySopPromptCount}
               onChange={(event) => event.target.value && setGallerySopPromptCount(Number(event.target.value))}
               aria-label="SOP 提示词数量"
-              className="w-9 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
+              className="w-14 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
             />
           </label>
           <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
@@ -3812,7 +3817,7 @@ export default function InputBar() {
       )}
       {gallerySopBatchTabIds.map((tabId) => createPortal(
         <GallerySopBatchModal
-          key={tabId}
+          key={`${tabId}:${gallerySopIdsByTab[tabId] ?? ''}`}
           workspaceTabId={tabId === '__default__' ? null : tabId}
           visible={showGallerySopBatch && visibleGallerySopBatchTabId === tabId}
           initialSopId={gallerySopIdsByTab[tabId] ?? ''}
@@ -3822,6 +3827,7 @@ export default function InputBar() {
           initialAutoGenerate={gallerySopAutoGenerateByTab[tabId] ?? false}
           initialSecondReference={gallerySopSecondReferenceByTab[tabId] ?? false}
           autoStart={gallerySopAutoStart && visibleGallerySopBatchTabId === tabId}
+          onAutoStartConsumed={() => setGallerySopAutoStart(false)}
           onStatusChange={handleGallerySopRunStatusChange}
           onBackground={() => {
             setVisibleGallerySopBatchTabId(null)

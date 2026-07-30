@@ -12,6 +12,7 @@ const storeMocks = vi.hoisted(() => ({
   subscribeImageThumbnail: vi.fn(() => () => {}),
   retryTask: vi.fn(),
   rerunSopBatchTasks: vi.fn(),
+  useStore: (selector: (state: { lightboxImageId: string | null }) => unknown) => selector({ lightboxImageId: null }),
 }))
 
 vi.mock('../store', () => storeMocks)
@@ -23,6 +24,7 @@ const mountedRenderers: Array<ReturnType<typeof create>> = []
 
 afterEach(() => {
   while (mountedRenderers.length) mountedRenderers.pop()?.unmount()
+  window.localStorage.clear()
   vi.clearAllMocks()
 })
 
@@ -43,6 +45,58 @@ function createTask(outputImages = ['image-1']): TaskRecord {
 }
 
 describe('SopBatchDetailModal hover preview', () => {
+  it('keeps modal size and image view size as independent controls', async () => {
+    storeMocks.ensureImageThumbnailCached.mockResolvedValue(undefined)
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+
+    const toolbar = renderer!.root.findByProps({ 'aria-label': 'SOP 批量任务视图控制' })
+    const slider = renderer!.root.findByProps({ 'aria-label': '调整 SOP 批量任务图片视图大小' })
+    expect(toolbar.props.className).not.toContain('hidden')
+    expect(slider.props.value).toBe(240)
+    expect(renderer!.root.findByProps({ role: 'dialog' }).props.style).toMatchObject({
+      height: 'min(86vh, 820px)',
+      maxWidth: '1024px',
+    })
+    expect(renderer!.root.findByProps({ 'data-testid': 'sop-batch-results-grid' }).props.style.gridTemplateColumns).toContain('240px')
+
+    act(() => slider.props.onChange({ target: { value: '320' } }))
+    expect(renderer!.root.findByProps({ 'aria-label': '调整 SOP 批量任务图片视图大小' }).props.value).toBe(320)
+    expect(renderer!.root.findByProps({ 'data-testid': 'sop-batch-results-grid' }).props.style.gridTemplateColumns).toContain('320px')
+    expect(renderer!.root.findByProps({ role: 'dialog' }).props.style).toMatchObject({ maxWidth: '1024px' })
+
+    act(() => renderer!.root.findByProps({ 'aria-label': '进入 SOP 批量任务大弹窗模式' }).props.onClick())
+    expect(renderer!.root.findByProps({ 'aria-label': '退出 SOP 批量任务大弹窗模式' }).props['aria-pressed']).toBe(true)
+    expect(renderer!.root.findByProps({ role: 'dialog' }).props.style).toMatchObject({
+      width: '80vw',
+      height: '80vh',
+      maxWidth: 'none',
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': '调整 SOP 批量任务图片视图大小' }).props.value).toBe(320)
+
+    act(() => renderer!.unmount())
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+    expect(renderer!.root.findByProps({ 'aria-label': '退出 SOP 批量任务大弹窗模式' }).props['aria-pressed']).toBe(true)
+    expect(renderer!.root.findByProps({ role: 'dialog' }).props.style).toMatchObject({ width: '80vw', height: '80vh' })
+    expect(renderer!.root.findByProps({ 'aria-label': '调整 SOP 批量任务图片视图大小' }).props.value).toBe(320)
+
+    act(() => renderer!.root.findByProps({ 'aria-label': '退出 SOP 批量任务大弹窗模式' }).props.onClick())
+    act(() => renderer!.unmount())
+    await act(async () => {
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
+    })
+    mountedRenderers.push(renderer!)
+    expect(renderer!.root.findByProps({ 'aria-label': '进入 SOP 批量任务大弹窗模式' }).props['aria-pressed']).toBe(false)
+    expect(renderer!.root.findByProps({ role: 'dialog' }).props.style).toMatchObject({ maxWidth: '1024px' })
+    expect(renderer!.root.findByProps({ 'aria-label': '调整 SOP 批量任务图片视图大小' }).props.value).toBe(320)
+  })
+
   it('shows the full image on mouse hover, follows the pointer, and closes on leave', async () => {
     storeMocks.ensureImageThumbnailCached.mockResolvedValue({
       dataUrl: 'data:image/webp;base64,thumbnail',
@@ -51,10 +105,10 @@ describe('SopBatchDetailModal hover preview', () => {
     })
     storeMocks.ensureImageCached.mockResolvedValue('data:image/png;base64,full-image')
 
-    const onOpenTask = vi.fn()
+    const onOpenImage = vi.fn()
     let renderer: ReturnType<typeof create>
     await act(async () => {
-      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenTask={onOpenTask} />)
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={onOpenImage} />)
     })
     mountedRenderers.push(renderer!)
     const imageButton = renderer!.root.findAllByType('button').find((node) => node.props['aria-label'] === '查看第 1 条提示词的第 1 张图片')
@@ -73,15 +127,20 @@ describe('SopBatchDetailModal hover preview', () => {
     expect(imageButton!.props.style.aspectRatio).toBe('1536 / 1024')
     expect(renderer!.root.findAllByType('img').find((image) => image.props.alt.includes('生成结果'))!.props.className).toContain('object-cover')
 
-    act(() => imageButton!.props.onClick())
-    expect(onOpenTask).toHaveBeenCalledWith('sop-task-1')
-
     act(() => {
       imageButton!.props.onPointerMove({ pointerType: 'mouse', clientX: 900, clientY: 700 })
     })
     floatingPreview = renderer!.root.findByType(HoverImagePreview)
     expect(floatingPreview.props.preview.src).toBe('data:image/png;base64,full-image')
     expect(floatingPreview.props.preview.left).toBeLessThan(900)
+
+    act(() => imageButton!.props.onClick())
+    expect(onOpenImage).toHaveBeenCalledWith('image-1')
+    expect(renderer!.root.findAllByProps({ 'aria-label': '任务参数' })).toHaveLength(1)
+
+    const regenerateButton = renderer!.root.findByProps({ 'aria-label': '再次生成第 1 条提示词' })
+    act(() => regenerateButton.props.onClick())
+    expect(storeMocks.retryTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'sop-task-1' }))
 
     act(() => imageButton!.props.onPointerLeave())
     expect(renderer!.root.findAllByType(HoverImagePreview)).toHaveLength(0)
@@ -96,7 +155,7 @@ describe('SopBatchDetailModal hover preview', () => {
 
     let renderer: ReturnType<typeof create>
     await act(async () => {
-      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenTask={vi.fn()} />)
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask()]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
     })
     mountedRenderers.push(renderer!)
     const imageButton = renderer!.root.findAllByType('button').find((node) => node.props['aria-label'] === '查看第 1 条提示词的第 1 张图片')
@@ -107,7 +166,7 @@ describe('SopBatchDetailModal hover preview', () => {
     expect(storeMocks.ensureImageCached).not.toHaveBeenCalled()
   })
 
-  it('groups multiple variants in proportional four-column result cards', async () => {
+  it('keeps proportional result images in the adjustable grid across both view modes', async () => {
     storeMocks.ensureImageThumbnailCached.mockResolvedValue({
       dataUrl: 'data:image/webp;base64,thumbnail',
       width: 1024,
@@ -116,13 +175,13 @@ describe('SopBatchDetailModal hover preview', () => {
     let renderer: ReturnType<typeof create>
 
     await act(async () => {
-      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask(['image-1', 'image-2'])]} onClose={vi.fn()} onOpenTask={vi.fn()} />)
+      renderer = create(<SopBatchDetailModal sopName="天体图" tasks={[createTask(['image-1', 'image-2'])]} onClose={vi.fn()} onOpenImage={vi.fn()} />)
     })
     mountedRenderers.push(renderer!)
 
     expect(renderer!.root.findAllByType('button').filter((button) => String(button.props['aria-label']).includes('第 1 条提示词的第'))).toHaveLength(2)
-    const groupedGrid = renderer!.root.findAllByType('div').find((node) => String(node.props.className).includes('grid-cols-4'))
-    expect(groupedGrid).toBeDefined()
+    const groupedGrid = renderer!.root.findByProps({ 'data-testid': 'sop-batch-results-grid' })
+    expect(groupedGrid.props.style.gridTemplateColumns).toContain('240px')
     const groupedResultButtons = renderer!.root.findAllByType('button').filter((button) => String(button.props['aria-label']).includes('第 1 条提示词的第'))
     expect(groupedResultButtons[0].props.style.aspectRatio).toBe('1024 / 1024')
 
@@ -135,7 +194,7 @@ describe('SopBatchDetailModal hover preview', () => {
     const resultButtons = renderer!.root.findAllByType('button').filter((button) => String(button.props['aria-label']).includes('第 1 条提示词的第'))
     expect(resultButtons).toHaveLength(2)
     expect(resultButtons[0].props.style.aspectRatio).toBe('1024 / 1024')
-    const allResultsGrid = renderer!.root.findAllByType('div').find((node) => String(node.props.className).includes('grid-cols-4'))
-    expect(allResultsGrid).toBeDefined()
+    const allResultsGrid = renderer!.root.findByProps({ 'data-testid': 'sop-batch-results-grid' })
+    expect(allResultsGrid.props.style.gridTemplateColumns).toContain('240px')
   })
 })

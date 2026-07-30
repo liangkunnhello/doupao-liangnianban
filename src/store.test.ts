@@ -967,6 +967,24 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
   })
 
+  it('allows simultaneously referencing more than sixteen input images', async () => {
+    const inputImages = Array.from({ length: 17 }, (_, index) => ({
+      id: `image-${index + 1}`,
+      dataUrl: `data:image/png;base64,image-${index + 1}`,
+    }))
+    useStore.setState({
+      inputImages,
+      params: { ...DEFAULT_PARAMS, reference_mode: 'all' },
+    })
+
+    await submitTask()
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      inputImageIds: inputImages.map((image) => image.id),
+      params: expect.objectContaining({ reference_mode: 'all' }),
+    })
+  })
+
   it('assigns generated image batches per workspace tab', async () => {
     const kuaishou = workspaceTab({ id: 'tab-kuaishou', name: '快手' })
     const xiaohongshu = workspaceTab({ id: 'tab-xiaohongshu', name: '小红书', order: 1 })

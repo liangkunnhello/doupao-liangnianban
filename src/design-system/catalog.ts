@@ -119,6 +119,7 @@ export const legacyComponentCoverage: LegacyComponentCoverage[] = [
   { module: 'src/components/SupportPromptModal.tsx', responsibility: '支持与赞助说明弹窗', decision: 'compose', targets: ['Dialog', 'Alert', 'Button'] },
   { module: 'src/components/TaskCard.tsx', responsibility: '图片生成任务卡及动作', decision: 'retain', targets: ['Card', 'Thumbnail', 'StatusIndicator', 'Toolbar', 'Menu'] },
   { module: 'src/components/TaskGrid.tsx', responsibility: '任务虚拟网格和批次分组', decision: 'retain', targets: ['Grid', 'Skeleton', 'EmptyState'] },
+  { module: 'src/components/TaskParamSummary.tsx', responsibility: '任务参数摘要标签', decision: 'compose', targets: ['StatusIndicator'] },
   { module: 'src/components/Toast.tsx', responsibility: '全局短暂反馈', decision: 'migrate', targets: ['ToastMessage'] },
   { module: 'src/components/UpdateReleaseNotesModal.tsx', responsibility: '版本更新说明弹窗', decision: 'compose', targets: ['Dialog', 'Disclosure', 'Button'] },
   { module: 'src/components/VarEntryEditor.tsx', responsibility: '变量词条编辑弹窗', decision: 'compose', targets: ['Dialog', 'TextField', 'ListRow', 'Button'] },

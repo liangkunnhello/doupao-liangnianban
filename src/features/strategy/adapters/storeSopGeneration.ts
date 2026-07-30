@@ -85,6 +85,10 @@ export async function generatePromptsFromSopStore(
     exact?: boolean
     existingPrompts?: string[]
     onProgress?: (completed: number, total: number) => void
+    maxBatchSize?: number
+    onBatch?: (prompts: string[], completed: number, total: number) => void | Promise<void>
+    beforeBatch?: () => void | Promise<void>
+    signal?: AbortSignal
   } = {},
 ) {
   const settings = useStore.getState().settings
@@ -115,6 +119,7 @@ export async function generatePromptsFromSopStore(
         Authorization: `Bearer ${profile.apiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: options.signal,
       cache: 'no-store',
       body: JSON.stringify({
         model: profile.model || settings.model,
@@ -142,5 +147,9 @@ export async function generatePromptsFromSopStore(
     exact: options.exact,
     existingPrompts: options.existingPrompts,
     onProgress: options.onProgress,
+    maxBatchSize: options.maxBatchSize,
+    onBatch: options.onBatch,
+    beforeBatch: options.beforeBatch,
+    signal: options.signal,
   })
 }

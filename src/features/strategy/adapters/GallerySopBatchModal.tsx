@@ -7,6 +7,8 @@ import {
   HistoryIcon as History,
   ImageIcon,
   LoaderCircleIcon as LoaderCircle,
+  PauseIcon as Pause,
+  PlayIcon as Play,
   PlusIcon as Plus,
   RefreshIcon as RefreshCw,
   SendIcon as Send,
@@ -16,7 +18,6 @@ import {
 } from '../../../design-system/icons'
 import { ensureImageCached, submitTaskWithData, useStore } from '../../../store'
 import type { InputImage, SopBatchSnapshot } from '../../../types'
-import { MAX_ALL_REFERENCE_IMAGES } from '../../../lib/inputImageLimits'
 import { deleteSopBatchSnapshot, getAllSopBatchSnapshots, getSopBatchSnapshot, putSopBatchSnapshot } from '../../../lib/db'
 import { useRequirementPrototype } from '../../requirementPrototype/store'
 import {
@@ -32,7 +33,7 @@ import { usePreventBackgroundScroll } from '../../../hooks/usePreventBackgroundS
 import { Switch, useDialogFocusTrap } from '../../../design-system'
 import { isModalBackdropEvent } from '../../../lib/modalBackdrop'
 
-type BatchStatus = 'idle' | 'generating' | 'ready' | 'submitting' | 'success' | 'error'
+type BatchStatus = 'idle' | 'generating' | 'paused' | 'ready' | 'submitting' | 'success' | 'error'
 type SourceStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
 
 type SopPromptSource = {
@@ -54,6 +55,7 @@ type SourceRun = {
 type PromptDraft = {
   id: string
   sourceId: string
+  referenceImageIds?: string[]
   promptText: string
   origin: 'ai' | 'manual'
   edited?: boolean
@@ -87,6 +89,10 @@ function promptRunId() {
   return `sop-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 function getRunUpdatedAt(run: SopBatchSnapshot) {
   return run.updatedAt ?? run.createdAt
 }
@@ -105,7 +111,7 @@ export type GallerySopRunStatus = {
   failed: number
 }
 
-function SourceThumb({ source }: { source: SopPromptSource }) {
+function SourceThumb({ source, fit = 'cover' }: { source: SopPromptSource; fit?: 'cover' | 'contain' }) {
   const [dataUrl, setDataUrl] = useState(source.dataUrl ?? '')
 
   useEffect(() => {
@@ -131,7 +137,7 @@ function SourceThumb({ source }: { source: SopPromptSource }) {
   }
 
   return dataUrl
-    ? <img src={dataUrl} alt={source.label} className="h-full w-full object-cover" />
+    ? <img src={dataUrl} alt={source.label} className={`h-full w-full ${fit === 'contain' ? 'object-contain' : 'object-cover'}`} />
     : <div className="flex h-full w-full items-center justify-center bg-gray-100 text-gray-400 dark:bg-gray-800"><ImageIcon size={18} /></div>
 }
 
@@ -148,6 +154,7 @@ export default function GallerySopBatchModal({
   workspaceTabId,
   visible = true,
   onBackground,
+  onAutoStartConsumed,
   onStatusChange,
 }: {
   onClose: () => void
@@ -162,6 +169,7 @@ export default function GallerySopBatchModal({
   workspaceTabId?: string | null
   visible?: boolean
   onBackground?: () => void
+  onAutoStartConsumed?: () => void
   onStatusChange?: (status: GallerySopRunStatus) => void
 }) {
   const items = useRequirementPrototype((state) => state.sopLibrary)
@@ -190,6 +198,7 @@ export default function GallerySopBatchModal({
   const [recentRuns, setRecentRuns] = useState<SopBatchSnapshot[]>([])
   const [showRunHistory, setShowRunHistory] = useState(false)
   const [restoreComplete, setRestoreComplete] = useState(false)
+  const [previewSource, setPreviewSource] = useState<SopPromptSource | null>(null)
   const autoStartRef = useRef(false)
   const autoGenerateRef = useRef(initialAutoGenerate)
   const secondReferenceRef = useRef(initialSecondReference)
@@ -197,10 +206,16 @@ export default function GallerySopBatchModal({
   const activeRunSubmittedRef = useRef(false)
   const pendingSnapshotRef = useRef<SopBatchSnapshot | null>(null)
   const snapshotTimerRef = useRef<number | null>(null)
+  const generationAbortRef = useRef<AbortController | null>(null)
+  const generationPausedRef = useRef(false)
+  const pauseWaitersRef = useRef<Array<() => void>>([])
+  const componentActiveRef = useRef(true)
   const modalRef = useRef<HTMLDivElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
 
   const selectedSop = items.find((item) => item.id === selectedSopId)
-  const running = status === 'generating' || status === 'submitting'
+  const promptGenerationActive = status === 'generating' || status === 'paused'
+  const running = promptGenerationActive || status === 'submitting'
   const targetWorkspaceTabId = workspaceTabId ?? activeWorkspaceTabId
   const activeTab = workspaceTabs.find((tab) => tab.id === targetWorkspaceTabId)
   const promptRunStorageKey = getGallerySopPromptRunStorageKey(targetWorkspaceTabId)
@@ -226,6 +241,12 @@ export default function GallerySopBatchModal({
   const targetImagesPerPrompt = normalizedCounts.imagesPerPrompt
   const totalImageCount = getSopTotalImageCount(targetCount, targetImagesPerPrompt)
   const selectedSources = useMemo(() => selectSharedSopPromptSources(allSources), [allSources])
+  const selectedReferenceImageIds = useMemo(
+    () => selectedSources
+      .filter((source) => source.kind === 'image' && source.imageId)
+      .map((source) => source.imageId!),
+    [selectedSources],
+  )
   const sharedSource = useMemo<SopPromptSource>(() => {
     const firstImage = selectedSources.find((source) => source.kind === 'image')
     return firstImage
@@ -236,11 +257,80 @@ export default function GallerySopBatchModal({
   const aiCount = prompts.filter((item) => !item.deleted && item.origin === 'ai' && item.promptText.trim()).length
   const missingCount = Math.max(0, targetCount - visiblePrompts.length)
   const activeRun = recentRuns.find((run) => run.id === activeRunId)
+  const getPromptReferenceSources = (item: PromptDraft) => {
+    const source = allSources.find((candidate) => candidate.id === item.sourceId)
+    const imageIds = item.referenceImageIds
+      ?? (source?.kind === 'image' && source.imageId
+        ? [source.imageId]
+        : item.sourceId === 'shared-reference' ? selectedReferenceImageIds : [])
+    return imageIds.map((imageId, index) =>
+      allSources.find((candidate) => candidate.imageId === imageId) ?? {
+        id: `reference-${imageId}`,
+        label: `参考图 ${index + 1}`,
+        kind: 'image' as const,
+        imageId,
+      })
+  }
 
   const setCurrentRunId = (id: string, submitted = false) => {
     activeRunIdRef.current = id
     activeRunSubmittedRef.current = submitted
     setActiveRunId(id)
+  }
+
+  const releasePauseWaiters = () => {
+    const waiters = pauseWaitersRef.current.splice(0)
+    for (const resolve of waiters) resolve()
+  }
+
+  const waitWhileGenerationPaused = async () => {
+    if (!generationPausedRef.current) return
+    await new Promise<void>((resolve) => {
+      pauseWaitersRef.current.push(resolve)
+    })
+  }
+
+  const pausePromptGeneration = () => {
+    if (status !== 'generating' || !generationAbortRef.current) return
+    generationPausedRef.current = true
+    setStatus('paused')
+    setStatusMessage('提示词生成已暂停，将在当前请求完成后停止发送下一批')
+  }
+
+  const resumePromptGeneration = () => {
+    if (status !== 'paused' || !generationAbortRef.current) return
+    generationPausedRef.current = false
+    releasePauseWaiters()
+    setStatus('generating')
+    setStatusMessage(`继续生成提示词，当前可用 ${visiblePrompts.length}/${targetCount} 条`)
+  }
+
+  const cancelPromptGeneration = () => {
+    const controller = generationAbortRef.current
+    if (!controller) return
+    generationPausedRef.current = false
+    releasePauseWaiters()
+    controller.abort(new DOMException('提示词生成已取消', 'AbortError'))
+    setStatusMessage('正在取消提示词生成')
+  }
+
+  const resetCompletedRun = () => {
+    const nextRunId = promptRunId()
+    setCurrentRunId(nextRunId)
+    setSources([])
+    setPrompts([])
+    setStatus('idle')
+    setError('')
+    setStatusMessage('提示词列表为空，可从输入区主按钮生成')
+    writeRunPointer(
+      nextRunId,
+      [],
+      autoGenerateRef.current,
+      brief,
+      targetCount,
+      targetImagesPerPrompt,
+      secondReferenceRef.current,
+    )
   }
 
   const updateRecentRun = (snapshot: SopBatchSnapshot) => {
@@ -310,6 +400,7 @@ export default function GallerySopBatchModal({
         origin: item.origin,
         edited: Boolean(item.edited),
         sourceId: item.sourceId,
+        referenceImageIds: item.referenceImageIds,
         deleted: Boolean(item.deleted),
       })),
       params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
@@ -357,6 +448,7 @@ export default function GallerySopBatchModal({
     const restoredPrompts: PromptDraft[] = run.prompts.map((item) => ({
       id: item.id,
       sourceId: item.sourceId ?? sourceId,
+      referenceImageIds: item.referenceImageIds ?? run.referenceImageIds,
       promptText: item.text,
       origin: item.origin,
       edited: item.edited,
@@ -498,10 +590,16 @@ export default function GallerySopBatchModal({
 
     return () => {
       active = false
+      generationPausedRef.current = false
+      const waiters = pauseWaitersRef.current.splice(0)
+      for (const resolve of waiters) resolve()
+      generationAbortRef.current?.abort(new DOMException('SOP 已切换或工作台已关闭', 'AbortError'))
+      generationAbortRef.current = null
     }
   }, [promptRunStorageKey, selectedSopId])
 
   useEffect(() => () => {
+    componentActiveRef.current = false
     if (snapshotTimerRef.current != null) window.clearTimeout(snapshotTimerRef.current)
     const pending = pendingSnapshotRef.current
     if (pending) void putSopBatchSnapshot(pending)
@@ -531,7 +629,7 @@ export default function GallerySopBatchModal({
   const closeSafely = () => {
     if (running) {
       onBackground?.()
-      showToast('SOP 提示词正在后台生成，可随时从当前标签页的列表继续查看', 'success')
+      showToast(status === 'paused' ? 'SOP 提示词生成已暂停，可随时返回继续' : 'SOP 提示词正在后台生成，可随时从当前标签页的列表继续查看', 'success')
       return
     }
     onClose()
@@ -587,9 +685,6 @@ export default function GallerySopBatchModal({
 
   const loadSharedInputImages = async () => {
     const imageSources = selectedSources.filter((source) => source.kind === 'image' && source.imageId)
-    if (imageSources.length > MAX_ALL_REFERENCE_IMAGES) {
-      throw new Error(`共同参考图最多支持 ${MAX_ALL_REFERENCE_IMAGES} 张，当前为 ${imageSources.length} 张`)
-    }
     const loaded = await Promise.all(imageSources.map(async (source): Promise<InputImage | null> => {
       if (!source.imageId) return null
       const dataUrl = source.dataUrl ?? await ensureImageCached(source.imageId)
@@ -633,10 +728,18 @@ export default function GallerySopBatchModal({
       setError(cause instanceof Error ? cause.message : '共同参考图或批次快照保存失败')
       return
     }
+    const promptInputImageById = new Map(promptInputImages.map((image) => [image.id, image]))
     const results = await Promise.allSettled(usablePrompts.map(async (item, index) => {
+      const itemReferenceImageIds = item.referenceImageIds ?? promptInputImages.map((image) => image.id)
+      const itemInputImages = secondReferenceRef.current
+        ? itemReferenceImageIds.flatMap((imageId) => {
+            const image = promptInputImageById.get(imageId)
+            return image ? [image] : []
+          })
+        : []
       return submitTaskWithData({
         prompt: item.promptText.trim(),
-        inputImages: promptInputImages,
+        inputImages: itemInputImages,
         inputImageFolder: null,
         params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
         maskDraft: null,
@@ -680,6 +783,7 @@ export default function GallerySopBatchModal({
     setStatusMessage(failCount > 0 ? `部分提交完成：成功 ${successCount} 个，失败 ${failCount} 个` : `已并发提交 ${successCount} 个 SOP 生图任务`)
     setError(failCount > 0 ? '失败项未创建任务卡，请检查 API 配置后重新提交。' : '')
     showToast(failCount > 0 ? `SOP 批量任务部分提交失败：${failCount} 个` : `已提交 ${successCount} 个 SOP 生图任务`, failCount > 0 ? 'error' : 'success')
+    if (failCount === 0) resetCompletedRun()
   }
 
   const generateForSources = async (retrySourceId?: string) => {
@@ -689,6 +793,11 @@ export default function GallerySopBatchModal({
       setError('请先选择一个 SOP')
       return
     }
+    generationAbortRef.current?.abort(new DOMException('已开始新的提示词生成', 'AbortError'))
+    const generationController = new AbortController()
+    generationAbortRef.current = generationController
+    generationPausedRef.current = false
+    releasePauseWaiters()
     const previous = sources.find((entry) => entry.source.id === sharedSource.id)
     const plannedSources: SourceRun[] = [{
       source: sharedSource,
@@ -706,9 +815,35 @@ export default function GallerySopBatchModal({
     const nextSources = [...plannedSources]
     const existingForSource = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
     const deficit = Math.max(0, targetCount - existingForSource.length)
+    const progressiveDispatch = autoGenerateRef.current && !retrySourceId
+    const progressiveBatchId = progressiveDispatch ? `sop-batch-${Date.now().toString(36)}` : ''
+    const progressiveSnapshotId = activeRunIdRef.current
+    const progressiveTaskIds: string[] = []
+    let progressiveSuccessCount = 0
+    let progressiveFailureCount = 0
+    let progressivePersistenceError = ''
+    let generationCancelled = false
+
+    const saveProgressiveSnapshot = async (runStatus: NonNullable<SopBatchSnapshot['status']>) => {
+      if (!progressiveDispatch) return
+      const snapshot = buildPromptRunSnapshot(progressiveSnapshotId, nextPrompts, nextSources, runStatus, {
+        batchId: progressiveBatchId,
+        batchIds: [progressiveBatchId],
+        taskIds: [...progressiveTaskIds],
+      })
+      if (!snapshot) return
+      try {
+        await flushPromptRunSnapshot(snapshot)
+      } catch (cause) {
+        progressivePersistenceError = cause instanceof Error ? cause.message : '运行记录保存失败'
+      }
+    }
+
     if (deficit > 0) {
       try {
         const sharedImages = await loadSharedInputImages()
+        const sharedReferenceImageIds = sharedImages.map((image) => image.id)
+        const generationInputImages = progressiveDispatch && secondReferenceRef.current ? sharedImages : []
         const generated = await generatePromptsFromSopStore(selectedSop, deficit, brief, {
           context: {
             sourceLabel: sharedImages.length ? `共同参考图（${sharedImages.length} 张）` : undefined,
@@ -719,34 +854,166 @@ export default function GallerySopBatchModal({
             : undefined,
           exact: false,
           existingPrompts: [...existingPrompts, ...nextPrompts.map((item) => item.promptText)],
+          maxBatchSize: progressiveDispatch ? 1 : undefined,
+          beforeBatch: waitWhileGenerationPaused,
+          signal: generationController.signal,
+          onBatch: async (batchPrompts) => {
+            for (const prompt of batchPrompts) {
+              if (!componentActiveRef.current || generationController.signal.aborted) {
+                throw generationController.signal.reason instanceof Error
+                  ? generationController.signal.reason
+                  : new DOMException('提示词生成已取消', 'AbortError')
+              }
+              const item: PromptDraft = {
+                id: promptItemId(sharedSource.id),
+                sourceId: sharedSource.id,
+                referenceImageIds: sharedReferenceImageIds,
+                promptText: prompt,
+                origin: 'ai',
+              }
+              nextPrompts.push(item)
+              setPrompts([...nextPrompts])
+              const promptIndex = nextPrompts.filter((entry) => !entry.deleted && entry.promptText.trim()).length
+              if (progressiveDispatch) {
+                setStatusMessage(`已生成提示词 ${promptIndex}/${targetCount}，正在发送第 ${promptIndex} 条生图任务`)
+                await saveProgressiveSnapshot('generating')
+                let dispatched = false
+                try {
+                  const taskId = await submitTaskWithData({
+                    prompt: item.promptText.trim(),
+                    inputImages: generationInputImages,
+                    inputImageFolder: null,
+                    params: { ...params, n: targetImagesPerPrompt, reference_mode: 'all' },
+                    maskDraft: null,
+                    targetTabId: targetWorkspaceTabId,
+                    scheduledOutputPath: customOutputPath.trim() || undefined,
+                    scheduledOutputSubFolder: activeTab?.name,
+                    sopBatch: {
+                      batchId: progressiveBatchId,
+                      snapshotId: progressiveSnapshotId,
+                      sopId: selectedSop.id,
+                      sopName: selectedSop.name,
+                      promptId: item.id,
+                      promptIndex,
+                      promptCount: targetCount,
+                      imagesPerPrompt: targetImagesPerPrompt,
+                    },
+                  }, { silentSuccess: true })
+                  if (typeof taskId === 'string' && taskId) {
+                    progressiveTaskIds.push(taskId)
+                    progressiveSuccessCount += 1
+                    dispatched = true
+                  } else {
+                    progressiveFailureCount += 1
+                  }
+                } catch {
+                  progressiveFailureCount += 1
+                }
+                if (!componentActiveRef.current || generationController.signal.aborted) {
+                  throw generationController.signal.reason instanceof Error
+                    ? generationController.signal.reason
+                    : new DOMException('提示词生成已取消', 'AbortError')
+                }
+                await saveProgressiveSnapshot('generating')
+                setStatusMessage(generationPausedRef.current
+                  ? `提示词生成已暂停，第 ${promptIndex} 条${dispatched ? '已发送' : '发送失败'}`
+                  : dispatched
+                    ? `第 ${promptIndex} 条已发送，继续生成下一条提示词`
+                    : `第 ${promptIndex} 条发送失败，继续生成下一条提示词`)
+              } else {
+                persistPromptRun([...nextPrompts], nextSources, autoGenerate, 'generating')
+                setStatusMessage(generationPausedRef.current
+                  ? `提示词生成已暂停，当前可用 ${promptIndex}/${targetCount} 条`
+                  : `正在生成提示词 ${promptIndex}/${targetCount}`)
+              }
+            }
+          },
           onProgress: (completed, total) => {
-            setStatusMessage(`正在生成提示词 ${Math.min(existingForSource.length + completed, targetCount)}/${Math.min(existingForSource.length + total, targetCount)}`)
+            if (!progressiveDispatch) {
+              const completedCount = Math.min(existingForSource.length + completed, targetCount)
+              const totalCount = Math.min(existingForSource.length + total, targetCount)
+              setStatusMessage(generationPausedRef.current
+                ? `提示词生成已暂停，当前可用 ${completedCount}/${totalCount} 条`
+                : `正在生成提示词 ${completedCount}/${totalCount}`)
+            }
           },
         })
+        if (generationController.signal.aborted) {
+          throw generationController.signal.reason instanceof Error
+            ? generationController.signal.reason
+            : new DOMException('提示词生成已取消', 'AbortError')
+        }
         const candidates = normalizeSopPromptCandidates(generated, deficit, [...existingPrompts, ...nextPrompts.map((item) => item.promptText)])
         nextPrompts.push(...candidates.map((prompt) => ({
           id: promptItemId(sharedSource.id),
           sourceId: sharedSource.id,
+          referenceImageIds: sharedReferenceImageIds,
           promptText: prompt,
           origin: 'ai' as const,
         })))
-        nextSources[0] = { ...nextSources[0], status: candidates.length >= deficit ? 'completed' : 'partial', error: candidates.length >= deficit ? undefined : `缺少 ${deficit - candidates.length} 条` }
+        const generatedCount = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length - existingForSource.length
+        nextSources[0] = { ...nextSources[0], status: generatedCount >= deficit ? 'completed' : 'partial', error: generatedCount >= deficit ? undefined : `缺少 ${deficit - generatedCount} 条` }
       } catch (cause) {
-        nextSources[0] = { ...nextSources[0], status: 'failed', error: cause instanceof Error ? cause.message : '提示词生成失败' }
+        if (generationController.signal.aborted || isAbortError(cause)) {
+          generationCancelled = true
+          const generatedCount = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length - existingForSource.length
+          nextSources[0] = { ...nextSources[0], status: generatedCount > 0 ? 'partial' : 'pending', error: undefined }
+        } else {
+          nextSources[0] = { ...nextSources[0], status: 'failed', error: cause instanceof Error ? cause.message : '提示词生成失败' }
+        }
       }
     }
 
+    if (!componentActiveRef.current) return
     setPrompts(nextPrompts)
     setSources(nextSources)
     const available = nextPrompts.filter((item) => !item.deleted && item.promptText.trim()).length
     const failed = nextSources.some((item) => item.status === 'failed') ? 1 : 0
-    persistPromptRun(nextPrompts, nextSources, autoGenerate, failed && available === 0 ? 'failed' : 'ready')
-    await flushPromptRunSnapshot()
     const missing = Math.max(0, targetCount - available)
-    setStatus(failed || missing ? 'ready' : 'ready')
-    setStatusMessage(missing ? `提示词列表部分完成：当前可用 ${available} 条，缺口 ${missing} 条` : `提示词列表已生成：当前可用 ${available} 条`)
-    if (failed || missing) setError(failed ? '提示词生成失败，可重试缺口。' : '')
-    if (autoGenerateRef.current && available > 0 && !missing && !retrySourceId) await submitPromptList(nextPrompts)
+    if (generationAbortRef.current === generationController) generationAbortRef.current = null
+    generationPausedRef.current = false
+    releasePauseWaiters()
+    if (generationCancelled) {
+      if (progressiveDispatch && progressiveSuccessCount > 0) {
+        await saveProgressiveSnapshot('submitted')
+        setCurrentRunId(progressiveSnapshotId, true)
+        showToast(`已取消后续提示词生成，已发送 ${progressiveSuccessCount} 个生图任务`, 'info')
+        resetCompletedRun()
+      } else {
+        persistPromptRun(nextPrompts, nextSources, autoGenerate, 'ready')
+        await flushPromptRunSnapshot()
+        setStatus(available > 0 ? 'ready' : 'idle')
+        setStatusMessage(available > 0 ? `已取消提示词生成，保留当前 ${available} 条提示词` : '提示词生成已取消')
+        setError('')
+      }
+      return
+    }
+    if (progressiveDispatch) {
+      const finalSnapshotStatus = progressiveSuccessCount > 0 ? 'submitted' : 'failed'
+      await saveProgressiveSnapshot(finalSnapshotStatus)
+      if (progressiveSuccessCount > 0) setCurrentRunId(progressiveSnapshotId, true)
+      const hasProblems = Boolean(failed || missing || progressiveFailureCount || progressivePersistenceError)
+      setStatus(hasProblems ? 'error' : 'success')
+      setStatusMessage(hasProblems
+        ? `逐条生成完成：已发送 ${progressiveSuccessCount} 条，发送失败 ${progressiveFailureCount} 条，提示词缺口 ${missing} 条`
+        : `已逐条生成并发送 ${progressiveSuccessCount} 个 SOP 生图任务`)
+      setError([
+        failed ? '提示词生成中断，可重试缺口。' : '',
+        progressiveFailureCount ? '部分提示词未创建生图任务。' : '',
+        progressivePersistenceError ? `运行记录保存失败：${progressivePersistenceError}` : '',
+      ].filter(Boolean).join(' '))
+      showToast(
+        hasProblems ? `SOP 逐条生图部分完成：已发送 ${progressiveSuccessCount} 条` : `已逐条发送 ${progressiveSuccessCount} 个 SOP 生图任务`,
+        hasProblems ? 'error' : 'success',
+      )
+      if (!hasProblems) resetCompletedRun()
+    } else {
+      persistPromptRun(nextPrompts, nextSources, autoGenerate, failed && available === 0 ? 'failed' : 'ready')
+      await flushPromptRunSnapshot()
+      setStatus('ready')
+      setStatusMessage(missing ? `提示词列表部分完成：当前可用 ${available} 条，缺口 ${missing} 条` : `提示词列表已生成：当前可用 ${available} 条`)
+      if (failed || missing) setError(failed ? '提示词生成失败，可重试缺口。' : '')
+    }
   }
 
   const generatePromptList = () => {
@@ -756,17 +1023,25 @@ export default function GallerySopBatchModal({
   }
 
   const addManualPrompt = (sourceId: string) => {
-    updatePrompts((current) => [...current, { id: promptItemId(sourceId), sourceId, promptText: '', origin: 'manual' }])
+    const source = allSources.find((candidate) => candidate.id === sourceId)
+    const referenceImageIds = source?.kind === 'image' && source.imageId
+      ? [source.imageId]
+      : sourceId === 'shared-reference' ? selectedReferenceImageIds : []
+    updatePrompts((current) => [...current, { id: promptItemId(sourceId), sourceId, referenceImageIds, promptText: '', origin: 'manual' }])
   }
 
   const regeneratePrompt = async (item: PromptDraft) => {
     if (!selectedSop || running) return
     if ((item.edited || item.origin === 'manual') && !window.confirm('重新生成会覆盖当前提示词，是否继续？')) return
+    const generationController = new AbortController()
+    generationAbortRef.current = generationController
+    generationPausedRef.current = false
     setStatus('generating')
     setStatusMessage('正在重新生成这一条提示词')
     setError('')
     try {
       const sharedImages = await loadSharedInputImages()
+      const sharedReferenceImageIds = sharedImages.map((image) => image.id)
       const existingPrompts = prompts
         .filter((entry) => entry.id !== item.id && !entry.deleted && entry.promptText.trim())
         .map((entry) => entry.promptText.trim())
@@ -780,16 +1055,28 @@ export default function GallerySopBatchModal({
           : undefined,
         exact: true,
         existingPrompts,
+        beforeBatch: waitWhileGenerationPaused,
+        signal: generationController.signal,
       })
+      if (generationController.signal.aborted) return
       updatePrompts((current) => current.map((entry) => entry.id === item.id
-        ? { ...entry, promptText: generated[0] ?? entry.promptText, origin: 'ai', edited: false }
+        ? { ...entry, referenceImageIds: sharedReferenceImageIds, promptText: generated[0] ?? entry.promptText, origin: 'ai', edited: false }
         : entry))
       setStatus('ready')
       setStatusMessage(`已重新生成第 ${visiblePrompts.findIndex((entry) => entry.id === item.id) + 1} 条提示词`)
     } catch (cause) {
       setStatus('ready')
-      setStatusMessage('单条提示词重新生成失败')
-      setError(cause instanceof Error ? cause.message : '提示词重新生成失败')
+      if (generationController.signal.aborted || isAbortError(cause)) {
+        setStatusMessage('已取消重新生成，保留原提示词')
+        setError('')
+      } else {
+        setStatusMessage('单条提示词重新生成失败')
+        setError(cause instanceof Error ? cause.message : '提示词重新生成失败')
+      }
+    } finally {
+      if (generationAbortRef.current === generationController) generationAbortRef.current = null
+      generationPausedRef.current = false
+      releasePauseWaiters()
     }
   }
 
@@ -809,12 +1096,19 @@ export default function GallerySopBatchModal({
     if (!restoreComplete || !autoStart || autoStartRef.current || running || !selectedSop) return
     if (visiblePrompts.length > 0) return
     autoStartRef.current = true
+    onAutoStartConsumed?.()
     void generateForSources()
-  }, [autoStart, restoreComplete, running, selectedSop, visiblePrompts.length])
+  }, [autoStart, onAutoStartConsumed, restoreComplete, running, selectedSop, visiblePrompts.length])
 
-  useCloseOnEscape(visible, closeSafely)
+  useEffect(() => {
+    if (!autoStart) autoStartRef.current = false
+  }, [autoStart])
+
+  useCloseOnEscape(visible && !previewSource, closeSafely)
+  useCloseOnEscape(visible && Boolean(previewSource), () => setPreviewSource(null))
   usePreventBackgroundScroll(visible, modalRef)
-  useDialogFocusTrap(visible, modalRef)
+  useDialogFocusTrap(visible && !previewSource, modalRef)
+  useDialogFocusTrap(visible && Boolean(previewSource), previewRef)
 
   if (!visible) return null
 
@@ -822,6 +1116,8 @@ export default function GallerySopBatchModal({
     ? 'text-emerald-700 dark:text-emerald-300'
     : status === 'error'
       ? 'text-red-700 dark:text-red-300'
+      : status === 'paused'
+        ? 'text-amber-700 dark:text-amber-300'
       : running
         ? 'text-violet-700 dark:text-violet-300'
         : 'text-gray-500 dark:text-gray-400'
@@ -842,20 +1138,40 @@ export default function GallerySopBatchModal({
               {selectedSop ? `当前 SOP：${selectedSop.name} · ${targetCount} 条提示词 × 每条 ${targetImagesPerPrompt} 张 = 预计 ${totalImageCount} 张` : '请先选择一个 SOP。'}
             </p>
           </div>
-          <button type="button" onClick={closeSafely} aria-label={running ? '转入后台继续生成 SOP 提示词' : '关闭 SOP 提示词列表'} title={running ? '关闭后将在后台继续生成' : '关闭 SOP 提示词列表'} className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:text-gray-300 dark:hover:bg-white/[0.06]"><X size={18} /></button>
+          <button type="button" onClick={closeSafely} aria-label={status === 'paused' ? '转入后台保持 SOP 提示词暂停' : running ? '转入后台继续生成 SOP 提示词' : '关闭 SOP 提示词列表'} title={status === 'paused' ? '关闭后保持暂停，可稍后继续' : running ? '关闭后将在后台继续生成' : '关闭 SOP 提示词列表'} className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:text-gray-300 dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col bg-gray-50/70 p-4 dark:bg-black/20 sm:p-5">
-          <div aria-live="polite" className={`mb-4 rounded-xl border p-4 ${status === 'success' ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/25 dark:bg-emerald-500/[0.08]' : status === 'error' ? 'border-red-200 bg-red-50 dark:border-red-500/25 dark:bg-red-500/[0.08]' : running ? 'border-violet-200 bg-violet-50 dark:border-violet-500/25 dark:bg-violet-500/[0.08]' : 'border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.035]'}`}>
+          <div aria-live="polite" className={`mb-4 rounded-xl border p-4 ${status === 'success' ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/25 dark:bg-emerald-500/[0.08]' : status === 'error' ? 'border-red-200 bg-red-50 dark:border-red-500/25 dark:bg-red-500/[0.08]' : status === 'paused' ? 'border-amber-200 bg-amber-50 dark:border-amber-500/25 dark:bg-amber-500/[0.08]' : running ? 'border-violet-200 bg-violet-50 dark:border-violet-500/25 dark:bg-violet-500/[0.08]' : 'border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.035]'}`}>
             <div className="grid items-center gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto]">
               <div className="flex min-w-0 items-center gap-3 self-center">
-                {running ? <LoaderCircle size={20} className="shrink-0 animate-spin text-violet-600" /> : status === 'success' ? <CheckCircle2 size={20} className="shrink-0 text-emerald-600" /> : status === 'error' ? <XCircle size={20} className="shrink-0 text-red-600" /> : <ImageIcon size={20} className="shrink-0 text-gray-400" />}
+                {status === 'paused' ? <Pause size={20} className="shrink-0 text-amber-600" /> : running ? <LoaderCircle size={20} className="shrink-0 animate-spin text-violet-600" /> : status === 'success' ? <CheckCircle2 size={20} className="shrink-0 text-emerald-600" /> : status === 'error' ? <XCircle size={20} className="shrink-0 text-red-600" /> : <ImageIcon size={20} className="shrink-0 text-gray-400" />}
                 <div className="min-w-0">
                   <p className="text-sm font-medium leading-5">{statusMessage}</p>
                   <p className={`mt-0.5 text-xs leading-5 ${statusMetaClass}`}>请求 {targetCount} · AI 成功 {aiCount} · 当前可用 {visiblePrompts.length} · 缺口 {missingCount} · 预计图片 {visiblePrompts.length * targetImagesPerPrompt}/{totalImageCount}</p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                {promptGenerationActive && <>
+                  <button
+                    type="button"
+                    onClick={status === 'paused' ? resumePromptGeneration : pausePromptGeneration}
+                    aria-label={status === 'paused' ? '继续提示词生成' : '暂停提示词生成'}
+                    className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-200 bg-white px-3 text-xs font-medium text-amber-700 transition hover:border-amber-300 hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-500/30 dark:bg-white/[0.06] dark:text-amber-200 dark:hover:bg-amber-500/10"
+                  >
+                    {status === 'paused' ? <Play size={14} /> : <Pause size={14} />}
+                    {status === 'paused' ? '继续' : '暂停'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelPromptGeneration}
+                    aria-label="取消提示词生成"
+                    className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 bg-white px-3 text-xs font-medium text-red-700 transition hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-red-500/30 dark:bg-white/[0.06] dark:text-red-200 dark:hover:bg-red-500/10"
+                  >
+                    <XCircle size={14} />
+                    取消
+                  </button>
+                </>}
                 {sources.length > 0 && <button
                   type="button"
                   onClick={generatePromptList}
@@ -872,8 +1188,8 @@ export default function GallerySopBatchModal({
                   checked={autoGenerate}
                   onCheckedChange={toggleAutoGenerate}
                   disabled={running}
-                  aria-label="提示词生成完成后自动生图"
-                  label={<span className="whitespace-nowrap text-xs">自动生图</span>}
+                  aria-label="每生成一条提示词立即发送生图"
+                  label={<span className="whitespace-nowrap text-xs">逐条生成并生图</span>}
                   className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
                 />
                 <Switch
@@ -885,7 +1201,16 @@ export default function GallerySopBatchModal({
                   label={<span className="whitespace-nowrap text-xs">二次参考</span>}
                   className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
                 />
-                <button type="button" aria-label={`生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`} onClick={() => void submitPromptList()} disabled={running || visiblePrompts.length === 0 || missingCount > 0} className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-violet-600 bg-violet-600 px-3 text-xs font-medium text-white transition hover:border-violet-700 hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:border-violet-200 disabled:bg-violet-50 disabled:text-violet-300 dark:disabled:border-violet-500/20 dark:disabled:bg-violet-500/10 dark:disabled:text-violet-400/60"><Send size={14} />生成 {visiblePrompts.length * targetImagesPerPrompt} 张图片</button>
+                <button
+                  type="button"
+                  aria-label={activeRunSubmittedRef.current ? '当前 SOP 生图任务已发送' : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`}
+                  onClick={() => void submitPromptList()}
+                  disabled={running || visiblePrompts.length === 0 || missingCount > 0 || activeRunSubmittedRef.current}
+                  className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-violet-600 bg-violet-600 px-3 text-xs font-medium text-white transition hover:border-violet-700 hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:border-violet-200 disabled:bg-violet-50 disabled:text-violet-300 dark:disabled:border-violet-500/20 dark:disabled:bg-violet-500/10 dark:disabled:text-violet-400/60"
+                >
+                  <Send size={14} />
+                  {activeRunSubmittedRef.current ? `已发送 ${visiblePrompts.length * targetImagesPerPrompt} 张` : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`}
+                </button>
               </div>
             </div>
             {error && <p role="alert" className="mt-2 text-xs leading-5 text-red-700 dark:text-red-300">{error}</p>}
@@ -919,7 +1244,9 @@ export default function GallerySopBatchModal({
                 <h3 className="font-semibold">提示词列表</h3>
                 <p className="mt-1 text-xs text-gray-500">所有有效提示词都会参与生图；修改会自动保存。</p>
               </div>
-              {running && <span className="flex items-center gap-2 rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-300"><LoaderCircle size={14} className="animate-spin" />处理中</span>}
+              {status === 'paused'
+                ? <span className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300"><Pause size={14} />已暂停</span>
+                : running && <span className="flex items-center gap-2 rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-300"><LoaderCircle size={14} className="animate-spin" />处理中</span>}
             </div>
 
             <div className="h-full max-h-[calc(86vh-220px)] overflow-y-auto p-4">
@@ -937,17 +1264,40 @@ export default function GallerySopBatchModal({
                       <button type="button" onClick={() => addManualPrompt(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 text-xs hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.1] dark:bg-gray-900 dark:hover:bg-white/[0.06]"><Plus size={13} />新增</button>
                     </div>
                     <div className="space-y-2 p-3">
-                      {sourcePrompts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2">
-                          <span className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${item.origin === 'ai' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'}`}>{index + 1}</span>
-                          <div className="min-w-0 flex-1">
-                            <textarea value={item.promptText} onChange={(event) => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, promptText: event.target.value, edited: true } : entry))} rows={3} disabled={running} aria-label={`第 ${index + 1} 条提示词`} className="min-h-20 w-full resize-y rounded-lg border border-gray-300 bg-white p-2 text-xs leading-5 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-gray-950 dark:focus:ring-violet-950" />
-                            <p className="mt-1 text-[11px] text-gray-400">{item.edited ? '已编辑 · 已自动保存' : item.origin === 'ai' ? 'AI 生成 · 已自动保存' : '手动添加 · 已自动保存'}</p>
+                      {sourcePrompts.map((item, index) => {
+                        const referenceSources = getPromptReferenceSources(item)
+                        return (
+                          <div key={item.id} className="flex gap-2">
+                            <span className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${item.origin === 'ai' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'}`}>{index + 1}</span>
+                            <div className="min-w-0 flex-1">
+                              <textarea value={item.promptText} onChange={(event) => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, promptText: event.target.value, edited: true } : entry))} rows={3} disabled={running} aria-label={`第 ${index + 1} 条提示词`} className="min-h-20 w-full resize-y rounded-lg border border-gray-300 bg-white p-2 text-xs leading-5 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-gray-950 dark:focus:ring-violet-950" />
+                              {referenceSources.length > 0 && (
+                                <div className="mt-2 flex min-w-0 items-center gap-2">
+                                  <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">参考图</span>
+                                  <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1">
+                                    {referenceSources.map((referenceSource, referenceIndex) => (
+                                      <button
+                                        key={referenceSource.imageId ?? referenceSource.id}
+                                        type="button"
+                                        onClick={() => setPreviewSource(referenceSource)}
+                                        aria-label={`查看第 ${index + 1} 条提示词的参考图 ${referenceIndex + 1} 大图`}
+                                        title={`${referenceSource.label} · 点击查看大图`}
+                                        className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-100 transition hover:border-violet-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-white/[0.12] dark:bg-gray-800"
+                                      >
+                                        <SourceThumb source={referenceSource} />
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <span className="shrink-0 text-[11px] text-gray-400">{referenceSources.length} 张</span>
+                                </div>
+                              )}
+                              <p className="mt-1 text-[11px] text-gray-400">{item.edited ? '已编辑 · 已自动保存' : item.origin === 'ai' ? 'AI 生成 · 已自动保存' : '手动添加 · 已自动保存'}</p>
+                            </div>
+                            <button type="button" onClick={() => void regeneratePrompt(item)} disabled={running} aria-label={`重新生成第 ${index + 1} 条提示词`} title="重新生成" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-violet-950/30"><RefreshCw size={15} /></button>
+                            <button type="button" onClick={() => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, deleted: true } : entry))} disabled={running} aria-label={`删除第 ${index + 1} 条提示词`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30"><Trash2 size={15} /></button>
                           </div>
-                          <button type="button" onClick={() => void regeneratePrompt(item)} disabled={running} aria-label={`重新生成第 ${index + 1} 条提示词`} title="重新生成" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-violet-950/30"><RefreshCw size={15} /></button>
-                          <button type="button" onClick={() => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, deleted: true } : entry))} disabled={running} aria-label={`删除第 ${index + 1} 条提示词`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30"><Trash2 size={15} /></button>
-                        </div>
-                      ))}
+                        )
+                      })}
                       {!sourcePrompts.length && <p className="rounded-lg border border-dashed border-gray-300 p-4 text-center text-xs text-gray-500 dark:border-white/[0.1]">当前没有提示词，可重试缺口或手动新增。</p>}
                     </div>
                   </article>
@@ -973,6 +1323,40 @@ export default function GallerySopBatchModal({
             </div>
           </section>
         </div>
+        {previewSource && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-4"
+            onMouseDown={(event) => {
+              if (isModalBackdropEvent(event)) setPreviewSource(null)
+            }}
+          >
+            <div
+              ref={previewRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="gallery-sop-reference-preview-title"
+              className="flex h-[min(82vh,860px)] w-[min(92vw,1200px)] max-w-full flex-col overflow-hidden rounded-2xl bg-gray-950 shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 text-white">
+                <div className="min-w-0">
+                  <h3 id="gallery-sop-reference-preview-title" className="truncate text-sm font-semibold">{previewSource.label}</h3>
+                  <p className="mt-0.5 text-xs text-gray-400">提示词对应参考图 · 原图适应窗口显示</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPreviewSource(null)}
+                  aria-label="关闭参考图大图预览"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-gray-300 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 p-4">
+                <SourceThumb source={previewSource} fit="contain" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

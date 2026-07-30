@@ -45,6 +45,10 @@ describe('SOP prompt batch', () => {
   it('splits large prompt runs into small model requests', () => {
     expect(getSopPromptBatchSizes(30)).toEqual([10, 10, 10])
     expect(getSopPromptBatchSizes(23)).toEqual([10, 10, 3])
+    const largeRun = getSopPromptBatchSizes(123)
+    expect(largeRun).toHaveLength(13)
+    expect(largeRun.reduce((total, count) => total + count, 0)).toBe(123)
+    expect(Math.max(...largeRun)).toBe(10)
   })
 
   it('retries a malformed batch without discarding successful batches', async () => {
@@ -78,6 +82,92 @@ describe('SOP prompt batch', () => {
     )
 
     expect(progress).toEqual([[10, 12], [12, 12]])
+  })
+
+  it('awaits each generated prompt dispatch before generating the next one', async () => {
+    const events: string[] = []
+
+    const prompts = await generateSopPromptBatches(
+      3,
+      async (_count, existingPrompts) => {
+        const index = existingPrompts.length + 1
+        events.push(`generate-${index}`)
+        return [`提示词 ${index}`]
+      },
+      {
+        maxBatchSize: 1,
+        onBatch: async ([prompt]) => {
+          events.push(`dispatch-${prompt}`)
+          await Promise.resolve()
+          events.push(`dispatched-${prompt}`)
+        },
+      },
+    )
+
+    expect(prompts).toEqual(['提示词 1', '提示词 2', '提示词 3'])
+    expect(events).toEqual([
+      'generate-1',
+      'dispatch-提示词 1',
+      'dispatched-提示词 1',
+      'generate-2',
+      'dispatch-提示词 2',
+      'dispatched-提示词 2',
+      'generate-3',
+      'dispatch-提示词 3',
+      'dispatched-提示词 3',
+    ])
+  })
+
+  it('waits for the pause gate before sending the next model batch', async () => {
+    const events: string[] = []
+    let release!: () => void
+    let paused = false
+    const pausePromise = new Promise<void>((resolve) => { release = resolve })
+
+    const resultPromise = generateSopPromptBatches(
+      2,
+      async (_count, existingPrompts) => {
+        events.push(`generate-${existingPrompts.length + 1}`)
+        return [`提示词 ${existingPrompts.length + 1}`]
+      },
+      {
+        maxBatchSize: 1,
+        beforeBatch: async () => {
+          if (!paused) return
+          await pausePromise
+        },
+        onBatch: (_prompts, completed) => {
+          if (completed === 1) paused = true
+        },
+      },
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events).toEqual(['generate-1'])
+
+    paused = false
+    release()
+    await expect(resultPromise).resolves.toEqual(['提示词 1', '提示词 2'])
+    expect(events).toEqual(['generate-1', 'generate-2'])
+  })
+
+  it('stops immediately after cancellation without retrying the aborted batch', async () => {
+    const controller = new AbortController()
+    let calls = 0
+
+    const resultPromise = generateSopPromptBatches(
+      2,
+      async () => {
+        calls += 1
+        controller.abort(new DOMException('提示词生成已取消', 'AbortError'))
+        throw controller.signal.reason
+      },
+      { signal: controller.signal },
+    )
+
+    await expect(resultPromise).rejects.toMatchObject({ name: 'AbortError' })
+    expect(calls).toBe(1)
   })
 
   it('keeps completed batches when a later batch still fails after retry', async () => {
@@ -115,7 +205,9 @@ describe('SOP prompt batch', () => {
   it('normalizes prompt and per-prompt image counts independently', () => {
     expect(getSopRunCounts(10, 2)).toEqual({ promptCount: 10, imagesPerPrompt: 2 })
     expect(getSopRunCounts(0, 0)).toEqual({ promptCount: 1, imagesPerPrompt: 1 })
-    expect(getSopRunCounts(80, 50)).toEqual({ promptCount: 50, imagesPerPrompt: 20 })
+    expect(getSopRunCounts(80, 50)).toEqual({ promptCount: 80, imagesPerPrompt: 20 })
+    expect(getSopRunCounts(5_000, 1).promptCount).toBe(5_000)
+    expect(getSopRunCounts(Number.POSITIVE_INFINITY, 1).promptCount).toBe(1)
     expect(getSopTotalImageCount(10, 2)).toBe(20)
   })
 

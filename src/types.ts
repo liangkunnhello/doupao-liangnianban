@@ -369,6 +369,7 @@ export interface SopBatchSnapshot {
     origin: 'ai' | 'manual'
     edited: boolean
     sourceId?: string
+    referenceImageIds?: string[]
     deleted?: boolean
   }>
   params: TaskParams

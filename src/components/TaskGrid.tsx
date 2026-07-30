@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeMultipleTasks, removeTask } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeMultipleTasks, removeTask, rerunSopBatchTasks } from '../store'
 import { getTaskGridColumnCount, getTaskGridVirtualWindow } from '../lib/taskGridVirtualWindow'
 import { groupSopBatchTasks, type TaskGridItem } from '../lib/sopBatchTaskGrouping'
 import type { TaskRecord } from '../types'
@@ -24,6 +24,7 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
+  const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds])
@@ -424,6 +425,8 @@ export default function TaskGrid() {
                   setBatchDetail({ sopName: item.sopName, tasks: item.tasks })
                 }}
                 onOpenBatch={() => setBatchDetail({ sopName: item.sopName, tasks: item.tasks })}
+                onOpenImage={(imageId) => setLightboxImageId(imageId, item.tasks.flatMap((task) => task.outputImages))}
+                onRerun={() => void rerunSopBatchTasks(item.tasks)}
                 onDelete={() => handleDeleteBatch(item.tasks)}
               />
             </div>
@@ -445,7 +448,7 @@ export default function TaskGrid() {
         sopName={batchDetail.sopName}
         tasks={batchDetail.tasks}
         onClose={() => setBatchDetail(null)}
-        onOpenTask={(taskId) => { setBatchDetail(null); setDetailTaskId(taskId) }}
+        onOpenImage={(imageId) => setLightboxImageId(imageId, batchDetail.tasks.flatMap((task) => task.outputImages))}
       />}
     </div>
   )

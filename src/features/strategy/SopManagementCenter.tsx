@@ -136,6 +136,14 @@ export default function SopManagementCenter({
     itemDraft.content !== persistedItem.content ||
     itemDraft.groupId !== persistedItem.groupId
   ))
+  const itemApplied = Boolean(itemDraft && selectedSopId === itemDraft.id)
+  const itemEditorHint = itemDirty
+    ? itemApplied
+      ? '有未保存修改；保存后会更新当前已应用的 SOP。'
+      : '有未保存修改；保存后才能应用这个版本。'
+    : itemApplied
+      ? '当前 SOP 已应用。只有修改内容后才需要保存。'
+      : '无需编辑即可直接应用；只有修改内容后才需要保存。'
 
   useEffect(() => {
     if (job.status !== 'running' || !job.startedAt) return
@@ -467,24 +475,25 @@ export default function SopManagementCenter({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-[1_1_18rem]">
                     <h3 className="font-semibold">预览与编辑 SOP</h3>
-                    <p className="sop-center-quiet-text mt-1 text-xs">在同一处查看、修改并应用；修改后请显式保存，Ctrl/Cmd+S 可快捷保存。</p>
+                    <p className="sop-center-quiet-text mt-1 text-xs">{itemEditorHint} Ctrl/Cmd+S 可快捷保存。</p>
                   </div>
                   <Inline className="max-w-full" justify="flex-end">
                     {onApply && <Button
-                      disabled={!itemDraft.name.trim() || !itemDraft.content.trim()}
-                      onClick={() => applyItem({ ...itemDraft, updatedAt: Date.now() })}
-                      variant={selectedSopId === itemDraft.id ? 'secondary' : 'primary'}
+                      disabled={!persistedItem || itemDirty || itemApplied}
+                      onClick={() => persistedItem && applyItem(persistedItem)}
+                      variant={itemApplied ? 'secondary' : 'primary'}
                       leadingIcon={<MousePointerClick size={15} />}
-                      className={selectedSopId === itemDraft.id ? 'text-[hsl(var(--ds-color-success))]' : undefined}
+                      className={itemApplied ? 'text-[hsl(var(--ds-color-success))]' : undefined}
                     >
-                      {selectedSopId === itemDraft.id ? '保存并更新应用' : '保存并应用'}
+                      {itemApplied ? '已应用' : '应用 SOP'}
                     </Button>}
                     <Button
-                      disabled={!itemDraft.name.trim() || !itemDraft.content.trim()}
+                      disabled={!itemDirty || !itemDraft.name.trim() || !itemDraft.content.trim()}
                       onClick={() => onSaveItem({ ...itemDraft, updatedAt: Date.now() })}
+                      variant={itemDirty ? 'primary' : 'secondary'}
                       leadingIcon={<Save size={15} />}
                     >
-                      保存
+                      保存修改
                     </Button>
                     {onClear && selectedSopId && <Button onClick={onClear} variant="secondary">取消应用</Button>}
                   </Inline>
