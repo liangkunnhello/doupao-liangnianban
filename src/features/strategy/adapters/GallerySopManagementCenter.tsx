@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useRequirementPrototype } from '../../requirementPrototype/store'
 import { useStore } from '../../../store'
 import SopManagementCenter from '../SopManagementCenter'
@@ -16,7 +15,6 @@ export default function GallerySopManagementCenter({
   onClear?: () => void
   onClose: () => void
 }) {
-  const [minimized, setMinimized] = useState(false)
   const sessionUserId = useRequirementPrototype((state) => state.sessionUserId)
   const groups = useRequirementPrototype((state) => state.sopGroups)
   const items = useRequirementPrototype((state) => state.sopLibrary)
@@ -33,7 +31,6 @@ export default function GallerySopManagementCenter({
   const deleteMetaInstruction = useRequirementPrototype((state) => state.deleteSopMetaInstruction)
 
   return <SopManagementCenter
-    minimized={minimized}
     groups={groups}
     items={items}
     tasks={tasks}
@@ -52,8 +49,6 @@ export default function GallerySopManagementCenter({
     selectedSopId={selectedSopId}
     onApply={onApply}
     onClear={onClear}
-    onMinimize={() => setMinimized(true)}
-    onRestore={() => setMinimized(false)}
     onClose={onClose}
   />
 }

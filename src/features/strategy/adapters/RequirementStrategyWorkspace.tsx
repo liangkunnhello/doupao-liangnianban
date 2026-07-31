@@ -153,7 +153,6 @@ export default function StrategyWorkspace() {
   const [clipboardStrategyId, setClipboardStrategyId] = useState('')
   const [showPresetManager, setShowPresetManager] = useState(false)
   const [showSopCenter, setShowSopCenter] = useState(false)
-  const [sopCenterMinimized, setSopCenterMinimized] = useState(false)
 
   const selectedStrategyId = selection.kind === 'strategy' ? selection.strategyId : undefined
   const selectedStrategy = activeStrategies.find((item) => item.id === selectedStrategyId)
@@ -284,7 +283,7 @@ export default function StrategyWorkspace() {
             headerActions={<>
               <button
                 type="button"
-                onClick={() => { setShowSopCenter(true); setSopCenterMinimized(false) }}
+                onClick={() => setShowSopCenter(true)}
                 className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-gray-200/80 bg-white px-3 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]"
               >
                 <BookOpenCheck size={14} className="text-violet-500" />SOP 库
@@ -357,7 +356,6 @@ export default function StrategyWorkspace() {
       </div>
       {showPresetManager && <PresetManager presets={presets.filter((preset) => preset.type !== 'sop')} onSave={savePreset} onArchive={archivePreset} onClose={() => setShowPresetManager(false)} />}
       {showSopCenter && <SopManagementCenter
-        minimized={sopCenterMinimized}
         groups={sopGroups}
         items={sopLibrary}
         tasks={tasks}
@@ -373,8 +371,6 @@ export default function StrategyWorkspace() {
         onDuplicateMetaInstruction={duplicateSopMetaInstruction}
         onDeleteMetaInstruction={deleteSopMetaInstruction}
         onGenerateSop={generateSopFromStore}
-        onMinimize={() => setSopCenterMinimized(true)}
-        onRestore={() => setSopCenterMinimized(false)}
         onClose={() => setShowSopCenter(false)}
       />}
     </div>

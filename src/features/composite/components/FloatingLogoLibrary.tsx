@@ -8,6 +8,7 @@ import {
 import { useTooltip } from '../../../hooks/useTooltip'
 import ViewportTooltip from '../../../components/ViewportTooltip'
 import type { CompositeFsImage } from '../lib/compositeTypes'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 
 type FloatingLogoLibraryProps = {
   path: string
@@ -73,6 +74,7 @@ export function FloatingLogoLibrary({
   onReorderAssets,
   onImportFiles,
 }: FloatingLogoLibraryProps) {
+  const { openConfirmDialog } = useAppDialog()
   const [searchQuery, setSearchQuery] = useState('')
   const [draggingAssetId, setDraggingAssetId] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
@@ -236,9 +238,13 @@ export function FloatingLogoLibrary({
                 title="删除 LOGO"
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (window.confirm(`确定要删除 LOGO "${asset.name}" 吗？`)) {
-                    onDeleteAsset(asset)
-                  }
+                  openConfirmDialog({
+                    title: '删除 LOGO？',
+                    message: `将从素材库中删除「${asset.name}」，此操作不可撤销。`,
+                    confirmText: '确认删除',
+                    tone: 'danger',
+                    action: () => onDeleteAsset(asset),
+                  })
                 }}
                 className="absolute -right-2 -top-2 hidden h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-red-500 shadow-sm hover:bg-red-50 group-hover:flex dark:border-white/[0.08] dark:bg-gray-800 dark:text-red-400 dark:hover:bg-gray-700"
               >

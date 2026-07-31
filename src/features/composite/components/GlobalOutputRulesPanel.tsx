@@ -8,8 +8,10 @@ import {
 import { useState } from 'react'
 import { useCompositeV2Store } from '../storeV2'
 import type { CompositeV2OutputRuleGroup, CompositeV2OutputSizeRule } from '../lib/compositeV2Types'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 
 export function GlobalOutputRulesPanel() {
+  const { openConfirmDialog } = useAppDialog()
   const outputRuleGroups = useCompositeV2Store((state) => state.outputRuleGroups)
   const globalFitMode = useCompositeV2Store((state) => state.globalFitMode)
   const setGlobalFitMode = useCompositeV2Store((state) => state.setGlobalFitMode)
@@ -46,9 +48,14 @@ export function GlobalOutputRulesPanel() {
   }
 
   function handleDeleteGroup(groupId: string) {
-    if (confirm('确定要删除这个分类吗？')) {
-      deleteOutputRuleGroup(groupId)
-    }
+    const group = outputRuleGroups.find((item) => item.id === groupId)
+    openConfirmDialog({
+      title: '删除输出分类？',
+      message: `将删除分类「${group?.name ?? '未命名分类'}」及其尺寸规则，此操作不可撤销。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+      action: () => deleteOutputRuleGroup(groupId),
+    })
   }
 
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null)

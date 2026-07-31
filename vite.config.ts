@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import { readFileSync } from 'fs'
+import { fileURLToPath, URL } from 'node:url'
 import { normalizeDevProxyConfig } from './src/lib/devProxy'
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
@@ -58,6 +59,11 @@ export default defineConfig(({ command }) => {
       ]),
     ],
     base: './',
+    resolve: {
+      alias: {
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __DEV_PROXY_CONFIG__: JSON.stringify(devProxyConfig),

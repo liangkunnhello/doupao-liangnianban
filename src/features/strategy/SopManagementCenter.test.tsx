@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, create, type ReactTestInstance } from 'react-test-renderer'
 import SopManagementCenter from './SopManagementCenter'
 import type { SopLibraryItem } from './types'
@@ -9,11 +9,35 @@ import { DEFAULT_PARAMS, type TaskRecord } from '../../types'
 const imageStoreMocks = vi.hoisted(() => ({
   ensureImageThumbnailCached: vi.fn().mockResolvedValue(undefined),
   subscribeImageThumbnail: vi.fn(() => () => {}),
+  showToast: vi.fn(),
+  useStore: vi.fn((selector: (state: unknown) => unknown) => selector({
+    settings: {
+      agentShareApiParameters: false,
+      agentProfile: {
+        id: 'agent-test',
+        name: 'Agent 测试',
+        provider: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        model: 'gpt-agent-test',
+        apiMode: 'responses',
+      },
+    },
+    showToast: imageStoreMocks.showToast,
+  })),
+}))
+const agentApiMocks = vi.hoisted(() => ({
+  transformSopDocument: vi.fn(),
 }))
 
 vi.mock('../../store', () => imageStoreMocks)
+vi.mock('../../lib/agentApi', () => agentApiMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+afterEach(() => {
+  window.localStorage.clear()
+})
 
 const item: SopLibraryItem = {
   id: 'sop-1',
@@ -39,7 +63,6 @@ function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[] } 
   const onApply = vi.fn()
   const renderer = create(
     <SopManagementCenter
-      minimized={false}
       groups={[]}
       items={[item]}
       tasks={options.tasks}
@@ -58,8 +81,6 @@ function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[] } 
       selectedSopId={options.selectedSopId}
       onApply={onApply}
       onClear={vi.fn()}
-      onMinimize={vi.fn()}
-      onRestore={vi.fn()}
       onClose={vi.fn()}
     />,
   )
@@ -67,6 +88,32 @@ function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[] } 
 }
 
 describe('SopManagementCenter apply and save actions', () => {
+  it('toggles and persists the SOP management large modal mode', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter()
+    })
+
+    const defaultDialog = result.renderer.root.find((node) => String(node.props.className).includes('sop-center-dialog'))
+    expect(defaultDialog.props.style).toBeUndefined()
+
+    act(() => {
+      result.renderer.root.findByProps({ 'aria-label': '进入 SOP 管理中心大弹窗模式' }).props.onClick()
+    })
+    expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-dialog')).props.style).toMatchObject({
+      width: '80vw',
+      height: '80vh',
+      maxWidth: 'none',
+    })
+
+    act(() => result.renderer.unmount())
+    act(() => {
+      result = renderCenter()
+    })
+    expect(result.renderer.root.findByProps({ 'aria-label': '退出 SOP 管理中心大弹窗模式' }).props['aria-pressed']).toBe(true)
+    result.renderer.unmount()
+  })
+
   it('applies an existing SOP directly without requiring an edit save', () => {
     let result!: ReturnType<typeof renderCenter>
     act(() => {
@@ -115,7 +162,7 @@ describe('SopManagementCenter apply and save actions', () => {
     result.renderer.unmount()
   })
 
-  it('uses a square list cover and opens cover selection by double-clicking it', () => {
+  it('uses a compact list cover and opens cover selection by double-clicking it', () => {
     const generatedTask: TaskRecord = {
       id: 'task-1',
       prompt: '生成结果',
@@ -135,9 +182,9 @@ describe('SopManagementCenter apply and save actions', () => {
     })
 
     const coverButton = result.renderer.root.findByProps({ 'aria-label': `双击选择 ${item.name} 的封面` })
-    const cover = coverButton.findAll((node) => String(node.props.className).includes('h-14 w-14'))[0]
-    expect(cover.props.className).toContain('h-14')
-    expect(cover.props.className).toContain('w-14')
+    const cover = coverButton.findAll((node) => String(node.props.className).includes('h-12 w-12'))[0]
+    expect(cover.props.className).toContain('h-12')
+    expect(cover.props.className).toContain('w-12')
     expect(result.renderer.root.findAllByProps({ 'aria-label': 'SOP 封面' })).toHaveLength(0)
     expect(result.renderer.root.findAll((node) => String(node.props.className).includes('sop-center-badge'))).toHaveLength(0)
 
@@ -155,6 +202,84 @@ describe('SopManagementCenter apply and save actions', () => {
       id: item.id,
       coverImageId: 'image-1',
     }))
+    result.renderer.unmount()
+  })
+
+  it('renders SOP rows with parameters and omits the description editor', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter()
+    })
+
+    expect(result.renderer.root.findByProps({ role: 'listitem' }).props.className).toContain('sop-center-sop-row')
+    expect(textContent(result.renderer.root.findByProps({ 'aria-label': 'SOP 参数' }))).toContain('未分组')
+    const parameters = textContent(result.renderer.root.findByProps({ 'aria-label': 'SOP 参数' }))
+    expect(parameters).not.toContain('手动创建')
+    expect(parameters).not.toContain('历史预设')
+    expect(result.renderer.root.findByProps({ 'aria-label': `${item.name} 操作` })).toBeTruthy()
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文编辑器' })).toBeTruthy()
+    expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-editor-panel')).props.className).toContain('overflow-y-auto')
+    expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-editor-card')).props.className).toContain('flex-1')
+    expect(result.renderer.root.findByProps({ 'aria-label': '正文格式与编辑工具' })).toBeTruthy()
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 文档整理工具' })).toBeTruthy()
+    expect(findButton(result.renderer.root, '自动分段')).toBeTruthy()
+    expect(findButton(result.renderer.root, '结构化')).toBeTruthy()
+    expect(findButton(result.renderer.root, 'AI 检查')).toBeTruthy()
+    expect(findButton(result.renderer.root, '最小化')).toBeUndefined()
+    expect(result.renderer.root.findAllByType('textarea')).toHaveLength(1)
+    expect(result.renderer.root.findByType('textarea').props.value).toBe(item.content)
+    expect(result.renderer.root.findAll((node) => node.children.includes(item.description))).toHaveLength(0)
+    result.renderer.unmount()
+  })
+
+  it('provides working formatting, history, wrapping, and fullscreen editor controls', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter()
+    })
+
+    const headingButton = result.renderer.root.findByProps({ 'aria-label': '设为标题' })
+    act(() => headingButton.props.onClick())
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe(`# ${item.content}`)
+
+    const undoButton = result.renderer.root.findByProps({ 'aria-label': '撤销' })
+    expect(undoButton.props.disabled).toBe(false)
+    act(() => undoButton.props.onClick())
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe(item.content)
+
+    const wrapButton = result.renderer.root.findByProps({ title: '自动换行' })
+    expect(wrapButton.props['aria-pressed']).toBe(true)
+    act(() => wrapButton.props.onClick())
+    expect(result.renderer.root.findByProps({ title: '自动换行' }).props['aria-pressed']).toBe(false)
+
+    const fullscreenButton = result.renderer.root.findByProps({ 'aria-label': '全屏编辑' })
+    act(() => fullscreenButton.props.onClick())
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文编辑器' }).props['data-expanded']).toBe(true)
+    expect(result.renderer.root.findByProps({ 'aria-label': '退出全屏编辑' })).toBeTruthy()
+    result.renderer.unmount()
+  })
+
+  it('previews Agent SOP restructuring before explicitly replacing the source', async () => {
+    agentApiMocks.transformSopDocument.mockResolvedValueOnce('# 目标\n\n保持输出一致。')
+    let result!: ReturnType<typeof renderCenter>
+    await act(async () => {
+      result = renderCenter()
+    })
+
+    await act(async () => {
+      findButton(result.renderer.root, 'AI 结构化')!.props.onClick()
+    })
+
+    expect(agentApiMocks.transformSopDocument).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'structure',
+      content: item.content,
+      profile: expect.objectContaining({ model: 'gpt-agent-test' }),
+    }))
+    expect(result.renderer.root.findAll((node) => node.children.includes('# 目标\n\n保持输出一致。'))).not.toHaveLength(0)
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe(item.content)
+
+    act(() => findButton(result.renderer.root, '替换正文')!.props.onClick())
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe('# 目标\n\n保持输出一致。')
     result.renderer.unmount()
   })
 })

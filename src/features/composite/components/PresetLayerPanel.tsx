@@ -11,6 +11,7 @@ import {
   LockOpenIcon as LockOpen,
   TrashIcon as Trash2,
 } from '../../../design-system/icons'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 import { fitCompositeTextLayer } from '../lib/compositeTextLayout'
 import type { CompositeV2Layer, CompositeV2Preset } from '../lib/compositeV2Types'
 
@@ -41,6 +42,7 @@ function getAssetLabel(layer: CompositeV2Layer) {
 
 export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpdatePreset }: Props) {
   const selectedLayer = preset?.layers.find((layer) => layer.id === selectedLayerId) ?? null
+  const { openInfoDialog } = useAppDialog()
 
   const [editingLayerId, setEditingLayerId] = useState('')
   const [editingLayerName, setEditingLayerName] = useState('')
@@ -85,7 +87,10 @@ export function PresetLayerPanel({ preset, selectedLayerId, onSelectLayer, onUpd
 
   async function selectMediaAsset(layer: Extract<CompositeV2Layer, { type: 'image' | 'logo' }>) {
     if (!window.electronAPI?.selectFile) {
-      alert('当前环境不支持选择本地文件')
+      openInfoDialog({
+        title: '当前环境不支持',
+        message: '请在桌面客户端中选择本地文件。',
+      })
       return
     }
     const path = await window.electronAPI.selectFile([{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }])

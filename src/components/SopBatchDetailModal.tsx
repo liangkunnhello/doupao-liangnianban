@@ -4,7 +4,6 @@ import {
   CheckIcon as Check,
   CloseIcon as X,
   CopyIcon as Copy,
-  ExpandIcon as Expand,
   FolderOpenIcon as FolderOpen,
   Grid2X2Icon as Grid2X2,
   ImageIcon,
@@ -33,6 +32,8 @@ import {
   joinPath,
   openInExplorer,
 } from '../lib/localSave'
+import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../hooks/useLargeModalMode'
+import LargeModalToggle from './LargeModalToggle'
 
 const HOVER_PREVIEW_MAX_LONG_EDGE = 1024
 const SOP_BATCH_MODAL_MODE_STORAGE_KEY = 'doupao.sop-batch-detail-modal-mode'
@@ -40,23 +41,6 @@ const SOP_BATCH_IMAGE_VIEW_SIZE_STORAGE_KEY = 'doupao.sop-batch-detail-image-vie
 const SOP_BATCH_IMAGE_VIEW_SIZE_MIN = 160
 const SOP_BATCH_IMAGE_VIEW_SIZE_MAX = 360
 const SOP_BATCH_IMAGE_VIEW_SIZE_DEFAULT = 240
-
-function getStoredSopBatchModalMode() {
-  if (typeof window === 'undefined') return false
-  try {
-    return window.localStorage.getItem(SOP_BATCH_MODAL_MODE_STORAGE_KEY) === 'large'
-  } catch {
-    return false
-  }
-}
-
-function storeSopBatchModalMode(largeView: boolean) {
-  try {
-    window.localStorage.setItem(SOP_BATCH_MODAL_MODE_STORAGE_KEY, largeView ? 'large' : 'default')
-  } catch {
-    // Keep the current session usable if browser storage is unavailable.
-  }
-}
 
 function normalizeSopBatchImageViewSize(value: number) {
   if (!Number.isFinite(value)) return SOP_BATCH_IMAGE_VIEW_SIZE_DEFAULT
@@ -222,18 +206,14 @@ export default function SopBatchDetailModal({
   const [hoverPreview, setHoverPreview] = useState<HoverPreviewState | null>(null)
   const [hoverPreviewSizeText, setHoverPreviewSizeText] = useState('')
   const [snapshot, setSnapshot] = useState<SopBatchSnapshot | null>(null)
-  const [largeView, setLargeView] = useState(getStoredSopBatchModalMode)
+  const { largeView, toggleLargeView } = useLargeModalMode(SOP_BATCH_MODAL_MODE_STORAGE_KEY)
   const [imageViewSize, setImageViewSize] = useState(getStoredSopBatchImageViewSize)
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null)
   const copyFeedbackTimerRef = useRef<number | null>(null)
   const allResults = useMemo(() => tasks.flatMap(getTaskResultItems), [tasks])
   const isRunning = tasks.some((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)
   const modalSizeStyle = largeView
-    ? {
-        width: '80vw',
-        height: '80vh',
-        maxWidth: 'none',
-      }
+    ? LARGE_MODAL_SIZE_STYLE
     : {
         height: 'min(86vh, 820px)',
         maxWidth: '1024px',
@@ -246,14 +226,6 @@ export default function SopBatchDetailModal({
     const normalized = normalizeSopBatchImageViewSize(value)
     setImageViewSize(normalized)
     storeSopBatchImageViewSize(normalized)
-  }
-
-  const toggleLargeView = () => {
-    setLargeView((current) => {
-      const next = !current
-      storeSopBatchModalMode(next)
-      return next
-    })
   }
 
   const copyPrompt = async (task: TaskRecord) => {
@@ -418,17 +390,7 @@ export default function SopBatchDetailModal({
               <span className="hidden shrink-0 text-[11px] sm:inline">大图</span>
               <output htmlFor="sop-batch-detail-image-size" className="w-12 shrink-0 text-right font-medium tabular-nums text-gray-700 dark:text-gray-200">{imageViewSize}px</output>
             </div>
-            <button
-              type="button"
-              onClick={toggleLargeView}
-              aria-label={largeView ? '退出 SOP 批量任务大弹窗模式' : '进入 SOP 批量任务大弹窗模式'}
-              aria-pressed={largeView}
-              title={largeView ? '恢复默认弹窗大小' : '使用当前程序窗口 80% 的宽度和高度'}
-              className={`flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${largeView ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200' : 'border border-gray-200 bg-white text-gray-600 hover:border-violet-300 hover:text-violet-700 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-300 dark:hover:text-violet-200'}`}
-            >
-              <Expand size={15} />
-              {largeView ? '恢复大小' : '80% 大弹窗'}
-            </button>
+            <LargeModalToggle largeView={largeView} dialogName="SOP 批量任务" onToggle={toggleLargeView} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {snapshot && (

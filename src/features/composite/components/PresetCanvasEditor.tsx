@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 import { mapLayerPositionToCanvas } from '../lib/compositeRenderPlan'
 import { renderCompositeV2ToCanvas } from '../lib/compositeRendererV2'
 import { fitCompositeTextLayer } from '../lib/compositeTextLayout'
@@ -88,6 +89,7 @@ function preserveFreeLayerCenter(
 
 export function PresetCanvasEditor(props: Props) {
   const { preset } = props
+  const { openInfoDialog } = useAppDialog()
   const [internalSelectedLayerId, setInternalSelectedLayerId] = useState('')
   const [backgroundDataUrl, setBackgroundDataUrl] = useState('')
   const [editingTextLayerId, setEditingTextLayerId] = useState('')
@@ -285,7 +287,10 @@ export function PresetCanvasEditor(props: Props) {
     dragRef.current = null
     selectLayer(layer.id)
     if (!window.electronAPI?.selectFile || !window.electronAPI?.readImageFile) {
-      window.alert('当前环境不支持选择本地图片')
+      openInfoDialog({
+        title: '当前环境不支持',
+        message: '请在桌面客户端中选择本地图片。',
+      })
       return
     }
     const path = await window.electronAPI.selectFile([{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'] }])

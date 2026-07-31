@@ -25,6 +25,7 @@ import { ExportResultsPanel } from './ExportResultsPanel'
 import { DistributionSettingsPanel } from './DistributionSettingsPanel'
 import { GlobalOutputRulesPanel } from './GlobalOutputRulesPanel'
 import { runDistribution } from '../lib/compositeDistribution'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 
 type PreviewFile = {
   path: string
@@ -46,6 +47,7 @@ function getPreviewPath(previewHistory: string[], previewHistoryIndex: number) {
 }
 
 export function BatchExportTab() {
+  const { openConfirmDialog } = useAppDialog()
   const backgroundFolders = useCompositeV2Store((state) => state.backgroundFolders)
   const recursiveBackgrounds = useCompositeV2Store((state) => state.recursiveBackgrounds)
   const backgrounds = useCompositeV2Store((state) => state.backgrounds)
@@ -561,15 +563,38 @@ export function BatchExportTab() {
     setRunStatusText(nextPaused ? '导出已暂停。' : '正在继续导出...')
   }
 
-  async function handleCancel() {
-    if (!window.confirm('确定取消当前导出吗？')) return
+  async function cancelExport(deleteExportedFiles: boolean) {
     canceledRef.current = true
     pausedRef.current = false
     setExportStatus('canceling')
-    if (exportSuccesses.length && !window.confirm('保留已经导出的文件？选择“取消”将删除这些文件。')) {
+    if (deleteExportedFiles && exportSuccesses.length) {
       const cleanup = await window.electronAPI?.deleteCompositeFiles?.(exportSuccesses.map((item) => item.path))
       setRunStatusText(cleanup?.failed.length ? `已取消，${cleanup.failed.length} 个文件删除失败。` : '已取消并删除已导出文件。')
     }
+  }
+
+  function handleCancel() {
+    openConfirmDialog({
+      title: '取消当前导出？',
+      message: '导出任务会立即停止，尚未处理的文件不会继续生成。',
+      confirmText: '继续取消',
+      tone: 'warning',
+      action: () => {
+        if (!exportSuccesses.length) {
+          void cancelExport(false)
+          return
+        }
+        openConfirmDialog({
+          title: '处理已导出的文件',
+          message: `已经导出 ${exportSuccesses.length} 个文件。是否同时删除这些文件？`,
+          confirmText: '删除文件',
+          cancelText: '保留文件',
+          tone: 'danger',
+          action: () => void cancelExport(true),
+          cancelAction: () => void cancelExport(false),
+        })
+      },
+    })
   }
 
   return (

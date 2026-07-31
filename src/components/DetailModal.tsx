@@ -20,14 +20,18 @@ import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import PromptVariableEditor from './PromptVariableEditor'
 import HoverImagePreview from './HoverImagePreview'
+import LargeModalToggle from './LargeModalToggle'
 import { type TaskParams, DEFAULT_PARAMS } from '../types'
 import { updateTaskInStore } from '../store'
+import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../hooks/useLargeModalMode'
 
 import ViewportTooltip from './ViewportTooltip'
 
 const HOVER_PREVIEW_MAX_LONG_EDGE = 1024
+const TASK_DETAIL_MODAL_MODE_STORAGE_KEY = 'doupao.task-detail-modal-mode'
 
 export default function DetailModal() {
+  const { largeView, toggleLargeView } = useLargeModalMode(TASK_DETAIL_MODAL_MODE_STORAGE_KEY)
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -580,9 +584,16 @@ export default function DetailModal() {
         role="dialog"
         aria-modal="true"
         aria-label="任务详情"
-        className="ds-modal-surface relative max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 rounded-2xl border animate-modal-in motion-reduce:animate-none"
+        style={largeView ? LARGE_MODAL_SIZE_STYLE : undefined}
+        className="ds-modal-surface relative max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 rounded-2xl border transition-[width,height,max-width] duration-200 ease-out animate-modal-in motion-reduce:animate-none"
         onClick={(e) => e.stopPropagation()}
       >
+        <LargeModalToggle
+          largeView={largeView}
+          dialogName="普通任务详情"
+          onToggle={toggleLargeView}
+          className="absolute right-14 top-3 z-20"
+        />
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
           <button
             onClick={() => setDetailTaskId(null)}
@@ -773,7 +784,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-5 overflow-y-auto overscroll-contain flex flex-col">
+        <div className="md:w-1/2 w-full px-5 pb-5 pt-5 md:pt-16 overflow-y-auto overscroll-contain flex flex-col">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"

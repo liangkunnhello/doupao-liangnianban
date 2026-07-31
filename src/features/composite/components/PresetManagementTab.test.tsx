@@ -7,6 +7,7 @@ import {
   createDefaultCompositeV2Preset,
   createDefaultCompositeV2PresetGroup,
 } from '../lib/compositeV2Defaults'
+import { useStore } from '../../../store'
 import { createCompositeV2StoreState, useCompositeV2Store } from '../storeV2'
 import * as compositeAssets from '../lib/compositeAssets'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
@@ -22,6 +23,7 @@ afterEach(() => {
     mountedRenderers.pop()?.unmount()
   }
   useCompositeV2Store.setState(createCompositeV2StoreState())
+  useStore.getState().setConfirmDialog(null)
   vi.restoreAllMocks()
   delete (window as Window & { electronAPI?: typeof window.electronAPI }).electronAPI
 })
@@ -548,8 +550,6 @@ describe('PresetManagementTab', () => {
       selectedPreviewPresetId: presetB.id,
       enabledPresetIdsForRun: [presetA.id, presetB.id],
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-
     let renderer: ReturnType<typeof create>
     act(() => {
       renderer = create(<PresetManagementTab />)
@@ -560,6 +560,16 @@ describe('PresetManagementTab', () => {
 
     act(() => {
       deleteButton.props.onClick()
+    })
+    const confirmDialog = useStore.getState().confirmDialog
+    expect(confirmDialog).toMatchObject({
+      title: '删除预设？',
+      confirmText: '确认删除',
+      tone: 'danger',
+    })
+    act(() => {
+      confirmDialog?.action?.()
+      useStore.getState().setConfirmDialog(null)
     })
 
     expect(useCompositeV2Store.getState().presets.map((preset) => preset.id)).toEqual([presetA.id])

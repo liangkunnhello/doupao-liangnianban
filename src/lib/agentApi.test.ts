@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
-import { callAgentApi, callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments } from './agentApi'
+import { callAgentApi, callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments, transformSopDocument } from './agentApi'
 
 describe('callAgentResponsesApi', () => {
   afterEach(() => {
@@ -331,6 +331,67 @@ describe('callAgentResponsesApi', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toContain('/chat/completions')
     expect(title).toBe('稳定生图')
+  })
+
+  it('structures SOP documents with the configured Agent Responses model and no image tools', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: '```markdown\n# 目标\n\n保持一致。\n```' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      model: 'agent-sop-model',
+    })
+
+    const result = await transformSopDocument({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      operation: 'structure',
+      content: '保持一致。',
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.model).toBe('agent-sop-model')
+    expect(body.tools).toBeUndefined()
+    expect(body.input[0].content[0].text).toContain('<sop_document>')
+    expect(body.input[0].content[0].text).toContain('待补充')
+    expect(result).toBe('# 目标\n\n保持一致。')
+  })
+
+  it('audits SOP documents through the configured Agent Chat Completions protocol', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '## 总体结论\n缺少验收标准。' } }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({ apiKey: 'test-key', model: 'agent-chat-model' })
+
+    const result = await transformSopDocument({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        agentApiConfigMode: 'hybrid',
+        agentTextProtocol: 'chat-completions',
+      },
+      profile,
+      operation: 'audit',
+      content: '执行导出。',
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/chat/completions')
+    expect(body.model).toBe('agent-chat-model')
+    expect(body.messages[0].content).toContain('meticulous SOP document editor')
+    expect(body.messages[1].content).toContain('Do not rewrite it')
+    expect(result).toContain('缺少验收标准')
   })
 
   it('requests web search and applies citations', async () => {

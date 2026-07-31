@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { CompositeV2ExportStatus, CompositeV2FailureItem, CompositeV2HistoryRecord, CompositeV2SuccessItem } from '../lib/compositeV2Types'
 import { useCompositeV2Store } from '../storeV2'
 import { runDistribution } from '../lib/compositeDistribution'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 
 type ExportResultsPanelProps = {
   status: CompositeV2ExportStatus
@@ -31,6 +32,7 @@ function formatTimestamp(timestamp: number) {
 }
 
 export function ExportResultsPanel({ status, completed, total, history, successes, failures, distributionStatus, distributionCompleted, distributionTotal, distributionSuccesses, distributionFailures }: ExportResultsPanelProps) {
+  const { openConfirmDialog, openInfoDialog } = useAppDialog()
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0
   const distProgress = distributionTotal > 0 ? Math.round((distributionCompleted / distributionTotal) * 100) : 0
   const latestHistory = history.slice(0, 3)
@@ -42,26 +44,33 @@ export function ExportResultsPanel({ status, completed, total, history, successe
   
   const [distributingId, setDistributingId] = useState<string | null>(null)
 
-  async function handleRedistribute(record: CompositeV2HistoryRecord) {
+  function handleRedistribute(record: CompositeV2HistoryRecord) {
     if (!distributionConfig.enabled) {
-      alert('请先在分配设置中启用自动分配并配置规则。')
+      openInfoDialog({ title: '无法重新分配', message: '请先在分配设置中启用自动分配并配置规则。' })
       return
     }
     if (!distributionConfig.startDate || !/^(\d{4})(\d{2})(\d{2})$/.test(distributionConfig.startDate)) {
-      alert('自动分配失败：起始日期格式错误，期望 YYYYMMDD（例如 20260701）')
+      openInfoDialog({ title: '起始日期格式错误', message: '请输入 YYYYMMDD 格式的日期，例如 20260701。' })
       return
     }
     const electronApi = typeof window !== 'undefined' ? window.electronAPI : undefined
     if (!electronApi) {
-      alert('当前环境不支持文件操作。')
+      openInfoDialog({ title: '当前环境不支持', message: '当前环境无法执行本地文件操作。' })
       return
     }
     if (record.successes.length === 0) {
-      alert('该记录没有成功的导出文件，无法分配。')
+      openInfoDialog({ title: '没有可分配文件', message: '该记录没有成功导出的文件，无法重新分配。' })
       return
     }
-    if (!confirm(`将对 ${record.successes.length} 个文件执行重新分配，确认操作吗？`)) return
+    openConfirmDialog({
+      title: '重新分配导出文件？',
+      message: `将按照当前分配规则处理 ${record.successes.length} 个文件。`,
+      confirmText: '开始分配',
+      action: () => void executeRedistribute(record, electronApi),
+    })
+  }
 
+  async function executeRedistribute(record: CompositeV2HistoryRecord, electronApi: NonNullable<typeof window.electronAPI>) {
     setDistributingId(record.id)
     updateHistoryRecord(record.id, { distributionStatus: 'running' })
     try {
@@ -85,13 +94,16 @@ export function ExportResultsPanel({ status, completed, total, history, successe
         distributionSuccesses: distSuccesses,
         distributionFailures: distFailures,
       })
-      alert(`重新分配完成：\n成功: ${result.success}\n失败: ${result.failed}\n${result.errors.length > 0 ? '\n错误详情查看控制台' : ''}`)
+      openInfoDialog({
+        title: '重新分配完成',
+        message: `成功 ${result.success} 个，失败 ${result.failed} 个。${result.errors.length > 0 ? '\n错误详情已写入控制台。' : ''}`,
+      })
       if (result.errors.length > 0) {
         console.error('分发错误：', result.errors)
       }
     } catch (error: any) {
       updateHistoryRecord(record.id, { distributionStatus: 'failed', distributionErrors: [error.message] })
-      alert(`分配异常：${error.message}`)
+      openInfoDialog({ title: '重新分配失败', message: error.message })
     } finally {
       setDistributingId(null)
     }

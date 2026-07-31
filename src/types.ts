@@ -345,6 +345,8 @@ export interface SopBatchTaskMeta {
 
 export interface SopBatchSnapshot {
   id: string
+  /** 用户可编辑的提示词集标题；旧记录缺省时由 SOP 名称、本次要求或日期生成。 */
+  title?: string
   batchId: string
   workspaceTabId: string | null
   createdAt: number

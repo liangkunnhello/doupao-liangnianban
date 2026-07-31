@@ -23,6 +23,7 @@ import { FloatingLogoLibrary } from './FloatingLogoLibrary'
 import { PresetCanvasEditor } from './PresetCanvasEditor'
 import { PresetLayerPanel } from './PresetLayerPanel'
 import { PresetNamingFields } from './PresetNamingFields'
+import { useAppDialog } from '../../../hooks/useAppDialog'
 
 const GROUP_DRAG_TYPE = 'application/x-doupao-preset-group'
 const LIBRARY_PRESET_DRAG_TYPE = 'application/x-doupao-library-preset'
@@ -38,6 +39,7 @@ function formatNamingDate(date = new Date()) {
 
 export function PresetManagementTab() {
   const store = useCompositeV2Store()
+  const { openConfirmDialog, openInfoDialog } = useAppDialog()
   const [query, setQuery] = useState('')
   const [logoStatusText, setLogoStatusText] = useState('支持拖拽添加 LOGO。')
   const [isRefreshingLogos, setIsRefreshingLogos] = useState(false)
@@ -151,11 +153,11 @@ export function PresetManagementTab() {
   async function chooseLogoFolder() {
     // 增加对环境支持的提示
     if (!window.electronAPI) {
-      window.alert('抱歉，当前不在客户端环境中，不支持选择本地文件。')
+      openInfoDialog({ title: '当前环境不支持', message: '请在桌面客户端中选择本地文件。' })
       return
     }
     if (!window.electronAPI.selectFiles) {
-      window.alert('提示：主进程接口 (selectFiles) 尚未就绪，请重启应用后再试。')
+      openInfoDialog({ title: '文件选择尚未就绪', message: '请重启应用后再试。' })
       return
     }
 
@@ -390,7 +392,16 @@ export function PresetManagementTab() {
                               <Plus className="h-3.5 w-3.5" />
                             </button>
                             <button type="button" title="复制组" onClick={(e) => { e.stopPropagation(); store.duplicatePresetGroup(group.id); }} className="cursor-pointer p-1 text-blue-500 hover:bg-blue-100 rounded dark:text-blue-400 dark:hover:bg-blue-500/20"><Copy className="h-3.5 w-3.5" /></button>
-                            <button type="button" title="删除组" disabled={store.presetGroups.length <= 1} onClick={(e) => { e.stopPropagation(); window.confirm('删除这个预设组？') && store.deletePresetGroup(group.id); }} className="cursor-pointer p-1 text-red-500 hover:bg-red-100 rounded disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-400 dark:hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
+                            <button type="button" title="删除组" disabled={store.presetGroups.length <= 1} onClick={(e) => {
+                              e.stopPropagation()
+                              openConfirmDialog({
+                                title: '删除预设组？',
+                                message: `将删除预设组「${group.name}」，组内预设不会被删除。`,
+                                confirmText: '确认删除',
+                                tone: 'danger',
+                                action: () => store.deletePresetGroup(group.id),
+                              })
+                            }} className="cursor-pointer p-1 text-red-500 hover:bg-red-100 rounded disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-400 dark:hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
                           </div>
                         )}
                         <span className="text-[11px] opacity-70 w-4 text-right">{group.presetIds.length}</span>
@@ -506,7 +517,13 @@ export function PresetManagementTab() {
                     {preset.id === store.selectedPreviewPresetId && (
                       <div className="flex shrink-0 items-center gap-0.5">
                         <button type="button" title="复制为新预设" onClick={() => store.duplicatePreset(preset.id)} className="cursor-pointer p-1 text-blue-600 hover:bg-blue-100 rounded-md dark:text-blue-400 dark:hover:bg-blue-500/20"><Copy className="h-3.5 w-3.5" /></button>
-                        <button type="button" title="删除预设" onClick={() => { window.confirm('删除这个预设？') && store.deletePreset(preset.id) }} className="cursor-pointer p-1 text-red-500 hover:bg-red-100 rounded-md dark:text-red-400 dark:hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
+                        <button type="button" title="删除预设" onClick={() => openConfirmDialog({
+                          title: '删除预设？',
+                          message: `将永久删除预设「${preset.name}」。`,
+                          confirmText: '确认删除',
+                          tone: 'danger',
+                          action: () => store.deletePreset(preset.id),
+                        })} className="cursor-pointer p-1 text-red-500 hover:bg-red-100 rounded-md dark:text-red-400 dark:hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
                       </div>
                     )}
                   </div>

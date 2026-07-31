@@ -11,7 +11,6 @@ import {
   LibraryIcon as Library,
   LoaderCircleIcon as LoaderCircle,
   MousePointerClickIcon as MousePointerClick,
-  MinusIcon as Minus,
   PencilIcon as Pencil,
   PlusIcon as Plus,
   SaveIcon as Save,
@@ -26,8 +25,12 @@ import { MAX_SOP_REFERENCE_IMAGES, type GenerateSop, type SopReferenceImage } fr
 import { sopLibraryId } from './sopLibrary'
 import { getSopCoverCandidates } from './sopCover'
 import SopCoverImage from './SopCoverImage'
+import SopTextEditor from './SopTextEditor'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction } from './types'
 import { isModalBackdropEvent } from '../../lib/modalBackdrop'
+import { useAppDialog } from '../../hooks/useAppDialog'
+import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../../hooks/useLargeModalMode'
+import LargeModalToggle from '../../components/LargeModalToggle'
 
 type CenterTab = 'library' | 'meta' | 'generate'
 type GenerationJob = {
@@ -39,6 +42,7 @@ type GenerationJob = {
 }
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const SOP_MANAGEMENT_MODAL_MODE_STORAGE_KEY = 'doupao.sop-management-modal-mode'
 
 function readImage(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -54,7 +58,6 @@ function inputClassName() {
 }
 
 export default function SopManagementCenter({
-  minimized,
   groups,
   items,
   tasks = [],
@@ -73,11 +76,8 @@ export default function SopManagementCenter({
   selectedSopId,
   onApply,
   onClear,
-  onMinimize,
-  onRestore,
   onClose,
 }: {
-  minimized: boolean
   groups: SopGroup[]
   items: SopLibraryItem[]
   tasks?: TaskRecord[]
@@ -96,10 +96,10 @@ export default function SopManagementCenter({
   selectedSopId?: string
   onApply?: (item: SopLibraryItem) => void
   onClear?: () => void
-  onMinimize: () => void
-  onRestore: () => void
   onClose: () => void
 }) {
+  const { openConfirmDialog } = useAppDialog()
+  const { largeView, toggleLargeView } = useLargeModalMode(SOP_MANAGEMENT_MODAL_MODE_STORAGE_KEY)
   const [tab, setTab] = useState<CenterTab>('library')
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all')
   const [search, setSearch] = useState('')
@@ -132,7 +132,7 @@ export default function SopManagementCenter({
         : items.filter((item) => item.groupId === selectedGroupId)
     const query = search.trim().toLocaleLowerCase()
     return query
-      ? groupedItems.filter((item) => `${item.name} ${item.description} ${item.content}`.toLocaleLowerCase().includes(query))
+      ? groupedItems.filter((item) => `${item.name} ${item.content}`.toLocaleLowerCase().includes(query))
       : groupedItems
   }, [items, search, selectedGroupId])
   const persistedItem = items.find((item) => item.id === selectedItemId)
@@ -227,23 +227,42 @@ export default function SopManagementCenter({
 
   const cancelRenameGroup = () => setEditingGroupId(null)
 
-  const confirmDraftChange = () => !itemDirty || window.confirm('当前 SOP 有未保存修改，确认放弃这些修改吗？')
+  const runAfterDraftConfirmation = (action: () => void) => {
+    if (!itemDirty) {
+      action()
+      return
+    }
+    openConfirmDialog({
+      title: '放弃未保存的修改？',
+      message: '当前 SOP 的修改尚未保存，继续操作将丢失这些修改。',
+      confirmText: '放弃修改',
+      tone: 'warning',
+      action,
+    })
+  }
+
   const closeSafely = () => {
-    if (job.status !== 'running' && confirmDraftChange()) onClose()
+    if (job.status !== 'running') runAfterDraftConfirmation(onClose)
   }
 
   const selectItem = (item: SopLibraryItem) => {
-    if (item.id !== selectedItemId && !confirmDraftChange()) return
-    setSelectedItemId(item.id)
-    setItemDraft(item)
-    setCoverPickerOpen(false)
+    const select = () => {
+      setSelectedItemId(item.id)
+      setItemDraft(item)
+      setCoverPickerOpen(false)
+    }
+    if (item.id === selectedItemId) select()
+    else runAfterDraftConfirmation(select)
   }
 
   const openCoverPickerForItem = (item: SopLibraryItem) => {
-    if (item.id !== selectedItemId && !confirmDraftChange()) return
-    setSelectedItemId(item.id)
-    setItemDraft(item)
-    setCoverPickerOpen(true)
+    const open = () => {
+      setSelectedItemId(item.id)
+      setItemDraft(item)
+      setCoverPickerOpen(true)
+    }
+    if (item.id === selectedItemId) open()
+    else runAfterDraftConfirmation(open)
   }
 
   const applyItem = (item: SopLibraryItem) => {
@@ -388,38 +407,21 @@ export default function SopManagementCenter({
     }
   }
 
-  if (minimized) {
-    return (
-      <button
-        type="button"
-        onClick={onRestore}
-        className="fixed bottom-6 right-6 z-[var(--ds-z-modal)] flex min-w-80 items-center gap-3 rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised)/0.96)] p-4 text-left shadow-2xl backdrop-blur transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ds-color-focus))] motion-reduce:transform-none"
-      >
-        <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${job.status === 'running' ? 'bg-[hsl(var(--ds-color-primary-subtle))] text-[hsl(var(--ds-color-primary))]' : job.status === 'success' ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : job.status === 'error' ? 'bg-[hsl(var(--ds-color-danger-subtle))] text-[hsl(var(--ds-color-danger))]' : 'bg-[hsl(var(--ds-color-surface-subtle))] text-[hsl(var(--ds-color-text-muted))]'}`}>
-          {job.status === 'running' ? <LoaderCircle className="animate-spin" size={20} /> : job.status === 'success' ? <CheckCircle2 size={20} /> : job.status === 'error' ? <XCircle size={20} /> : <Library size={20} />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold">SOP 管理中心</span>
-          <span className="sop-center-quiet-text mt-1 block truncate text-xs">{job.message}{job.status === 'running' ? ` · ${elapsed} 秒` : ''}</span>
-          {job.status === 'running' && <span className="mt-2 block h-1 overflow-hidden rounded-full bg-[hsl(var(--ds-color-surface-subtle))]"><span className="block h-full w-1/2 animate-pulse rounded-full bg-[hsl(var(--ds-color-primary))]" /></span>}
-        </span>
-        <span className="text-xs font-medium text-[hsl(var(--ds-color-primary))]">展开</span>
-      </button>
-    )
-  }
-
   return (
     <div className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="sop-center-title" onMouseDown={(event) => {
       if (isModalBackdropEvent(event)) closeSafely()
     }}>
-      <div className="sop-center-dialog relative animate-modal-in flex w-full flex-col overflow-hidden">
+      <div
+        style={largeView ? LARGE_MODAL_SIZE_STYLE : undefined}
+        className="sop-center-dialog relative animate-modal-in flex w-full flex-col overflow-hidden transition-[width,height,max-width] duration-200 ease-out"
+      >
         <header className="sop-center-header">
           <div>
             <h2 id="sop-center-title" className="text-lg font-semibold tracking-tight">SOP 管理中心</h2>
-            <p className="sop-center-quiet-text mt-1 text-xs">统一管理 SOP、分组和生成元指令；生成任务可最小化到后台继续执行。</p>
+            <p className="sop-center-quiet-text mt-1 text-xs">统一管理 SOP、分组和生成元指令。</p>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onMinimize} className="sop-center-button sop-center-button--secondary"><Minus size={16} />最小化</button>
+            <LargeModalToggle largeView={largeView} dialogName="SOP 管理中心" onToggle={toggleLargeView} />
             <button type="button" onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" className="sop-center-icon-button sop-center-icon-button--secondary"><X size={18} /></button>
           </div>
         </header>
@@ -430,7 +432,7 @@ export default function SopManagementCenter({
             ['meta', Settings2, '生成元指令'],
             ['generate', Sparkles, '智能生成'],
           ] as const).map(([value, Icon, label]) => (
-            <button key={value} type="button" onClick={() => (value === 'library' || confirmDraftChange()) && setTab(value)} className="sop-center-tab" data-selected={tab === value || undefined}><Icon size={16} />{label}</button>
+            <button key={value} type="button" onClick={() => value === 'library' ? setTab(value) : runAfterDraftConfirmation(() => setTab(value))} className="sop-center-tab" data-selected={tab === value || undefined}><Icon size={16} />{label}</button>
           ))}
         </nav>
 
@@ -439,7 +441,7 @@ export default function SopManagementCenter({
             <aside className="sop-center-sidebar min-h-0 overflow-y-auto border-r p-4">
               <div className="flex items-center gap-2"><input value={groupName} onChange={(event) => setGroupName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addGroup()} placeholder="新分组名称" className={`${inputClassName()} h-10 min-w-0`} /><button type="button" onClick={addGroup} aria-label="新增 SOP 分组" className="sop-center-icon-button sop-center-icon-button--primary"><FolderPlus size={16} /></button></div>
               <div className="mt-4 space-y-1">
-                {[{ id: 'all', name: '全部 SOP', count: items.length }, { id: 'favorites', name: '收藏', count: items.filter((item) => item.favorite).length }, { id: 'recent', name: '最近使用', count: items.filter((item) => item.lastUsedAt).length }, { id: 'ungrouped', name: '未分组', count: items.filter((item) => !item.groupId).length }].map((group) => <button key={group.id} type="button" onClick={() => confirmDraftChange() && setSelectedGroupId(group.id)} className="sop-center-nav-item" data-selected={selectedGroupId === group.id || undefined}><span>{group.name}</span><span className="text-xs opacity-70">{group.count}</span></button>)}
+                {[{ id: 'all', name: '全部 SOP', count: items.length }, { id: 'favorites', name: '收藏', count: items.filter((item) => item.favorite).length }, { id: 'recent', name: '最近使用', count: items.filter((item) => item.lastUsedAt).length }, { id: 'ungrouped', name: '未分组', count: items.filter((item) => !item.groupId).length }].map((group) => <button key={group.id} type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="sop-center-nav-item" data-selected={selectedGroupId === group.id || undefined}><span>{group.name}</span><span className="text-xs opacity-70">{group.count}</span></button>)}
                 {groups.map((group) => {
                   const isEditing = editingGroupId === group.id
                   if (isEditing) {
@@ -465,10 +467,16 @@ export default function SopManagementCenter({
                   }
                   return (
                     <div key={group.id} className="sop-center-group-row group flex items-center" data-selected={selectedGroupId === group.id || undefined}>
-                      <button type="button" onClick={() => confirmDraftChange() && setSelectedGroupId(group.id)} className="min-h-10 min-w-0 flex-1 truncate px-3 text-left text-sm">{group.name}</button>
+                      <button type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="min-h-10 min-w-0 flex-1 truncate px-3 text-left text-sm">{group.name}</button>
                       <button type="button" onClick={() => startRenameGroup(group)} aria-label={`重命名${group.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] opacity-0 group-hover:opacity-100"><Pencil size={13} /></button>
                       <button type="button" onClick={() => onDuplicateGroup(group.id)} aria-label={`复制${group.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] opacity-0 group-hover:opacity-100"><Copy size={13} /></button>
-                      <button type="button" onClick={() => window.confirm(`删除分组「${group.name}」？组内 SOP 将转为未分组。`) && onDeleteGroup(group.id)} aria-label={`删除${group.name}`} className="p-2 text-[hsl(var(--ds-color-danger))] opacity-0 group-hover:opacity-100"><Trash2 size={13} /></button>
+                      <button type="button" onClick={() => openConfirmDialog({
+                        title: '删除 SOP 分组？',
+                        message: `将删除分组「${group.name}」，组内 SOP 会转为未分组。`,
+                        confirmText: '确认删除',
+                        tone: 'danger',
+                        action: () => onDeleteGroup(group.id),
+                      })} aria-label={`删除${group.name}`} className="p-2 text-[hsl(var(--ds-color-danger))] opacity-0 group-hover:opacity-100"><Trash2 size={13} /></button>
                     </div>
                   )
                 })}
@@ -477,11 +485,12 @@ export default function SopManagementCenter({
 
             <section className="sop-center-list-panel min-h-0 overflow-y-auto border-r p-4">
               <div className="flex items-center justify-between"><div><h3 className="font-semibold">SOP 列表</h3><p className="sop-center-quiet-text mt-1 text-xs">{filteredItems.length} 个 SOP</p></div><button type="button" onClick={addItem} className="sop-center-button sop-center-button--primary"><Plus size={15} />新建</button></div>
-              <label className="mt-3 block"><span className="sr-only">搜索 SOP</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索名称、说明或正文" className={`${inputClassName()} h-10`} /></label>
-              <div className="mt-4 space-y-2">
-                {filteredItems.map((item) => (
-                  <div key={item.id} className="sop-center-card group" data-selected={selectedItemId === item.id || undefined}>
-                    <div className="flex w-full min-w-0 items-center gap-3">
+              <label className="mt-3 block"><span className="sr-only">搜索 SOP</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索名称或正文" className={`${inputClassName()} h-10`} /></label>
+              <div className="sop-center-sop-list mt-3" role="list">
+                {filteredItems.map((item) => {
+                  const groupName = groups.find((group) => group.id === item.groupId)?.name ?? '未分组'
+                  return (
+                  <article key={item.id} className="sop-center-sop-row group" data-selected={selectedItemId === item.id || undefined} role="listitem">
                       <button
                         type="button"
                         onClick={() => selectItem(item)}
@@ -491,29 +500,41 @@ export default function SopManagementCenter({
                         }}
                         aria-label={`双击选择 ${item.name} 的封面`}
                         title="双击选择封面"
-                        className="shrink-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ds-color-focus))]"
+                        className="sop-center-sop-cover"
                       >
-                        <SopCoverImage imageId={selectedItemId === item.id ? itemDraft?.coverImageId : item.coverImageId} alt={`${item.name} 封面`} fallbackText={item.name.trim().slice(0, 1) || 'S'} className="h-14 w-14 rounded-lg" />
+                        <SopCoverImage imageId={selectedItemId === item.id ? itemDraft?.coverImageId : item.coverImageId} alt={`${item.name} 封面`} fallbackText={item.name.trim().slice(0, 1) || 'S'} className="h-12 w-12 rounded-lg" />
                       </button>
-                      <button type="button" onClick={() => selectItem(item)} className="min-w-0 flex-1 text-left">
-                      <span className="min-w-0 flex-1">
+                      <button type="button" onClick={() => selectItem(item)} title={item.name} className="sop-center-sop-main">
                         <span className="block truncate text-sm font-semibold">{item.name}</span>
-                        <span className="sop-center-quiet-text mt-1 line-clamp-2 text-xs leading-5">{item.description || '暂无说明'}</span>
-                      </span>
+                        <span className="sop-center-sop-params" aria-label="SOP 参数">
+                          <span>{groupName}</span>
+                          {selectedSopId === item.id && <span className="sop-center-sop-applied">使用中</span>}
+                        </span>
                       </button>
-                    </div>
-                    <div className={`mt-3 flex items-center ${item.source === 'manual' ? 'justify-end' : 'justify-between'}`}>{item.source !== 'manual' && <span className="sop-center-badge">{item.source === 'generated' ? 'AI 生成' : '历史预设'}</span>}<span className="flex gap-1"><button type="button" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${item.favorite ? 'text-amber-500' : 'text-[hsl(var(--ds-color-text-subtle))] hover:text-amber-500'}`}><Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /></button>{onApply && <button type="button" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${selectedSopId === item.id ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text))]'}`}><MousePointerClick size={14} /></button>}<button type="button" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button><button type="button" onClick={() => window.confirm(`删除 SOP「${item.name}」？`) && onDeleteItem(item.id)} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button></span></div>
-                  </div>
-                ))}
+                      <div className="sop-center-sop-actions" aria-label={`${item.name} 操作`}>
+                        <button type="button" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} className={`sop-center-row-action ${item.favorite ? 'text-amber-500' : 'text-[hsl(var(--ds-color-text-subtle))] hover:text-amber-500'}`}><Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /></button>
+                        {onApply && <button type="button" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" className={`sop-center-row-action ${selectedSopId === item.id ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text))]'}`}><MousePointerClick size={14} /></button>}
+                        <button type="button" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} title="复制 SOP" className="sop-center-row-action text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button>
+                        <button type="button" onClick={() => openConfirmDialog({
+                          title: '删除 SOP？',
+                          message: `将永久删除「${item.name}」。`,
+                          confirmText: '确认删除',
+                          tone: 'danger',
+                          action: () => onDeleteItem(item.id),
+                        })} aria-label={`删除${item.name}`} title="删除 SOP" className="sop-center-row-action text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button>
+                      </div>
+                  </article>
+                  )
+                })}
                 {filteredItems.length === 0 && <div className="rounded-xl border border-dashed border-[hsl(var(--ds-color-border))] p-8 text-center text-sm text-[hsl(var(--ds-color-text-muted))]">当前分组暂无 SOP</div>}
               </div>
             </section>
 
-            <section className="sop-center-editor-panel min-h-0 overflow-y-auto p-5">
-              {itemDraft ? <div className="sop-center-editor-card space-y-4">
+            <section className="sop-center-editor-panel flex min-h-0 flex-col overflow-y-auto p-5">
+              {itemDraft ? <div className="sop-center-editor-card flex min-h-0 flex-1 flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-[1_1_18rem]">
-                    <h3 className="font-semibold">预览与编辑 SOP</h3>
+                    <h3 className="font-semibold">SOP 参数与正文</h3>
                     <p className="sop-center-quiet-text mt-1 text-xs">{itemEditorHint} Ctrl/Cmd+S 可快捷保存。</p>
                   </div>
                   <Inline className="max-w-full" justify="flex-end">
@@ -537,7 +558,12 @@ export default function SopManagementCenter({
                     {onClear && selectedSopId && <Button onClick={onClear} variant="secondary">取消应用</Button>}
                   </Inline>
                 </div>
-                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">名称<input value={itemDraft.name} onChange={(event) => setItemDraft({ ...itemDraft, name: event.target.value })} className={`${inputClassName()} mt-1 h-11`} /></label><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">所属分组<select value={itemDraft.groupId ?? ''} onChange={(event) => setItemDraft({ ...itemDraft, groupId: event.target.value || undefined })} className={`${inputClassName()} mt-1 h-11`}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">说明<textarea value={itemDraft.description} onChange={(event) => setItemDraft({ ...itemDraft, description: event.target.value })} className={`${inputClassName()} mt-1 min-h-24 py-3 leading-6`} /></label><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">SOP 正文<textarea value={itemDraft.content} onChange={(event) => setItemDraft({ ...itemDraft, content: event.target.value })} className={`${inputClassName()} mt-1 min-h-[360px] py-3 font-mono text-xs leading-6`} /></label>
+                <div className="sop-center-editor-fields"><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">名称<input value={itemDraft.name} onChange={(event) => setItemDraft({ ...itemDraft, name: event.target.value })} className={`${inputClassName()} mt-1 h-11`} /></label><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">所属分组<select value={itemDraft.groupId ?? ''} onChange={(event) => setItemDraft({ ...itemDraft, groupId: event.target.value || undefined })} className={`${inputClassName()} mt-1 h-11`}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div>
+                <SopTextEditor
+                  documentId={itemDraft.id}
+                  value={itemDraft.content}
+                  onChange={(content) => setItemDraft({ ...itemDraft, content })}
+                />
               </div> : <div className="flex h-full items-center justify-center text-sm text-[hsl(var(--ds-color-text-muted))]">选择或新建一个 SOP</div>}
             </section>
           </div>
@@ -562,7 +588,13 @@ export default function SopManagementCenter({
                     </button>
                     <div className="mt-2 flex justify-end gap-1">
                       <button type="button" onClick={() => { const id = onDuplicateMetaInstruction(item.id); if (id) setSelectedMetaId(id) }} aria-label={`复制${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button>
-                      <button type="button" onClick={() => window.confirm(`删除元指令「${item.name}」？`) && onDeleteMetaInstruction(item.id)} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button>
+                      <button type="button" onClick={() => openConfirmDialog({
+                        title: '删除生成元指令？',
+                        message: `将永久删除「${item.name}」。`,
+                        confirmText: '确认删除',
+                        tone: 'danger',
+                        action: () => onDeleteMetaInstruction(item.id),
+                      })} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button>
                     </div>
                   </div>
                 ))}
@@ -632,16 +664,12 @@ export default function SopManagementCenter({
                     {job.status === 'running' ? <LoaderCircle className="sop-center-status-icon animate-spin" size={22} /> : job.status === 'success' ? <CheckCircle2 className="sop-center-status-icon" size={22} /> : job.status === 'error' ? <XCircle className="sop-center-status-icon" size={22} /> : <Sparkles className="sop-center-status-icon" size={22} />}
                     <div>
                       <p className="text-sm font-semibold">{job.message}</p>
-                      {job.status === 'running' && <p className="sop-center-quiet-text mt-1 text-xs">已运行 {elapsed} 秒，可最小化继续处理</p>}
+                      {job.status === 'running' && <p className="sop-center-quiet-text mt-1 text-xs">已运行 {elapsed} 秒，请保持窗口开启</p>}
                     </div>
                   </div>
                   {job.status === 'running' && <div className="sop-center-progress-track mt-4"><div className="sop-center-progress-bar animate-pulse" /></div>}
                   {job.error && <p role="alert" className="mt-3 whitespace-pre-wrap text-xs leading-5 text-[hsl(var(--ds-color-danger))]">{job.error}</p>}
                   {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到 SOP 库，可立即在策略或画廊中使用。</p>}
-                </div>
-                <div className="mt-4 rounded-xl bg-[hsl(var(--ds-color-surface-subtle))] p-4 text-xs leading-6 text-[hsl(var(--ds-color-text-muted))]">
-                  <p className="font-medium text-[hsl(var(--ds-color-text))]">运行说明</p>
-                  <p>生成中可以点击右上角“最小化”。后台状态条会持续显示运行时间；完成或失败后会保留具体结果。</p>
                 </div>
               </div>
             </aside>

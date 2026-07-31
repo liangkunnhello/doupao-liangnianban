@@ -84,6 +84,7 @@
   --ds-z-modal: 90;
   --ds-z-toast: 100;
   --ds-z-tooltip: 110;
+  --ds-z-confirm: 120;
 
   --ds-duration-instant: 0ms;
   --ds-duration-fast: 120ms;
@@ -2033,6 +2034,10 @@
 
 .ds-modal-layer {
   z-index: var(--ds-z-modal) !important;
+}
+
+.ds-confirm-dialog-layer {
+  z-index: var(--ds-z-confirm) !important;
 }
 
 .ds-modal-scrim {

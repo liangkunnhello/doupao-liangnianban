@@ -28,6 +28,7 @@ const storeState = vi.hoisted(() => ({
   activeWorkspaceTabId: 'tab-a',
   workspaceTabs: [{ id: 'tab-a', name: '标签 A' }],
   showToast: vi.fn(),
+  setConfirmDialog: vi.fn(),
   setInputImages: vi.fn(),
   setInputImageFolder: vi.fn(),
   setParams: vi.fn(),
@@ -320,7 +321,7 @@ describe('GallerySopBatchModal background generation', () => {
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
   })
 
-  it('shows saved prompt history without starting a new generation', async () => {
+  it('shows saved prompt collections in the repository without starting a new generation', async () => {
     const storedRun: SopBatchSnapshot = {
       id: 'sop-run-history',
       batchId: 'sop-batch-history',
@@ -346,9 +347,109 @@ describe('GallerySopBatchModal background generation', () => {
     })
     mountedRenderers.push(renderer!)
 
-    expect(renderer!.root.findAllByType('h3').some((node) => node.children.join('') === '提示词历史')).toBe(true)
-    expect(renderer!.root.findAllByType('button').some((button) => button.children.includes('加载'))).toBe(true)
+    expect(renderer!.root.findAllByType('h3').some((node) => node.children.join('') === '提示词仓库')).toBe(true)
+    expect(renderer!.root.findByProps({ 'aria-label': '提示词仓库列表' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '查看提示词集 历史要求' })).toBeTruthy()
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('opens previous prompts without an active SOP and keeps generation settings unchanged', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'sop-run-library',
+      title: '夏日海报提示词',
+      batchId: '',
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      updatedAt: 30,
+      status: 'ready',
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+      brief: '清爽、高对比',
+      referenceImageIds: [],
+      promptCount: 1,
+      imagesPerPrompt: 2,
+      prompts: [{ id: 'prompt-library', text: '无需 SOP 也能查看的历史提示词', origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+      params: { ...DEFAULT_PARAMS, n: 2 },
+    }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findByProps({ 'aria-label': '查看提示词集 夏日海报提示词' })).toBeTruthy()
+    const promptEditor = renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' })
+    expect(promptEditor.props.value).toBe('无需 SOP 也能查看的历史提示词')
+    expect(promptEditor.props.className).toContain('min-h-32')
+    expect(renderer!.root.findByProps({ 'aria-label': '提示词集名称' }).props.value).toBe('夏日海报提示词')
+    expect(renderer!.root.findAllByProps({ 'aria-label': '重新生成第 1 条提示词' })).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ 'aria-label': '每生成一条提示词立即发送生图' })).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ 'aria-label': '生成 0 张图片' })).toHaveLength(0)
+    expect(renderer!.root.findAllByType('button').some((button) => button.children.includes('新增提示词'))).toBe(true)
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain('completed')
+    expect(storeState.setParams).not.toHaveBeenCalled()
+    expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('creates and persists an independent prompt collection without an SOP', async () => {
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const dialog = renderer!.root.findByProps({ role: 'dialog', 'aria-labelledby': 'gallery-sop-title' })
+    expect(dialog.props.style).toMatchObject({
+      height: 'min(86vh, 820px)',
+      maxWidth: '1024px',
+    })
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '新建提示词集' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      title: '未命名提示词集',
+      sop: expect.objectContaining({ id: 'prompt-library', name: '独立提示词集' }),
+      status: 'ready',
+    }))
+    expect(renderer!.root.findByProps({ 'aria-label': '提示词集名称' }).props.value).toBe('未命名提示词集')
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' })).toBeTruthy()
+  })
+
+  it('toggles and persists the prompt management large modal mode', async () => {
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    act(() => {
+      renderer!.root.findByProps({ 'aria-label': '进入 提示词管理大弹窗模式' }).props.onClick()
+    })
+    expect(renderer!.root.findByProps({ role: 'dialog', 'aria-labelledby': 'gallery-sop-title' }).props.style).toMatchObject({
+      width: '80vw',
+      height: '80vh',
+      maxWidth: 'none',
+    })
+
+    act(() => renderer!.unmount())
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+    expect(renderer!.root.findByProps({ 'aria-label': '退出 提示词管理大弹窗模式' }).props['aria-pressed']).toBe(true)
   })
 
   it('keeps the current prompt set in history when generating a new version', async () => {
@@ -378,7 +479,6 @@ describe('GallerySopBatchModal background generation', () => {
     dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
     dbMocks.getSopBatchSnapshot.mockResolvedValue(storedRun)
     generateMocks.generatePromptsFromSopStore.mockResolvedValue(['新提示词'])
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
     let renderer: ReturnType<typeof create>
     await act(async () => {
@@ -395,12 +495,21 @@ describe('GallerySopBatchModal background generation', () => {
       await Promise.resolve()
     })
 
-    expect(confirmSpy).toHaveBeenCalledWith('将创建一份新的提示词列表；当前列表会保留在“提示词历史”中。是否继续？')
+    expect(storeState.setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: '生成新的提示词列表？',
+      confirmText: '继续生成',
+    }))
+    const confirmOptions = storeState.setConfirmDialog.mock.calls.at(-1)?.[0]
+    await act(async () => {
+      confirmOptions.action()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
     expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledOnce()
     expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' }).props.value).toBe('新提示词')
     const pointer = JSON.parse(window.localStorage.getItem(getGallerySopPromptRunStorageKey('tab-a')) ?? '{}')
     expect(pointer.activeRunId).not.toBe(storedRun.id)
-    confirmSpy.mockRestore()
   })
 
   it('does not restore prompts or parameters saved by a different SOP', async () => {
@@ -702,7 +811,6 @@ describe('GallerySopBatchModal background generation', () => {
   it('submits a high-volume SOP batch without a confirmation popup', async () => {
     generateMocks.generatePromptsFromSopStore.mockResolvedValue(['高数量提示词'])
     storeMocks.submitTaskWithData.mockResolvedValue('task-1')
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     let renderer: ReturnType<typeof create>
 
     await act(async () => {
@@ -726,8 +834,7 @@ describe('GallerySopBatchModal background generation', () => {
       await Promise.resolve()
     })
 
-    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(storeState.setConfirmDialog).not.toHaveBeenCalled()
     expect(storeMocks.submitTaskWithData).toHaveBeenCalledOnce()
-    confirmSpy.mockRestore()
   })
 })

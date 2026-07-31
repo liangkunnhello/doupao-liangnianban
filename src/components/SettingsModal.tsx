@@ -40,7 +40,6 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap, ColorPresetGrid, SectionHeader } from '../design-system'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
-import { shouldCopyProfileImportUrl } from '../lib/profileImportUrl'
 import { formatStorageBytes, getStorageOverview, type StorageOverview } from '../lib/storageStats'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
@@ -845,9 +844,7 @@ export default function SettingsModal() {
     return result
   }
 
-  const copyProfileImportUrl = async (profile: ApiProfile, options: CopyImportUrlOptions) => {
-    if (!shouldCopyProfileImportUrl(options.includeApiKey, (message) => window.confirm(message))) return
-
+  const performCopyProfileImportUrl = async (profile: ApiProfile, options: CopyImportUrlOptions) => {
     try {
       await copyTextToClipboard(createProfileImportUrl(profile, options))
       showToast(options.includeApiKey ? '导入 URL 已复制（包含 API Key）' : '导入 URL 已复制', 'success')
@@ -855,6 +852,20 @@ export default function SettingsModal() {
     } catch (err) {
       showToast(getClipboardFailureMessage('复制导入 URL 失败', err), 'error')
     }
+  }
+
+  const copyProfileImportUrl = (profile: ApiProfile, options: CopyImportUrlOptions) => {
+    if (!options.includeApiKey) {
+      void performCopyProfileImportUrl(profile, options)
+      return
+    }
+    setConfirmDialog({
+      title: '复制包含 API Key 的链接？',
+      message: '导入链接会包含当前 API Key。任何拿到链接的人都可以查看并使用这个 Key，请仅发送给可信对象。',
+      confirmText: '继续复制',
+      tone: 'warning',
+      action: () => void performCopyProfileImportUrl(profile, options),
+    })
   }
 
   const confirmCopyProfileImportUrl = (profile: ApiProfile) => {

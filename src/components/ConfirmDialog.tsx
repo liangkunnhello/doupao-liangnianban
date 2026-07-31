@@ -74,8 +74,10 @@ export default function ConfirmDialog() {
   }
 
   const handleCancel = () => {
-    confirmDialog?.cancelAction?.(checkboxChecked)
-    handleClose()
+    if (!canConfirm) return
+    const cancelAction = confirmDialog?.cancelAction
+    setConfirmDialog(null)
+    cancelAction?.(checkboxChecked)
   }
 
   useCloseOnEscape(Boolean(confirmDialog) && canConfirm, handleClose)
@@ -93,7 +95,7 @@ export default function ConfirmDialog() {
   return (
     <div
       data-no-drag-select
-      className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
+      className="ds-modal-layer ds-confirm-dialog-layer fixed inset-0 flex items-center justify-center p-4"
       onClick={handleClose}
     >
       <div className="ds-modal-scrim absolute inset-0 animate-overlay-in motion-reduce:animate-none" />
@@ -139,8 +141,8 @@ export default function ConfirmDialog() {
                 key={button.label}
                 onClick={() => {
                   if (!canConfirm) return
-                  button.action(checkboxChecked)
                   setConfirmDialog(null)
+                  button.action(checkboxChecked)
                 }}
                 disabled={!canConfirm}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${getActionButtonClass(button.tone)}`}
@@ -162,8 +164,9 @@ export default function ConfirmDialog() {
             <button
               onClick={() => {
                 if (!canConfirm) return
-                confirmDialog.action?.(checkboxChecked)
+                const action = confirmDialog.action
                 setConfirmDialog(null)
+                action?.(checkboxChecked)
               }}
               disabled={!canConfirm}
               className={`flex-1 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${confirmClassName}`}

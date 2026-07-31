@@ -1,0 +1,414 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CheckCircleIcon as CheckCircle,
+  CloseIcon as Close,
+  CodeIcon as Code,
+  CollectionManageIcon as List,
+  CopyIcon as Copy,
+  ExpandIcon as Expand,
+  LoaderCircleIcon as Loader,
+  RotateCcwIcon as Undo,
+  SearchIcon as Search,
+  SparklesIcon as Sparkles,
+  TypeIcon as Heading,
+} from '../../design-system/icons'
+import { transformSopDocument, type SopAiOperation } from '../../lib/agentApi'
+import { getAgentTextApiProfile, validateApiProfile } from '../../lib/apiProfiles'
+import { useStore } from '../../store'
+import {
+  autoParagraphSopText,
+  cleanPastedSopText,
+  formatSopDocument,
+} from './sopTextFormatting'
+
+type Selection = {
+  start: number
+  end: number
+}
+
+type SopTextEditorProps = {
+  documentId: string
+  value: string
+  onChange: (value: string) => void
+}
+
+const AI_ACTION_LABELS: Record<SopAiOperation, string> = {
+  structure: 'AI 结构化',
+  concise: 'AI 精简',
+  audit: 'AI 检查',
+}
+
+function formatSelectedLines(
+  value: string,
+  selection: Selection,
+  prefix: string,
+): { value: string; selection: Selection } {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selection.start - 1)) + 1
+  const nextLineBreak = value.indexOf('\n', selection.end)
+  const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak
+  const selectedLines = value.slice(lineStart, lineEnd)
+  const formatted = selectedLines
+    .split('\n')
+    .map((line) => `${prefix}${line}`)
+    .join('\n')
+
+  return {
+    value: `${value.slice(0, lineStart)}${formatted}${value.slice(lineEnd)}`,
+    selection: {
+      start: selection.start + prefix.length,
+      end: selection.end + prefix.length * selectedLines.split('\n').length,
+    },
+  }
+}
+
+function wrapSelection(
+  value: string,
+  selection: Selection,
+  before: string,
+  after: string,
+): { value: string; selection: Selection } {
+  const selected = value.slice(selection.start, selection.end)
+  const next = `${value.slice(0, selection.start)}${before}${selected}${after}${value.slice(selection.end)}`
+  return {
+    value: next,
+    selection: {
+      start: selection.start + before.length,
+      end: selection.end + before.length,
+    },
+  }
+}
+
+export default function SopTextEditor({
+  documentId,
+  value,
+  onChange,
+}: SopTextEditorProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const aiAbortRef = useRef<AbortController | null>(null)
+  const historyRef = useRef<string[]>([value])
+  const historyIndexRef = useRef(0)
+  const settings = useStore((state) => state.settings)
+  const showToast = useStore((state) => state.showToast)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMessage, setSearchMessage] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [wrap, setWrap] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false })
+  const [aiLoading, setAiLoading] = useState<SopAiOperation | null>(null)
+  const [aiError, setAiError] = useState('')
+  const [aiResult, setAiResult] = useState<{ operation: SopAiOperation; content: string } | null>(null)
+
+  const stats = useMemo(() => ({
+    characters: value.length,
+    lines: value.length === 0 ? 1 : value.split('\n').length,
+  }), [value])
+  const agentProfile = useMemo(() => getAgentTextApiProfile(settings), [settings])
+
+  useEffect(() => {
+    aiAbortRef.current?.abort()
+    historyRef.current = [value]
+    historyIndexRef.current = 0
+    setHistoryState({ canUndo: false, canRedo: false })
+    setSearchMessage('')
+    setCopied(false)
+    setAiLoading(null)
+    setAiError('')
+    setAiResult(null)
+  }, [documentId])
+
+  useEffect(() => () => aiAbortRef.current?.abort(), [])
+
+  useEffect(() => {
+    if (!expanded) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [expanded])
+
+  function syncHistoryState() {
+    setHistoryState({
+      canUndo: historyIndexRef.current > 0,
+      canRedo: historyIndexRef.current < historyRef.current.length - 1,
+    })
+  }
+
+  function commit(nextValue: string, selection?: Selection) {
+    if (historyRef.current[historyIndexRef.current] !== nextValue) {
+      const history = historyRef.current.slice(0, historyIndexRef.current + 1)
+      history.push(nextValue)
+      if (history.length > 100) history.shift()
+      historyRef.current = history
+      historyIndexRef.current = history.length - 1
+    }
+    onChange(nextValue)
+    syncHistoryState()
+    setCopied(false)
+    if (selection) {
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus()
+        textareaRef.current?.setSelectionRange(selection.start, selection.end)
+      })
+    }
+  }
+
+  function getSelection(): Selection {
+    return {
+      start: textareaRef.current?.selectionStart ?? value.length,
+      end: textareaRef.current?.selectionEnd ?? value.length,
+    }
+  }
+
+  function formatLines(prefix: string) {
+    const result = formatSelectedLines(value, getSelection(), prefix)
+    commit(result.value, result.selection)
+  }
+
+  function insertCodeBlock() {
+    const selection = getSelection()
+    const result = wrapSelection(value, selection, '```\n', '\n```')
+    commit(result.value, result.selection)
+  }
+
+  function moveHistory(direction: -1 | 1) {
+    const nextIndex = historyIndexRef.current + direction
+    const nextValue = historyRef.current[nextIndex]
+    if (nextValue === undefined) return
+    historyIndexRef.current = nextIndex
+    onChange(nextValue)
+    syncHistoryState()
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  function findNext() {
+    const query = searchQuery.trim()
+    if (!query) {
+      searchInputRef.current?.focus()
+      setSearchMessage('请输入查找内容')
+      return
+    }
+    const source = value.toLocaleLowerCase()
+    const normalizedQuery = query.toLocaleLowerCase()
+    const start = textareaRef.current?.selectionEnd ?? 0
+    let matchIndex = source.indexOf(normalizedQuery, start)
+    if (matchIndex === -1 && start > 0) matchIndex = source.indexOf(normalizedQuery)
+    if (matchIndex === -1) {
+      setSearchMessage('未找到')
+      return
+    }
+    textareaRef.current?.focus()
+    textareaRef.current?.setSelectionRange(matchIndex, matchIndex + query.length)
+    setSearchMessage(`第 ${matchIndex + 1} 个字符`)
+  }
+
+  async function copyContent() {
+    await navigator.clipboard.writeText(value)
+    setCopied(true)
+  }
+
+  function runDocumentTool(label: string, transform: (content: string) => string) {
+    const nextValue = transform(value)
+    if (nextValue === value) {
+      setSearchMessage(`${label}：无需调整`)
+      return
+    }
+    commit(nextValue)
+    setSearchMessage(`${label}完成，可撤销`)
+  }
+
+  async function runAiAction(operation: SopAiOperation) {
+    if (!value.trim()) {
+      setAiError('请先输入 SOP 正文')
+      return
+    }
+    const validationError = validateApiProfile(agentProfile)
+    if (validationError || agentProfile.provider !== 'openai') {
+      const message = validationError
+        ? `请先完善 Agent 配置：${validationError}`
+        : 'SOP AI 工具需要 OpenAI 兼容的 Agent 配置'
+      setAiError(message)
+      showToast(message, 'error')
+      return
+    }
+
+    aiAbortRef.current?.abort()
+    const controller = new AbortController()
+    aiAbortRef.current = controller
+    setAiLoading(operation)
+    setAiError('')
+    setAiResult(null)
+    try {
+      const content = await transformSopDocument({
+        settings,
+        profile: agentProfile,
+        operation,
+        content: value,
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted) return
+      setAiResult({ operation, content })
+      showToast(`${AI_ACTION_LABELS[operation]}已生成预览`, 'success')
+    } catch (error) {
+      if (controller.signal.aborted) return
+      const message = error instanceof Error ? error.message : `${AI_ACTION_LABELS[operation]}失败`
+      setAiError(message)
+      showToast(message, 'error')
+    } finally {
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null
+        setAiLoading(null)
+      }
+    }
+  }
+
+  async function copyAiResult() {
+    if (!aiResult) return
+    await navigator.clipboard.writeText(aiResult.content)
+    showToast(aiResult.operation === 'audit' ? '检查报告已复制' : 'AI 结果已复制', 'success')
+  }
+
+  return (
+    <section
+      className="sop-center-text-editor"
+      data-expanded={expanded || undefined}
+      aria-label="SOP 正文编辑器"
+    >
+      <div className="sop-center-text-editor__header">
+        <div>
+          <h4 className="text-xs font-semibold text-[hsl(var(--ds-color-text))]">SOP 正文</h4>
+          <p className="sop-center-quiet-text mt-0.5 text-[11px]">支持 Markdown 结构与快捷编辑</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="sop-center-editor-tool"
+          aria-label={expanded ? '退出全屏编辑' : '全屏编辑'}
+          title={expanded ? '退出全屏编辑' : '全屏编辑'}
+        >
+          {expanded ? <Close size={15} /> : <Expand size={15} />}
+        </button>
+      </div>
+
+      <div className="sop-center-text-editor__document-actions" aria-label="SOP 文档整理工具">
+        <div className="sop-center-editor-action-group">
+          <span className="sop-center-editor-action-label">快速整理</span>
+          <button type="button" onClick={() => runDocumentTool('自动分段', autoParagraphSopText)}>自动分段</button>
+          <button type="button" onClick={() => runDocumentTool('统一格式', formatSopDocument)}>统一格式</button>
+          <button type="button" onClick={() => runDocumentTool('清理粘贴', cleanPastedSopText)}>清理粘贴</button>
+        </div>
+        <div className="sop-center-editor-action-group sop-center-editor-action-group--ai">
+          <span className="sop-center-editor-action-label"><Sparkles size={13} />Agent</span>
+          {(['structure', 'concise', 'audit'] as const).map((operation) => (
+            <button
+              key={operation}
+              type="button"
+              onClick={() => void runAiAction(operation)}
+              disabled={aiLoading !== null}
+            >
+              {aiLoading === operation && <Loader size={13} className="animate-spin" />}
+              {AI_ACTION_LABELS[operation]}
+            </button>
+          ))}
+          <span className="sop-center-editor-model" title={`当前 Agent 模型：${agentProfile.model}`}>
+            {agentProfile.model || '未配置模型'}
+          </span>
+        </div>
+      </div>
+
+      <div className="sop-center-text-editor__toolbar" role="toolbar" aria-label="正文格式与编辑工具">
+        <div className="sop-center-editor-tool-group">
+          <button type="button" onClick={() => moveHistory(-1)} disabled={!historyState.canUndo} className="sop-center-editor-tool" aria-label="撤销" title="撤销"><Undo size={15} /></button>
+          <button type="button" onClick={() => moveHistory(1)} disabled={!historyState.canRedo} className="sop-center-editor-tool sop-center-editor-tool--redo" aria-label="重做" title="重做"><Undo size={15} /></button>
+        </div>
+        <div className="sop-center-editor-tool-group">
+          <button type="button" onClick={() => formatLines('# ')} className="sop-center-editor-tool" aria-label="设为标题" title="标题"><Heading size={15} /></button>
+          <button type="button" onClick={() => formatLines('- ')} className="sop-center-editor-tool" aria-label="项目列表" title="项目列表"><List size={15} /></button>
+          <button type="button" onClick={() => formatLines('> ')} className="sop-center-editor-tool sop-center-editor-tool--text" aria-label="引用" title="引用">“</button>
+          <button type="button" onClick={insertCodeBlock} className="sop-center-editor-tool" aria-label="代码块" title="代码块"><Code size={15} /></button>
+        </div>
+        <div className="sop-center-editor-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value)
+              setSearchMessage('')
+            }}
+            onKeyDown={(event) => event.key === 'Enter' && findNext()}
+            placeholder="查找正文"
+            aria-label="查找正文"
+          />
+          <button type="button" onClick={findNext}>下一个</button>
+        </div>
+        <div className="sop-center-editor-tool-group sop-center-editor-tool-group--end">
+          <button type="button" onClick={() => setWrap((current) => !current)} className="sop-center-editor-tool sop-center-editor-tool--label" data-active={wrap || undefined} aria-pressed={wrap} title="自动换行">换行</button>
+          <button type="button" onClick={() => void copyContent()} className="sop-center-editor-tool" aria-label="复制正文" title="复制正文"><Copy size={15} /></button>
+        </div>
+      </div>
+
+      {(aiError || aiResult) && (
+        <aside
+          className="sop-center-ai-result"
+          data-kind={aiError ? 'error' : aiResult?.operation === 'audit' ? 'audit' : 'replacement'}
+          aria-live="polite"
+        >
+          <div className="sop-center-ai-result__header">
+            <div className="min-w-0">
+              <strong>{aiError ? 'AI 处理失败' : `${AI_ACTION_LABELS[aiResult!.operation]}预览`}</strong>
+              <span>{aiError ? '原文未发生变化' : aiResult!.operation === 'audit' ? '检查报告不会改写正文' : '确认后才会替换正文'}</span>
+            </div>
+            <button type="button" onClick={() => { setAiError(''); setAiResult(null) }} aria-label="关闭 AI 结果"><Close size={14} /></button>
+          </div>
+          {aiError ? (
+            <p className="sop-center-ai-result__error">{aiError}</p>
+          ) : (
+            <>
+              <pre>{aiResult!.content}</pre>
+              <div className="sop-center-ai-result__actions">
+                <button type="button" onClick={() => void copyAiResult()}><Copy size={13} />复制结果</button>
+                {aiResult!.operation !== 'audit' && (
+                  <button
+                    type="button"
+                    className="sop-center-ai-result__apply"
+                    onClick={() => {
+                      commit(aiResult!.content)
+                      setAiResult(null)
+                      setSearchMessage(`${AI_ACTION_LABELS[aiResult!.operation]}已应用，可撤销`)
+                    }}
+                  >
+                    <CheckCircle size={13} />替换正文
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </aside>
+      )}
+
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(event) => commit(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'f') {
+            event.preventDefault()
+            searchInputRef.current?.focus()
+          }
+        }}
+        className="sop-center-text-editor__input"
+        wrap={wrap ? 'soft' : 'off'}
+        spellCheck="false"
+        aria-label="SOP 正文"
+      />
+
+      <footer className="sop-center-text-editor__footer" aria-live="polite">
+        <span>{stats.lines} 行 · {stats.characters} 字符</span>
+        <span>{searchMessage || (copied ? '已复制到剪贴板' : wrap ? '自动换行已开启' : '自动换行已关闭')}</span>
+      </footer>
+    </section>
+  )
+}
