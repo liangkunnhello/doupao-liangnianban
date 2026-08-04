@@ -104,12 +104,25 @@ export interface SopReferenceImage {
   dataUrl: string
 }
 
+export type SopGenerationProgressStage = 'validate' | 'prepare' | 'request' | 'parse' | 'repair'
+
+export interface SopGenerationProgress {
+  stage: SopGenerationProgressStage
+  message: string
+}
+
+export interface SopGenerationOptions {
+  onProgress?: (progress: SopGenerationProgress) => void
+  signal?: AbortSignal
+}
+
 export type GenerateSop = (
   description: string,
   context: { product?: string; materialType?: string; generationMode?: string },
   referenceImages?: SopReferenceImage[],
   kind?: SopGeneratorKind,
   metaInstruction?: string,
+  options?: SopGenerationOptions,
 ) => Promise<GeneratedSop>
 
 export const MAX_SOP_REFERENCE_IMAGES = 8
@@ -139,10 +152,14 @@ export function buildSopRequestContent(
       `当前生成方式：${context.generationMode || '未指定'}`,
       `SOP 生成类型：${kind === 'image-prompt' ? '图片生成 SOP（参考图画风反推、多变体中文提示词直出）' : '通用执行 SOP'}`,
       referenceImages.length > 0 ? `已附带 ${referenceImages.length} 张参考图片：${referenceImages.map((image) => image.name).join('、')}` : '未附带参考图片',
+      referenceImages.length > 1 ? '请先逐张分析每张图片，再归纳共同视觉常量、可变元素和离群差异；不得只分析第一张图片。' : '',
       '请综合全部输入完整编译，不要省略用户要求的严格输出模板。',
-    ].join('\n\n'),
+    ].filter(Boolean).join('\n\n'),
   }]
-  for (const image of referenceImages) content.push({ type: 'input_image', image_url: image.dataUrl })
+  referenceImages.forEach((image, index) => {
+    content.push({ type: 'input_text', text: `参考图 ${index + 1}/${referenceImages.length}：${image.name}` })
+    content.push({ type: 'input_image', image_url: image.dataUrl })
+  })
   return content
 }
 
@@ -168,7 +185,17 @@ export function parseGeneratedSop(text: string): GeneratedSop {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   const start = trimmed.indexOf('{')
   const end = trimmed.lastIndexOf('}')
-  if (start < 0 || end <= start) throw new Error('模型未返回可识别的 SOP 结构')
+  if (start < 0 || end <= start) {
+    if (!trimmed || !/(?:^|\n)#{1,6}\s+\S|(?:^|\n)\s*\d+[.、]\s+\S/.test(trimmed)) {
+      throw new Error('AI 返回内容无法识别为 SOP，请重试或切换文本模型')
+    }
+    const heading = trimmed.match(/(?:^|\n)#{1,6}\s+([^\n]+)/)?.[1]?.trim()
+    return {
+      name: heading || 'AI 生成 SOP',
+      description: '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
+      sop: trimmed,
+    }
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(trimmed.slice(start, end + 1))
@@ -176,10 +203,20 @@ export function parseGeneratedSop(text: string): GeneratedSop {
     throw new Error('模型返回的 SOP JSON 格式不正确，请重试')
   }
   if (!parsed || typeof parsed !== 'object') throw new Error('模型返回的 SOP 结构不正确')
-  const record = parsed as Record<string, unknown>
-  const name = String(record.name ?? record.title ?? '').trim()
-  const description = String(record.description ?? record.summary ?? '').trim()
-  const sop = String(record.sop ?? record.content ?? record.instruction ?? '').trim()
-  if (!name || !description || !sop) throw new Error('生成结果缺少名称、说明或 SOP 正文')
+  const envelope = parsed as Record<string, unknown>
+  const nested = envelope.result ?? envelope.data ?? envelope.output
+  const record = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : envelope
+  const sopValue = record.sop ?? record.content ?? record.instruction ?? record.body
+  const sop = typeof sopValue === 'string' ? sopValue.trim() : ''
+  if (!sop) throw new Error('AI 返回结果缺少可用的 SOP 正文')
+  const heading = sop.match(/(?:^|\n)#{1,6}\s+([^\n]+)/)?.[1]?.trim()
+  const name = String(record.name ?? record.title ?? heading ?? 'AI 生成 SOP').trim()
+  const description = String(
+    record.description
+    ?? record.summary
+    ?? '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
+  ).trim()
   return { name, description, sop }
 }

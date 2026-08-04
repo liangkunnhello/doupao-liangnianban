@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, create, type ReactTestInstance } from 'react-test-renderer'
 import SopManagementCenter from './SopManagementCenter'
-import type { SopLibraryItem } from './types'
+import type { GenerateSop } from './sopGeneration'
+import type { SopLibraryItem, SopMetaInstruction } from './types'
 import { DEFAULT_PARAMS, type TaskRecord } from '../../types'
 
 const imageStoreMocks = vi.hoisted(() => ({
@@ -62,6 +63,23 @@ const item2: SopLibraryItem = {
   updatedAt: 2,
 }
 
+const imagePromptMeta: SopMetaInstruction = {
+  id: 'meta-image-prompt',
+  name: '图片画风多变体 SOP 编译器',
+  description: '根据多张参考图生成 SOP',
+  instruction: '分析全部参考图片并输出结构化 SOP。',
+  kind: 'image-prompt',
+  createdAt: 1,
+  updatedAt: 1,
+}
+
+const generalMeta: SopMetaInstruction = {
+  ...imagePromptMeta,
+  id: 'meta-general',
+  name: '通用 SOP 编译器',
+  kind: 'general',
+}
+
 function textContent(node: ReactTestInstance): string {
   return node.children.map((child) => typeof child === 'string' ? child : textContent(child)).join('')
 }
@@ -70,7 +88,13 @@ function findButton(root: ReactTestInstance, label: string) {
   return root.findAllByType('button').find((button) => textContent(button).includes(label))
 }
 
-function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[]; items?: SopLibraryItem[] } = {}) {
+function renderCenter(options: {
+  selectedSopId?: string
+  tasks?: TaskRecord[]
+  items?: SopLibraryItem[]
+  metaInstructions?: SopMetaInstruction[]
+  onGenerateSop?: GenerateSop
+} = {}) {
   const onSaveItem = vi.fn()
   const onApply = vi.fn()
   const renderer = create(
@@ -78,7 +102,7 @@ function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[]; i
       groups={[]}
       items={options.items ?? [item]}
       tasks={options.tasks}
-      metaInstructions={[]}
+      metaInstructions={options.metaInstructions ?? []}
       currentUserId="user-1"
       onSaveGroup={vi.fn()}
       onDuplicateGroup={vi.fn(() => null)}
@@ -89,7 +113,7 @@ function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[]; i
       onSaveMetaInstruction={vi.fn()}
       onDuplicateMetaInstruction={vi.fn(() => null)}
       onDeleteMetaInstruction={vi.fn()}
-      onGenerateSop={vi.fn()}
+      onGenerateSop={options.onGenerateSop ?? vi.fn()}
       selectedSopId={options.selectedSopId}
       onApply={onApply}
       onClear={vi.fn()}
@@ -355,6 +379,73 @@ describe('SopManagementCenter apply and save actions', () => {
 
     act(() => findButton(result.renderer.root, '替换正文')!.props.onClick())
     expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe('# 目标\n\n保持输出一致。')
+    result.renderer.unmount()
+  })
+
+  it('accepts multiple dropped reference images inside an isolated drop zone', async () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [imagePromptMeta] })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+
+    const dropZone = result.renderer.root.findByProps({ 'data-sop-reference-dropzone': true })
+    const preventDefault = vi.fn()
+    const stopPropagation = vi.fn()
+    await act(async () => {
+      await dropZone.props.onDrop({
+        preventDefault,
+        stopPropagation,
+        dataTransfer: {
+          types: ['Files'],
+          files: [
+            new File(['a'], '参考图 A.png', { type: 'image/png' }),
+            new File(['b'], '参考图 B.jpg', { type: 'image/jpeg' }),
+          ],
+        },
+      })
+    })
+
+    expect(preventDefault).toHaveBeenCalled()
+    expect(stopPropagation).toHaveBeenCalled()
+    expect(result.renderer.root.findAllByType('img')).toHaveLength(2)
+    expect(textContent(result.renderer.root)).toContain('已添加 2 张参考图片')
+    expect(result.renderer.root.findByProps({ 'data-block-global-image-input': 'true' })).toBeTruthy()
+    result.renderer.unmount()
+  })
+
+  it('shows actual generation phases and keeps the success state visible', async () => {
+    const onGenerateSop: GenerateSop = vi.fn(async (_brief, _context, _images, _kind, _instruction, options) => {
+      options?.onProgress?.({ stage: 'prepare', message: '正在整理 2 张参考图片' })
+      options?.onProgress?.({ stage: 'request', message: 'AI 正在分析参考图片并编译 SOP' })
+      options?.onProgress?.({ stage: 'parse', message: '正在校验生成结果' })
+      return { name: '多图商品 SOP', description: '多图说明', sop: '# SOP 正文' }
+    })
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [generalMeta], onGenerateSop })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+
+    const brief = result.renderer.root.findByProps({ 'aria-label': 'SOP 生成说明' })
+    act(() => brief.props.onChange({ target: { value: '生成商品摄影 SOP' } }))
+    await act(async () => {
+      await findButton(result.renderer.root, '开始生成并保存')!.props.onClick()
+    })
+
+    expect(onGenerateSop).toHaveBeenCalledWith(
+      '生成商品摄影 SOP',
+      {},
+      [],
+      'general',
+      generalMeta.instruction,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    )
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({ name: '多图商品 SOP' }))
+    expect(textContent(result.renderer.root)).toContain('校验生成条件')
+    expect(textContent(result.renderer.root)).toContain('调用 AI 编译 SOP')
+    expect(textContent(result.renderer.root)).toContain('SOP「多图商品 SOP」生成并保存成功')
+    expect(findButton(result.renderer.root, '查看生成结果')).toBeTruthy()
     result.renderer.unmount()
   })
 })

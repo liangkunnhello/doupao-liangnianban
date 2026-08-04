@@ -43,8 +43,28 @@ describe('SOP natural-language generator', () => {
     })
   })
 
-  it('rejects incomplete structured output', () => {
-    expect(() => parseGeneratedSop('{"name":"缺少正文","description":"说明"}')).toThrow('缺少名称、说明或 SOP 正文')
+  it('fills recoverable metadata instead of rejecting a usable SOP body', () => {
+    expect(parseGeneratedSop('{"sop":"# 商品摄影 SOP\\n\\n1. 分析主体\\n2. 固定构图"}')).toEqual({
+      name: '商品摄影 SOP',
+      description: '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
+      sop: '# 商品摄影 SOP\n\n1. 分析主体\n2. 固定构图',
+    })
+  })
+
+  it('accepts raw markdown and nested result envelopes from compatible models', () => {
+    expect(parseGeneratedSop('# 电商主图 SOP\n\n## 执行步骤\n1. 分析参考图\n2. 输出完整提示词')).toMatchObject({
+      name: '电商主图 SOP',
+      sop: expect.stringContaining('## 执行步骤'),
+    })
+    expect(parseGeneratedSop('{"result":{"title":"嵌套 SOP","summary":"嵌套说明","content":"# 正文\\n执行要求"}}')).toEqual({
+      name: '嵌套 SOP',
+      description: '嵌套说明',
+      sop: '# 正文\n执行要求',
+    })
+  })
+
+  it('only rejects responses that contain no SOP body', () => {
+    expect(() => parseGeneratedSop('{"name":"缺少正文","description":"说明"}')).toThrow('缺少可用的 SOP 正文')
   })
 
   it('builds a multimodal request from one or more reference images', () => {
@@ -53,12 +73,15 @@ describe('SOP natural-language generator', () => {
       { name: '参考图 B.jpg', dataUrl: 'data:image/jpeg;base64,BBB' },
     ], 'image-prompt')
 
-    expect(content).toHaveLength(3)
+    expect(content).toHaveLength(5)
     expect(content[0].text).toContain('未提供，请根据参考图片推断')
     expect(content[0].text).toContain('已附带 2 张参考图片')
+    expect(content[0].text).toContain('逐张分析')
     expect(content[0].text).toContain('图片生成 SOP')
     expect(content.slice(1)).toEqual([
+      { type: 'input_text', text: '参考图 1/2：参考图 A.png' },
       { type: 'input_image', image_url: 'data:image/png;base64,AAA' },
+      { type: 'input_text', text: '参考图 2/2：参考图 B.jpg' },
       { type: 'input_image', image_url: 'data:image/jpeg;base64,BBB' },
     ])
   })

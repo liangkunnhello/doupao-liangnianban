@@ -1955,6 +1955,7 @@ export default function InputBar() {
   // 粘贴图片
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
+      if (document.querySelector('[data-block-global-image-input="true"]')) return
       const items = e.clipboardData?.items
       if (!items) return
       const imageFiles: File[] = []
@@ -1976,6 +1977,11 @@ export default function InputBar() {
   // 拖拽图片 - 监听整个页面
   useEffect(() => {
     const handleDragEnter = (e: DragEvent) => {
+      if (document.querySelector('[data-block-global-image-input="true"]')) {
+        dragCounter.current = 0
+        setIsDragging(false)
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       dragCounter.current++
@@ -1985,11 +1991,13 @@ export default function InputBar() {
     }
 
     const handleDragOver = (e: DragEvent) => {
+      if (document.querySelector('[data-block-global-image-input="true"]')) return
       e.preventDefault()
       e.stopPropagation()
     }
 
     const handleDragLeave = (e: DragEvent) => {
+      if (document.querySelector('[data-block-global-image-input="true"]')) return
       e.preventDefault()
       e.stopPropagation()
       dragCounter.current--
@@ -1999,6 +2007,11 @@ export default function InputBar() {
     }
 
     const handleDrop = (e: DragEvent) => {
+      if (document.querySelector('[data-block-global-image-input="true"]')) {
+        dragCounter.current = 0
+        setIsDragging(false)
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       dragCounter.current = 0

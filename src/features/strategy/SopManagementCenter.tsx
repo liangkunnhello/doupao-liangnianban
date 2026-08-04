@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import './styles.css'
 import { Button, Dialog, IconButton, Inline, ScrollArea } from '../../design-system'
 import {
@@ -22,7 +22,13 @@ import {
   XCircleIcon as XCircle,
 } from '../../design-system/icons'
 import type { SopBatchSnapshot, TaskRecord } from '../../types'
-import { MAX_SOP_REFERENCE_IMAGES, type GenerateSop, type SopReferenceImage } from './sopGeneration'
+import {
+  MAX_SOP_REFERENCE_IMAGES,
+  type GenerateSop,
+  type SopGenerationProgress,
+  type SopGenerationProgressStage,
+  type SopReferenceImage,
+} from './sopGeneration'
 import { sopLibraryId } from './sopLibrary'
 import { getSopCoverCandidates } from './sopCover'
 import { getAllSopBatchSnapshots } from '../../lib/db'
@@ -35,18 +41,34 @@ import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../../hooks/useLargeM
 import LargeModalToggle from '../../components/LargeModalToggle'
 
 type CenterTab = 'library' | 'meta' | 'generate'
+type GenerationStepId = Exclude<SopGenerationProgressStage, 'repair'> | 'save'
 type GenerationJob = {
   status: 'idle' | 'running' | 'success' | 'error'
   message: string
   error?: string
   startedAt?: number
   resultName?: string
+  resultId?: string
+  currentStep?: GenerationStepId
+  completedSteps?: GenerationStepId[]
 }
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const SOP_MANAGEMENT_MODAL_MODE_STORAGE_KEY = 'doupao.sop-management-modal-mode'
 const SOP_AUTO_SAVE_DELAY_MS = 800
 type AutoSaveState = 'idle' | 'pending' | 'saved' | 'blocked'
+
+const SOP_GENERATION_STEPS: Array<{
+  id: GenerationStepId
+  label: string
+  description: string
+}> = [
+  { id: 'validate', label: '校验生成条件', description: '检查元指令、说明和参考图片' },
+  { id: 'prepare', label: '整理参考输入', description: '按顺序标记并组织全部参考图' },
+  { id: 'request', label: '调用 AI 编译 SOP', description: '分析共同规律、差异和执行约束' },
+  { id: 'parse', label: '校验生成结构', description: '检查名称、说明和完整 SOP 正文' },
+  { id: 'save', label: '保存到 SOP 库', description: '写入目标分组并准备立即使用' },
+]
 
 function readImage(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -59,6 +81,19 @@ function readImage(file: File) {
 
 function inputClassName() {
   return 'sop-center-input'
+}
+
+function generationStepsBefore(step: GenerationStepId) {
+  const stepIndex = SOP_GENERATION_STEPS.findIndex((item) => item.id === step)
+  return SOP_GENERATION_STEPS.slice(0, Math.max(0, stepIndex)).map((item) => item.id)
+}
+
+function getGenerationErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : '未知错误，请检查 API 配置后重试'
+  if (/缺少名称、说明或 SOP 正文|缺少可用的 SOP 正文|返回不完整内容/.test(message)) {
+    return 'AI 返回内容不完整，系统已自动尝试修复。请重新生成；若仍失败，请切换文本模型或简化生成元指令。'
+  }
+  return message
 }
 
 export default function SopManagementCenter({
@@ -120,6 +155,7 @@ export default function SopManagementCenter({
   const [generatorGroupId, setGeneratorGroupId] = useState(groups[0]?.id ?? '')
   const [generatorBrief, setGeneratorBrief] = useState('')
   const [referenceImages, setReferenceImages] = useState<Array<SopReferenceImage & { id: string }>>([])
+  const [referenceDragActive, setReferenceDragActive] = useState(false)
   const [job, setJob] = useState<GenerationJob>({ status: 'idle', message: '等待生成' })
   const [elapsed, setElapsed] = useState(0)
   const [coverPickerOpen, setCoverPickerOpen] = useState(false)
@@ -128,6 +164,7 @@ export default function SopManagementCenter({
   const [snapshotsLoading, setSnapshotsLoading] = useState(false)
   const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle')
   const autoSaveTimerRef = useRef<number | null>(null)
+  const referenceDragDepthRef = useRef(0)
 
   const viewGeneratedPrompts = async (item: SopLibraryItem) => {
     setSnapshotDialogOpen(true)
@@ -418,29 +455,97 @@ export default function SopManagementCenter({
   }
 
   const addReferenceImages = async (files: File[]) => {
+    if (job.status === 'running') return
     const available = MAX_SOP_REFERENCE_IMAGES - referenceImages.length
-    const selected = files.slice(0, available)
-    const invalid = selected.find((file) => !file.type.startsWith('image/'))
-    if (invalid) {
-      setJob({ status: 'error', message: '参考图片校验失败', error: `「${invalid.name}」不是图片文件` })
+    if (available <= 0) {
+      setJob({ status: 'error', message: '参考图片已达上限', error: `最多添加 ${MAX_SOP_REFERENCE_IMAGES} 张图片，请先移除一张再继续。` })
       return
     }
-    const oversized = selected.find((file) => file.size > MAX_IMAGE_BYTES)
-    if (oversized) {
-      setJob({ status: 'error', message: '参考图片校验失败', error: `「${oversized.name}」超过 10 MiB` })
+    const validFiles = files.filter((file) => file.type.startsWith('image/') && file.size <= MAX_IMAGE_BYTES)
+    const selected = validFiles.slice(0, available)
+    const skipped = files.length - selected.length
+    if (selected.length === 0) {
+      setJob({
+        status: 'error',
+        message: '没有可添加的图片',
+        error: '请拖入 PNG、JPG、WEBP 等图片文件，单张大小不超过 10 MiB。',
+      })
       return
     }
     try {
-      const loaded = await Promise.all(selected.map(async (file, index) => ({
+      const settled = await Promise.allSettled(selected.map(async (file, index) => ({
         id: `${Date.now()}-${index}-${file.name}`,
         name: file.name,
         dataUrl: await readImage(file),
       })))
+      const loaded = settled
+        .filter((result): result is PromiseFulfilledResult<SopReferenceImage & { id: string }> => result.status === 'fulfilled')
+        .map((result) => result.value)
+      const failed = settled.length - loaded.length
+      if (loaded.length === 0) throw new Error('图片读取失败，请重新选择文件')
       setReferenceImages((current) => [...current, ...loaded])
-      setJob({ status: 'idle', message: files.length > available ? `已保留前 ${MAX_SOP_REFERENCE_IMAGES} 张图片` : '参考图片已就绪' })
+      const omitted = skipped + failed
+      setJob({
+        status: 'idle',
+        message: omitted > 0
+          ? `已添加 ${loaded.length} 张参考图片，另有 ${omitted} 张因格式、大小或数量限制被跳过`
+          : `已添加 ${loaded.length} 张参考图片`,
+      })
     } catch (error) {
       setJob({ status: 'error', message: '图片读取失败', error: error instanceof Error ? error.message : String(error) })
     }
+  }
+
+  const hasDraggedFiles = (event: ReactDragEvent<HTMLElement>) => event.dataTransfer.types.includes('Files')
+
+  const handleReferenceDragEnter = (event: ReactDragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    referenceDragDepthRef.current += 1
+    if (job.status !== 'running' && referenceImages.length < MAX_SOP_REFERENCE_IMAGES) setReferenceDragActive(true)
+  }
+
+  const handleReferenceDragOver = (event: ReactDragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = job.status === 'running' ? 'none' : 'copy'
+  }
+
+  const handleReferenceDragLeave = (event: ReactDragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    referenceDragDepthRef.current = Math.max(0, referenceDragDepthRef.current - 1)
+    if (referenceDragDepthRef.current === 0) setReferenceDragActive(false)
+  }
+
+  const handleReferenceDrop = async (event: ReactDragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    referenceDragDepthRef.current = 0
+    setReferenceDragActive(false)
+    await addReferenceImages(Array.from(event.dataTransfer.files ?? []))
+  }
+
+  const blockUnscopedImageDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const updateGenerationProgress = (progress: SopGenerationProgress) => {
+    const step: GenerationStepId = progress.stage === 'repair' ? 'parse' : progress.stage
+    setJob((current) => ({
+      ...current,
+      status: 'running',
+      message: progress.message,
+      error: undefined,
+      currentStep: step,
+      completedSteps: generationStepsBefore(step),
+    }))
   }
 
   const runGeneration = async () => {
@@ -458,7 +563,14 @@ export default function SopManagementCenter({
       return
     }
     const startedAt = Date.now()
-    setJob({ status: 'running', message: '正在分析输入并编译 SOP', startedAt })
+    setElapsed(0)
+    setJob({
+      status: 'running',
+      message: '正在校验生成条件',
+      startedAt,
+      currentStep: 'validate',
+      completedSteps: [],
+    })
     try {
       const generated = await onGenerateSop(
         generatorBrief,
@@ -466,7 +578,15 @@ export default function SopManagementCenter({
         referenceImages,
         meta.kind === 'image-prompt' ? 'image-prompt' : 'general',
         meta.instruction,
+        { onProgress: updateGenerationProgress },
       )
+      setJob((current) => ({
+        ...current,
+        status: 'running',
+        message: '正在保存到 SOP 库',
+        currentStep: 'save',
+        completedSteps: generationStepsBefore('save'),
+      }))
       const now = Date.now()
       const item: SopLibraryItem = {
         id: sopLibraryId('sop'),
@@ -483,22 +603,49 @@ export default function SopManagementCenter({
       onSaveItem(item)
       setSelectedGroupId(item.groupId ?? 'ungrouped')
       selectItem(item)
-      setJob({ status: 'success', message: `SOP「${item.name}」生成并保存成功`, resultName: item.name, startedAt })
-      setTab('library')
-    } catch (error) {
       setJob({
+        status: 'success',
+        message: `SOP「${item.name}」生成并保存成功`,
+        resultName: item.name,
+        resultId: item.id,
+        startedAt,
+        currentStep: 'save',
+        completedSteps: SOP_GENERATION_STEPS.map((step) => step.id),
+      })
+    } catch (error) {
+      setJob((current) => ({
+        ...current,
         status: 'error',
         message: 'SOP 生成失败',
-        error: error instanceof Error ? error.message : '未知错误，请检查 API 配置后重试',
+        error: getGenerationErrorMessage(error),
         startedAt,
-      })
+      }))
     }
   }
 
+  const completedGenerationSteps = new Set(job.completedSteps ?? [])
+  const activeGenerationStepIndex = job.currentStep
+    ? SOP_GENERATION_STEPS.findIndex((step) => step.id === job.currentStep)
+    : -1
+  const generationProgress = job.status === 'success'
+    ? 100
+    : job.status === 'idle'
+      ? 0
+      : Math.round(((Math.max(0, activeGenerationStepIndex) + 0.5) / SOP_GENERATION_STEPS.length) * 100)
+
   return (
-    <div className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-labelledby="sop-center-title" onMouseDown={(event) => {
-      if (isModalBackdropEvent(event)) closeSafely()
-    }}>
+    <div
+      className="sop-center-overlay fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center p-4 animate-overlay-in"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sop-center-title"
+      data-block-global-image-input="true"
+      onDragOver={blockUnscopedImageDrop}
+      onDrop={blockUnscopedImageDrop}
+      onMouseDown={(event) => {
+        if (isModalBackdropEvent(event)) closeSafely()
+      }}
+    >
       <div
         style={largeView ? LARGE_MODAL_SIZE_STYLE : undefined}
         className="sop-center-dialog relative animate-modal-in flex w-full flex-col overflow-hidden transition-[width,height,max-width] duration-200 ease-out"
@@ -728,22 +875,54 @@ export default function SopManagementCenter({
                 </div>
                 <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">生成元指令<select value={generatorMetaId} onChange={(event) => setGeneratorMetaId(event.target.value)} className={`${inputClassName()} mt-1 h-11`}><option value="">请选择</option>{metaInstructions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
                 <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">保存到分组<select value={generatorGroupId} onChange={(event) => setGeneratorGroupId(event.target.value)} className={`${inputClassName()} mt-1 h-11`}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
-                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">生成说明<textarea value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder="说明 SOP 的目标、输入、输出格式和禁止项" className={`${inputClassName()} mt-1 min-h-32 py-3 leading-6`} /></label>
+                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">生成说明<textarea aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder="说明 SOP 的目标、输入、输出格式和禁止项" className={`${inputClassName()} mt-1 min-h-32 py-3 leading-6`} /></label>
                 <div>
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">参考图片</span>
-                    <span className="text-xs text-[hsl(var(--ds-color-text-subtle))]">{referenceImages.length}/{MAX_SOP_REFERENCE_IMAGES}</span>
+                    <div>
+                      <span className="text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">参考图片</span>
+                      <span className="ml-2 text-xs text-[hsl(var(--ds-color-text-subtle))]">支持多选与拖拽</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-[hsl(var(--ds-color-text-subtle))]">{referenceImages.length}/{MAX_SOP_REFERENCE_IMAGES}</span>
+                      {referenceImages.length > 0 && (
+                        <button
+                          type="button"
+                          disabled={job.status === 'running'}
+                          onClick={() => setReferenceImages([])}
+                          className="text-xs font-medium text-[hsl(var(--ds-color-text-muted))] hover:text-[hsl(var(--ds-color-danger))] disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          清空
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <label className="sop-center-upload">
+                  <label
+                    className="sop-center-upload"
+                    data-sop-reference-dropzone={true}
+                    data-drag-active={referenceDragActive || undefined}
+                    data-disabled={job.status === 'running' || referenceImages.length >= MAX_SOP_REFERENCE_IMAGES || undefined}
+                    onDragEnter={handleReferenceDragEnter}
+                    onDragOver={handleReferenceDragOver}
+                    onDragLeave={handleReferenceDragLeave}
+                    onDrop={handleReferenceDrop}
+                  >
                     <input type="file" accept="image/*" multiple className="sr-only" disabled={job.status === 'running' || referenceImages.length >= MAX_SOP_REFERENCE_IMAGES} onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void addReferenceImages(files) }} />
-                    <span><FileImage size={22} className="mx-auto" /><span className="mt-2 block text-xs font-medium">添加参考图片</span></span>
+                    <span>
+                      <FileImage size={22} className="mx-auto" />
+                      <span className="mt-2 block text-sm font-semibold">{referenceDragActive ? '松开即可添加图片' : '拖拽多张图片到这里，或点击选择'}</span>
+                      <span className="sop-center-quiet-text mt-1 block text-xs">单张不超过 10 MiB，最多 {MAX_SOP_REFERENCE_IMAGES} 张；AI 将按当前顺序综合分析</span>
+                    </span>
                   </label>
                   {referenceImages.length > 0 && (
-                    <div className="mt-3 grid grid-cols-6 gap-2">
-                      {referenceImages.map((image) => (
-                        <div key={image.id} className="sop-center-thumb group relative aspect-square">
-                          <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
-                          <button type="button" onClick={() => setReferenceImages((current) => current.filter((item) => item.id !== image.id))} aria-label={`移除${image.name}`} className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-[hsl(var(--ds-color-scrim)/0.72)] text-[hsl(var(--ds-color-text-inverse))] opacity-0 group-hover:opacity-100"><X size={13} /></button>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {referenceImages.map((image, index) => (
+                        <div key={image.id} className="sop-center-thumb group relative min-w-0">
+                          <div className="relative aspect-[4/3] overflow-hidden">
+                            <img src={image.dataUrl} alt={`参考图 ${index + 1}：${image.name}`} className="h-full w-full object-cover" />
+                            <span className="absolute bottom-1.5 left-1.5 rounded-md bg-[hsl(var(--ds-color-scrim)/0.72)] px-1.5 py-0.5 text-[10px] font-semibold text-[hsl(var(--ds-color-text-inverse))]">图 {index + 1}</span>
+                            <button type="button" disabled={job.status === 'running'} onClick={() => setReferenceImages((current) => current.filter((item) => item.id !== image.id))} aria-label={`移除${image.name}`} className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md bg-[hsl(var(--ds-color-scrim)/0.72)] text-[hsl(var(--ds-color-text-inverse))] opacity-80 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"><X size={13} /></button>
+                          </div>
+                          <p className="truncate px-2 py-1.5 text-[11px] text-[hsl(var(--ds-color-text-muted))]" title={image.name}>{image.name}</p>
                         </div>
                       ))}
                     </div>
@@ -754,19 +933,51 @@ export default function SopManagementCenter({
             </section>
             <aside className="sop-center-editor-panel min-h-0 overflow-y-auto p-5">
               <div className="sop-center-editor-card space-y-4">
-                <h3 className="font-semibold">生成状态</h3>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold">生成状态</h3>
+                    <p className="sop-center-quiet-text mt-1 text-xs">每一步都会随实际请求状态更新。</p>
+                  </div>
+                  {job.status !== 'idle' && <span className="text-xs tabular-nums text-[hsl(var(--ds-color-text-subtle))]">{generationProgress}%</span>}
+                </div>
                 <div aria-live="polite" className="sop-center-status" data-status={job.status}>
                   <div className="flex items-center gap-3">
                     {job.status === 'running' ? <LoaderCircle className="sop-center-status-icon animate-spin" size={22} /> : job.status === 'success' ? <CheckCircle2 className="sop-center-status-icon" size={22} /> : job.status === 'error' ? <XCircle className="sop-center-status-icon" size={22} /> : <Sparkles className="sop-center-status-icon" size={22} />}
                     <div>
                       <p className="text-sm font-semibold">{job.message}</p>
                       {job.status === 'running' && <p className="sop-center-quiet-text mt-1 text-xs">已运行 {elapsed} 秒，请保持窗口开启</p>}
+                      {job.status === 'success' && <p className="sop-center-quiet-text mt-1 text-xs">用时 {elapsed} 秒，结果已安全保存</p>}
                     </div>
                   </div>
-                  {job.status === 'running' && <div className="sop-center-progress-track mt-4"><div className="sop-center-progress-bar animate-pulse" /></div>}
+                  {job.status !== 'idle' && (
+                    <div className="sop-center-progress-track mt-4" role="progressbar" aria-label="SOP 生成进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={generationProgress}>
+                      <div className="sop-center-progress-bar" style={{ transform: `scaleX(${generationProgress / 100})` }} />
+                    </div>
+                  )}
                   {job.error && <p role="alert" className="mt-3 whitespace-pre-wrap text-xs leading-5 text-[hsl(var(--ds-color-danger))]">{job.error}</p>}
                   {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到 SOP 库，可立即在策略或画廊中使用。</p>}
+                  {job.status === 'error' && <button type="button" onClick={() => void runGeneration()} className="sop-center-button sop-center-button--secondary mt-4">重新生成</button>}
+                  {job.status === 'success' && <button type="button" onClick={() => setTab('library')} className="sop-center-button sop-center-button--secondary mt-4">查看生成结果</button>}
                 </div>
+                <ol className="sop-center-step-list" aria-label="SOP 生成详细步骤">
+                  {SOP_GENERATION_STEPS.map((step, index) => {
+                    const completed = completedGenerationSteps.has(step.id)
+                    const active = job.status === 'running' && job.currentStep === step.id
+                    const failed = job.status === 'error' && job.currentStep === step.id
+                    const state = completed ? 'completed' : active ? 'active' : failed ? 'error' : 'pending'
+                    return (
+                      <li key={step.id} className="sop-center-step" data-state={state}>
+                        <span className="sop-center-step-marker" aria-hidden="true">
+                          {completed ? <Check size={13} /> : active ? <LoaderCircle size={13} className="animate-spin" /> : index + 1}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{step.label}</span>
+                          <span className="sop-center-quiet-text mt-0.5 block text-xs leading-5">{step.description}</span>
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ol>
               </div>
             </aside>
           </div>
