@@ -153,7 +153,7 @@ select optgroup {
 }
 
 .gallery-home-inner {
-  max-width: min(100%, 78rem);
+  width: 100%;
 }
 
 .gallery-grid-shell {
@@ -385,6 +385,12 @@ select optgroup {
   color: hsl(var(--ds-color-text));
 }
 
+@media (min-width: 1280px) {
+  .gallery-layout-controls > [data-no-drag-select] > span.w-full {
+    width: auto;
+  }
+}
+
 .gallery-toolbar__icon[data-active] {
   background: hsl(var(--ds-color-selection-surface));
   border-color: hsl(var(--ds-color-selection-border));
@@ -483,6 +489,27 @@ select optgroup {
   font-size: var(--ds-font-size-xs);
   line-height: var(--ds-line-height-tight);
   margin: var(--ds-space-1) 0 0;
+}
+
+@keyframes gallery-task-navigator-front-in {
+  from {
+    filter: blur(2px) saturate(0.82);
+    opacity: 0.72;
+  }
+  to {
+    filter: blur(0) saturate(1);
+    opacity: 1;
+  }
+}
+
+.gallery-task-navigator__front {
+  animation: gallery-task-navigator-front-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-task-navigator__front {
+    animation: none;
+  }
 }
 
 .doupao-drop-target {

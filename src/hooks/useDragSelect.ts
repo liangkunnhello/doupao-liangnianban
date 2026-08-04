@@ -27,6 +27,7 @@ export function useDragSelect({
   const startedOnItem = useRef(false)
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
+  const attachDragInteractionListenersRef = useRef<() => void>(() => {})
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const getPagePoint = useCallback((clientX: number, clientY: number) => ({
@@ -53,6 +54,7 @@ export function useDragSelect({
       currentPageX: point.pageX,
       currentPageY: point.pageY,
     })
+    attachDragInteractionListenersRef.current()
   }, [getPagePoint, initialSelectedIds, itemSelector])
 
   const updateSelectionFromPoint = useCallback((pageX: number, pageY: number) => {
@@ -99,6 +101,15 @@ export function useDragSelect({
   }, [containerSelector, getItemId, itemSelector, onSelectionChange])
 
   useEffect(() => {
+    let dragInteractionListenersAttached = false
+
+    const detachDragInteractionListeners = () => {
+      if (!dragInteractionListenersAttached) return
+      document.removeEventListener('wheel', handleDocumentWheel, true)
+      window.removeEventListener('scroll', handleDocumentScroll, true)
+      dragInteractionListenersAttached = false
+    }
+
     const stopDragScroll = () => {
       if (dragScrollIntervalRef.current) {
         clearInterval(dragScrollIntervalRef.current)
@@ -125,6 +136,7 @@ export function useDragSelect({
         onSelectionChange([])
       }
       if (suppressClick && hasDragged.current) onSuppressClick?.()
+      detachDragInteractionListeners()
       stopDragScroll()
       isDragging.current = false
       dragStart.current = null
@@ -222,18 +234,24 @@ export function useDragSelect({
       endSelection(true, true)
     }
 
+    const attachDragInteractionListeners = () => {
+      if (dragInteractionListenersAttached) return
+      document.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
+      window.addEventListener('scroll', handleDocumentScroll, true)
+      dragInteractionListenersAttached = true
+    }
+
+    attachDragInteractionListenersRef.current = attachDragInteractionListeners
     document.addEventListener('mousedown', handleDocumentMouseDown, true)
     document.addEventListener('mousemove', handleDocumentMouseMove, true)
     document.addEventListener('mouseup', handleDocumentMouseUp, true)
-    document.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
-    window.addEventListener('scroll', handleDocumentScroll, true)
     return () => {
+      attachDragInteractionListenersRef.current = () => {}
+      detachDragInteractionListeners()
       stopDragScroll()
       document.removeEventListener('mousedown', handleDocumentMouseDown, true)
       document.removeEventListener('mousemove', handleDocumentMouseMove, true)
       document.removeEventListener('mouseup', handleDocumentMouseUp, true)
-      document.removeEventListener('wheel', handleDocumentWheel, true)
-      window.removeEventListener('scroll', handleDocumentScroll, true)
     }
   }, [beginSelection, containerSelector, isMac, itemSelector, onSelectionChange, onSuppressClick, updateSelectionFromPoint])
 

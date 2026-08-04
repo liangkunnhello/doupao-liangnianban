@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useRuntimeStore } from '../stores/runtimeStore'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
@@ -34,6 +35,7 @@ export default function DetailModal() {
   const { largeView, toggleLargeView } = useLargeModalMode(TASK_DETAIL_MODAL_MODE_STORAGE_KEY)
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
+  const detailImageId = useStore((s) => s.detailImageId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
@@ -43,8 +45,8 @@ export default function DetailModal() {
   const workspaceTabs = useStore((s) => s.workspaceTabs)
   const settings = useStore((s) => s.settings)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
-  const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
-  const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
+  const streamPreviewSrc = useRuntimeStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
+  const streamPreviewSlots = useRuntimeStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
 
   const [imageIndex, setImageIndex] = useState(0)
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
@@ -189,10 +191,11 @@ export default function DetailModal() {
   useDialogFocusTrap(showRawUrlsModal, rawUrlsModalRef)
   useDialogFocusTrap(showRawResponseModal, rawResponseModalRef)
 
-  // Reset index when task changes
+  // Open the requested output when the detail view came from image tiles.
   useEffect(() => {
-    setImageIndex(0)
-  }, [detailTaskId])
+    const requestedIndex = detailImageId ? task?.outputImages.indexOf(detailImageId) ?? -1 : -1
+    setImageIndex(requestedIndex >= 0 ? requestedIndex : 0)
+  }, [detailImageId, detailTaskId])
 
   useEffect(() => {
     if (task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return

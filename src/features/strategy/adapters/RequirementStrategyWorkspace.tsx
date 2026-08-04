@@ -42,16 +42,16 @@ function PresetManager({
   const [value, setValue] = useState('')
 
   return (
-    <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-overlay-in" role="dialog" aria-modal="true" aria-label="全局策略预设管理" onMouseDown={(event) => {
+    <div className="fixed inset-0 z-[var(--ds-z-overlay)] flex items-center justify-center bg-[hsl(var(--ds-color-scrim)/0.48)] p-4 animate-overlay-in" role="dialog" aria-modal="true" aria-label="全局策略预设管理" onMouseDown={(event) => {
       if (isModalBackdropEvent(event)) onClose()
     }}>
-      <div className="animate-modal-in flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-2xl dark:border-white/[0.1] dark:bg-gray-900">
-        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+      <div className="ds-modal-surface animate-modal-in flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[hsl(var(--ds-color-border))]">
+        <div className="flex items-center justify-between border-b border-[hsl(var(--ds-color-border))] px-5 py-4">
           <div>
             <h2 className="font-semibold">全局策略预设</h2>
             <p className="mt-1 text-xs text-gray-500">管理员添加后，所有策略师和用户都可使用。</p>
           </div>
-          <button onClick={onClose} aria-label="关闭预设管理" className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-gray-800"><X size={17} /></button>
+          <button onClick={onClose} aria-label="关闭预设管理" className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ds-color-focus))] dark:hover:bg-gray-800"><X size={17} /></button>
         </div>
         <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1fr_360px] lg:overflow-hidden">
           <div className="min-h-0 overflow-y-auto p-5">

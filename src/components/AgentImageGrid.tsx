@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { TaskRecord } from '../types'
 import { ensureImageThumbnailCached, subscribeImageThumbnail, useStore } from '../store'
+import { useRuntimeStore } from '../stores/runtimeStore'
 import { Grid } from '../design-system'
 
 export type AgentImageGridItem =
@@ -47,7 +48,7 @@ function getEntryAspectRatio(task: TaskRecord | null, imageId: string | null) {
 
 function AgentImageTile({ entry, imageList }: { entry: AgentImageGridEntry; imageList: string[] }) {
   const [thumbnailSrc, setThumbnailSrc] = useState('')
-  const streamPreviewSrc = useStore((state) => entry.task ? state.streamPreviews[entry.task.id] || '' : '')
+  const streamPreviewSrc = useRuntimeStore((state) => entry.task ? state.streamPreviews[entry.task.id] || '' : '')
   const setLightboxImageId = useStore((state) => state.setLightboxImageId)
   const imageId = entry.imageId
   const task = entry.task

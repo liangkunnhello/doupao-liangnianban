@@ -254,7 +254,7 @@ export default function App() {
           <React.Suspense fallback={null}><CompositeWorkspace /></React.Suspense>
         ) : (
           <main data-home-main data-drag-select-surface className="gallery-main pb-48">
-            <div className="gallery-home-inner safe-area-x max-w-7xl mx-auto">
+            <div className="gallery-home-inner safe-area-x w-full">
               <SearchBar />
               {filterFavorite && <FavoriteCollectionsView />}
               <TaskGrid />

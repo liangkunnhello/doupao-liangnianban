@@ -4,7 +4,7 @@
 
 | 文档 | 工作区 | 入口 | 关键差异 |
 | --- | --- | --- | --- |
-| [gallery.md](./gallery.md) | 画廊主页 | `appMode==='gallery'`（默认） | 居中 `max-w-7xl` + 停靠浮动侧栏；自实现鼠标框选；无专属快捷键 |
+| [gallery.md](./gallery.md) | 画廊主页 | `appMode==='gallery'`（默认） | 自适应占满停靠侧栏间宽度；自实现鼠标框选；无专属快捷键 |
 | [agent.md](./agent.md) | Agent 工作台 | `appMode==='agent'` | 会话侧栏可收起；消息内嵌 `AgentImageGrid`；无框选/专属快捷键 |
 | [strategy.md](./strategy.md) | 策略工作台 | `appMode==='strategy'`（壳内复用） | 全宽三栏；专属 `Ctrl+C/V` 复制粘贴策略 |
 | [ordering.md](./ordering.md) | 下单工作台 | `appMode==='ordering'`（壳内复用） | `max-w-[1600px]` 双视图；强角色权限；无快捷键/画布 |

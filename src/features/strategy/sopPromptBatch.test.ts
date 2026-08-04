@@ -9,6 +9,7 @@ import {
   getSopTotalImageCount,
   parseSopPromptBatchResponse,
   selectSopPromptSources,
+  SOP_PROMPT_GENERATOR_INSTRUCTION,
 } from './sopPromptBatch'
 import type { SopLibraryItem } from './types'
 
@@ -24,16 +25,30 @@ const sop: SopLibraryItem = {
 }
 
 describe('SOP prompt batch', () => {
-  it('builds a strict request with the requested quantity', () => {
+  it('builds a strict request with an explicit SOP execution contract', () => {
     const request = buildSopPromptBatchRequest(sop, 3, '使用产品摄影风格', {
       sourceLabel: '图1',
       totalPromptCount: 10,
+      existingPrompts: ['已有提示词 A', '已有提示词 B'],
     })
     expect(request).toContain('生成 3 条')
     expect(request).toContain('本轮总目标提示词数量：10 条')
     expect(request).toContain('当前参考图：图1')
     expect(request).toContain('使用产品摄影风格')
     expect(request).toContain(sop.content)
+    expect(request).toContain('<SOP>')
+    expect(request).toContain('</SOP>')
+    expect(request).toContain('强制项、可变项、禁止项')
+    expect(request).toContain('补充要求只能补全 SOP 未定义的内容')
+    expect(request).toContain('已有提示词 A')
+    expect(request).toContain('不得与已有结果重复或仅做同义改写')
+  })
+
+  it('defines a silent planning and self-check instruction for the prompt model', () => {
+    expect(SOP_PROMPT_GENERATOR_INSTRUCTION).toContain('先在内部完成')
+    expect(SOP_PROMPT_GENERATOR_INSTRUCTION).toContain('不要输出分析过程')
+    expect(SOP_PROMPT_GENERATOR_INSTRUCTION).toContain('传输封装')
+    expect(SOP_PROMPT_GENERATOR_INSTRUCTION).toContain('逐条自检')
   })
 
   it('allocates a global prompt count across selected sources', () => {
@@ -66,6 +81,22 @@ describe('SOP prompt batch', () => {
     expect(requests).toEqual([10, 10, 2])
     expect(prompts).toHaveLength(12)
     expect(new Set(prompts).size).toBe(12)
+  })
+
+  it('keeps requesting the remaining deficit when a model returns a partial batch', async () => {
+    const requests: number[] = []
+
+    const prompts = await generateSopPromptBatches(5, async (count, existingPrompts) => {
+      requests.push(count)
+      const returnedCount = requests.length === 1 ? 2 : count
+      return Array.from(
+        { length: returnedCount },
+        (_, index) => `提示词-${existingPrompts.length + index + 1}`,
+      )
+    })
+
+    expect(requests).toEqual([5, 3])
+    expect(prompts).toEqual(['提示词-1', '提示词-2', '提示词-3', '提示词-4', '提示词-5'])
   })
 
   it('reports completed prompt progress after every successful model batch', async () => {
@@ -217,5 +248,17 @@ describe('SOP prompt batch', () => {
   it('can keep partial unique prompts for source-level runs', () => {
     expect(parseSopPromptBatchResponse('{"prompts":["提示词一","提示词一","提示词二"]}', 3, { exact: false, existingPrompts: ['提示词二'] }))
       .toEqual(['提示词一'])
+  })
+
+  it('accepts legacy SOP output keys and removes list labels', () => {
+    expect(parseSopPromptBatchResponse('{"Ready_To_Use_Prompts":["Prompt 1: 提示词一","2、提示词二"]}', 2))
+      .toEqual(['提示词一', '提示词二'])
+  })
+
+  it('treats cosmetic numbering and punctuation changes as duplicates', () => {
+    expect(parseSopPromptBatchResponse('{"prompts":["Prompt 2：蓝色 背景，白色产品。","红色背景，白色产品"]}', 2, {
+      exact: false,
+      existingPrompts: ['1. 蓝色背景、白色产品'],
+    })).toEqual(['红色背景，白色产品'])
   })
 })

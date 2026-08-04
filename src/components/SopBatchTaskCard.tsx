@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import { memo, useEffect, useState, type MouseEvent } from 'react'
 import {
   BookOpenCheckIcon as BookOpenCheck,
   ImageIcon,
@@ -33,7 +33,7 @@ function BatchThumbnail({ task, imageId, variantIndex, onClick }: { task: TaskRe
   </button>
 }
 
-export default function SopBatchTaskCard({
+function SopBatchTaskCard({
   sopName,
   tasks,
   summary,
@@ -92,3 +92,10 @@ export default function SopBatchTaskCard({
     </div>
   </Card>
 }
+
+export default memo(SopBatchTaskCard, (previous, next) => (
+  previous.sopName === next.sopName &&
+  previous.tasks === next.tasks &&
+  previous.summary === next.summary &&
+  previous.isSelected === next.isSelected
+))

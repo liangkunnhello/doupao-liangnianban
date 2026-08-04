@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
+import { lazy, Suspense, useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
@@ -24,9 +24,7 @@ import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon, FolderOpenIcon, TagsIcon } from './icons'
 import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
-import AgentBatchPlannerModal from './AgentBatchPlannerModal'
-import GallerySopBatchModal, { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/GallerySopBatchModal'
-import GallerySopManagementCenter from '../features/strategy/adapters/GallerySopManagementCenter'
+import { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/gallerySopRun'
 import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
 import { useRequirementPrototype } from '../features/requirementPrototype/store'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
@@ -36,6 +34,10 @@ import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
+
+const AgentBatchPlannerModal = lazy(() => import('./AgentBatchPlannerModal'))
+const GallerySopBatchModal = lazy(() => import('../features/strategy/adapters/GallerySopBatchModal'))
+const GallerySopManagementCenter = lazy(() => import('../features/strategy/adapters/GallerySopManagementCenter'))
 
 
 function getMentionTagTextLength(el: Element) {
@@ -544,7 +546,16 @@ export default function InputBar() {
   const [gallerySopBatchTabIds, setGallerySopBatchTabIds] = useState<string[]>([])
   const [visibleGallerySopBatchTabId, setVisibleGallerySopBatchTabId] = useState<string | null>(null)
   const [showGallerySopManagement, setShowGallerySopManagement] = useState(false)
-  const [gallerySopAutoStart, setGallerySopAutoStart] = useState(false)
+  /**
+   * 待自动启动的批次作用域（null 表示不自动启动）。
+   * 刻意与 visibleGallerySopBatchTabId 解耦：静默启动后若用户立刻切换标签页，
+   * 自动启动信号不应因弹窗可见性变化而丢失。
+   */
+  const [gallerySopAutoStartTabId, setGallerySopAutoStartTabId] = useState<string | null>(null)
+  /** 正在后台静默运行、未呈现弹窗的批次作用域 */
+  const silentGallerySopTabsRef = useRef<Set<string>>(new Set())
+  /** 上一次上报的批次阶段，用于识别静默运行期间的失败 */
+  const gallerySopPhaseRef = useRef<Record<string, string>>({})
   const [gallerySopIdsByTab, setGallerySopIdsByTab] = useState<Record<string, string>>({})
   const [savedSopPromptCount, setSavedSopPromptCount] = useState(0)
   const [gallerySopPromptCountsByTab, setGallerySopPromptCountsByTab] = useState<Record<string, number>>({})
@@ -611,19 +622,14 @@ export default function InputBar() {
     if (id === gallerySopId) return
     window.localStorage.removeItem(getGallerySopPromptRunStorageKey(activeWorkspaceTabId))
     setSavedSopPromptCount(0)
-    setGallerySopPromptCountsByTab((current) => ({ ...current, [gallerySopScopeId]: 5 }))
-    setGallerySopImagesPerPromptByTab((current) => ({ ...current, [gallerySopScopeId]: 1 }))
-    setGallerySopAutoGenerateByTab((current) => ({ ...current, [gallerySopScopeId]: false }))
-    setGallerySopSecondReferenceByTab((current) => ({ ...current, [gallerySopScopeId]: false }))
     setGallerySopRunStatusByTab((current) => {
       const next = { ...current }
       delete next[gallerySopScopeId]
       return next
     })
-    setGallerySopBatchTabIds((current) => current.filter((scopeId) => scopeId !== gallerySopScopeId))
-    setVisibleGallerySopBatchTabId((current) => current === gallerySopScopeId ? null : current)
-    setShowGallerySopBatch(false)
-    setGallerySopAutoStart(false)
+    // 注意：切换 SOP 时不再卸载/隐藏生图弹窗，避免弹窗被锁定在旧 SOP 上，
+    // 弹窗会实时跟随 gallerySopIdsByTab 显示最新 SOP。
+    setGallerySopAutoStartTabId(null)
     setGallerySopIdsByTab((current) => ({ ...current, [gallerySopScopeId]: id }))
   }, [activeWorkspaceTabId, gallerySopId, gallerySopScopeId])
   const setGallerySopPromptCount = useCallback((value: number) => {
@@ -645,16 +651,45 @@ export default function InputBar() {
     [gallerySopId, sopItems],
   )
 
-  const openGallerySopBatch = useCallback((autoStart: boolean) => {
+  /**
+   * silent=true 时只挂载批次组件并触发自动流程，不呈现弹窗。
+   * GallerySopBatchModal 的 `if (!visible) return null` 位于全部业务逻辑之后，
+   * 因此不可见时依然能完整完成「生成提示词 → 自动提交生图」。
+   */
+  const openGallerySopBatch = useCallback((autoStart: boolean, silent = false) => {
     setGallerySopBatchTabIds((current) => current.includes(gallerySopScopeId) ? current : [...current, gallerySopScopeId])
-    setGallerySopAutoStart(autoStart)
+    setGallerySopAutoStartTabId(autoStart ? gallerySopScopeId : null)
     setVisibleGallerySopBatchTabId(gallerySopScopeId)
+    if (silent) {
+      silentGallerySopTabsRef.current.add(gallerySopScopeId)
+      return
+    }
+    silentGallerySopTabsRef.current.delete(gallerySopScopeId)
     setShowGallerySopBatch(true)
   }, [gallerySopScopeId])
+
+  /** 把某个后台批次切换为前台可见 */
+  const revealGallerySopBatch = useCallback((tabId: string) => {
+    silentGallerySopTabsRef.current.delete(tabId)
+    setGallerySopBatchTabIds((current) => current.includes(tabId) ? current : [...current, tabId])
+    setVisibleGallerySopBatchTabId(tabId)
+    setShowGallerySopBatch(true)
+  }, [])
 
   const handleGallerySopRunStatusChange = useCallback((nextStatus: GallerySopRunStatus) => {
     const scopeId = nextStatus.workspaceTabId ?? '__default__'
     setGallerySopRunStatusByTab((current) => ({ ...current, [scopeId]: nextStatus }))
+    // 后台静默运行时弹窗不可见，成败必须通过 toast 让用户感知
+    const prevPhase = gallerySopPhaseRef.current[scopeId]
+    gallerySopPhaseRef.current[scopeId] = nextStatus.phase
+    if (prevPhase === nextStatus.phase) return
+    if (!silentGallerySopTabsRef.current.has(scopeId)) return
+    if (nextStatus.phase === 'error') {
+      showToast(nextStatus.message || 'SOP 后台批次执行失败，点击提示词管理查看详情', 'error')
+    } else if (nextStatus.phase === 'success') {
+      silentGallerySopTabsRef.current.delete(scopeId)
+      showToast(`SOP 批次完成，已提交 ${nextStatus.totalImages} 张图片`, 'success')
+    }
   }, [])
 
   const refreshSavedSopPromptCount = useCallback(() => {
@@ -1030,23 +1065,19 @@ export default function InputBar() {
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : gallerySopModeActive
-    ? gallerySopIsRunning
-      ? '查看 SOP 提示词生成进度'
-      : gallerySopHasPromptList
-        ? `查看 ${gallerySopAvailablePromptCount} 条 SOP 提示词`
+      ? gallerySopIsRunning
+        ? '查看 SOP 提示词生成进度'
         : gallerySopAutoGenerate
           ? `生成 ${gallerySopPromptCount} 条提示词并自动生成 ${gallerySopTotalImages} 张图片`
           : `生成 ${gallerySopPromptCount} 条 SOP 提示词`
     : hasSubmitApiConfig
-    ? maskDraft ? '遮罩编辑' : '生成图像'
-    : '请先配置 API'
+      ? maskDraft ? '遮罩编辑' : '生成图像'
+      : '请先配置 API'
   const submitButtonText = activeAgentIsRunning
     ? '停止'
     : gallerySopModeActive
-    ? gallerySopIsRunning
-      ? '查看提示词进度'
-      : gallerySopHasPromptList
-        ? `查看提示词列表 · ${gallerySopAvailablePromptCount}`
+      ? gallerySopIsRunning
+        ? '查看提示词进度'
         : gallerySopAutoGenerate
           ? `自动生成 ${gallerySopTotalImages} 张`
           : `生成 ${gallerySopPromptCount} 条提示词`
@@ -1071,11 +1102,21 @@ export default function InputBar() {
         showToast('请先选择 SOP 预设', 'error')
         return
       }
-      openGallerySopBatch(!gallerySopIsRunning && !gallerySopHasPromptList)
+      if (gallerySopIsRunning) {
+        // 运行中点击 = 查看进度，必须呈现弹窗
+        revealGallerySopBatch(gallerySopScopeId)
+        return
+      }
+      // 仅在用户已显式开启「自动生图」时静默执行：此时提示词无需人工确认，
+      // 全程可在胶囊条观察进度。未开启则保留原有弹窗行为。
+      openGallerySopBatch(true, gallerySopAutoGenerate)
+      if (gallerySopAutoGenerate) {
+        showToast(`已在后台生成 ${gallerySopPromptCount} 条提示词并陆续出图`, 'success')
+      }
     } else {
       void submitTask()
     }
-  }, [activeGallerySop, appMode, gallerySopHasPromptList, gallerySopIsRunning, gallerySopModeActive, openGallerySopBatch])
+  }, [activeGallerySop, appMode, gallerySopAutoGenerate, gallerySopIsRunning, gallerySopModeActive, gallerySopPromptCount, gallerySopScopeId, openGallerySopBatch, revealGallerySopBatch])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -2638,6 +2679,16 @@ export default function InputBar() {
     )
   }
 
+  const handleAdNegativeRuleChange = (value: string) => {
+    if (value !== '__create-ad-negative-rule__') {
+      setParams({ adNegativeRuleId: value })
+      return
+    }
+    setCustomAdRuleName('')
+    setCustomAdRuleContent('')
+    setShowCustomAdRuleDialog(true)
+  }
+
   const renderParams = (cols: string) => (
     <div className={`grid ${cols} gap-2 text-xs flex-1`}>
       <label
@@ -2719,22 +2770,15 @@ export default function InputBar() {
         />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">合规规则</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">信息流审核规则</span>
         <Select
           value={params.adNegativeRuleId}
-          onChange={(value) => {
-            if (value !== '__create-ad-negative-rule__') {
-              setParams({ adNegativeRuleId: value })
-              return
-            }
-            setCustomAdRuleName('')
-            setCustomAdRuleContent('')
-            setShowCustomAdRuleDialog(true)
-          }}
+          onChange={handleAdNegativeRuleChange}
           options={[
             ...settings.adNegativeRuleProfiles.map((rule) => ({ label: rule.name, value: rule.id })),
             { label: '新建自定义规则', value: '__create-ad-negative-rule__', variant: 'action' as const },
           ]}
+          ariaLabel="选择信息流审核规则"
           className={selectClass}
         />
       </label>
@@ -2801,8 +2845,10 @@ export default function InputBar() {
   const renderParamSummary = () => {
     const sizeLabel = quickSizeValue === 'auto' ? '自动尺寸' : quickSizeValue
     const outputLabel = customOutputPath.trim() ? '自定义输出' : '默认输出'
+    const qualityLabel = settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality
     const pillClass = 'inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-600 shadow-sm outline-none transition-[background-color,transform,border-color] duration-150 hover:border-blue-200 hover:bg-white active:scale-[0.97] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-blue-500/30'
     const valueClass = 'ml-1 font-semibold text-gray-800 dark:text-gray-100'
+
     return (
       <>
         <button
@@ -2816,7 +2862,7 @@ export default function InputBar() {
         <label className={`${pillClass} flex items-center gap-1`}>
           <span className="text-gray-400">质量</span>
           <select
-            value={settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
+            value={qualityLabel}
             onChange={(event) => {
               if (!settings.codexCli) setParams({ quality: event.target.value as any })
             }}
@@ -2838,6 +2884,18 @@ export default function InputBar() {
             <option value="png">PNG</option>
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
+          </select>
+        </label>
+        <label className={`${pillClass} flex items-center gap-1`}>
+          <span className="text-gray-400">审核规则</span>
+          <select
+            value={params.adNegativeRuleId}
+            onChange={(event) => handleAdNegativeRuleChange(event.target.value)}
+            className="max-w-28 cursor-pointer bg-transparent font-semibold text-gray-800 outline-none dark:text-gray-100"
+            aria-label="选择信息流审核规则"
+          >
+            {settings.adNegativeRuleProfiles.map((rule) => <option key={rule.id} value={rule.id}>{rule.name}</option>)}
+            <option value="__create-ad-negative-rule__">新建自定义规则…</option>
           </select>
         </label>
         {!gallerySopModeActive && <label className={`${pillClass} flex items-center gap-1`}>
@@ -2894,8 +2952,9 @@ export default function InputBar() {
               ? `已提交 ${gallerySopRunStatus.totalImages} 张`
               : `提示词 ${gallerySopRunStatus.availablePrompts}`
       : `提示词 ${savedSopPromptCount}`
+    // 后台静默运行时，胶囊条是用户唯一的进度来源，必须把进度直接摊开显示
     const promptListActionLabel = gallerySopIsRunning
-      ? '查看提示词进度'
+      ? `后台运行中 · ${progressLabel}`
       : gallerySopHasPromptList
         ? `提示词管理 · ${gallerySopAvailablePromptCount}`
         : '提示词管理'
@@ -2917,18 +2976,18 @@ export default function InputBar() {
             {hasSopSelection ? activeGallerySop?.name : '未启用'}
           </span>
         </button>
-        {hasSopSelection && <button
-          type="button"
-          onClick={() => { setGallerySopId(''); setGallerySopAutoStart(false) }}
-          disabled={gallerySopIsRunning}
-          aria-label="取消当前 SOP，改为直接生图"
-          title="不使用 SOP"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-[background-color,transform] duration-150 hover:bg-gray-200 hover:text-gray-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1] dark:hover:text-gray-200"
-        >
-          <CloseIcon className="h-3.5 w-3.5" />
-        </button>}
         {hasSopSelection && <>
-          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+          <button
+            type="button"
+            onClick={() => { setGallerySopId(''); setGallerySopAutoStartTabId(null) }}
+            disabled={gallerySopIsRunning}
+            aria-label="取消当前 SOP，改为直接生图"
+            title="不使用 SOP"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-[background-color,transform] duration-150 hover:bg-gray-200 hover:text-gray-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1] dark:hover:text-gray-200"
+          >
+            <CloseIcon className="h-3.5 w-3.5" />
+          </button>
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm focus-within:ring-2 focus-within:ring-violet-500 dark:border-white/[0.08] dark:bg-white/[0.03]">
             <span>提示词</span>
             <input
               type="number"
@@ -2937,10 +2996,10 @@ export default function InputBar() {
               value={gallerySopPromptCount}
               onChange={(event) => event.target.value && setGallerySopPromptCount(Number(event.target.value))}
               aria-label="SOP 提示词数量"
-              className="w-14 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
+              className="w-10 bg-transparent text-center font-semibold text-gray-800 outline-none disabled:cursor-not-allowed dark:text-gray-100"
             />
           </label>
-          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm focus-within:ring-2 focus-within:ring-violet-500 dark:border-white/[0.08] dark:bg-white/[0.03]">
             <span>每条</span>
             <input
               type="number"
@@ -2950,11 +3009,14 @@ export default function InputBar() {
               value={gallerySopImagesPerPrompt}
               onChange={(event) => event.target.value && setGallerySopImagesPerPrompt(Number(event.target.value))}
               aria-label="每条提示词生成图片数"
-              className="w-9 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100"
+              className="w-8 bg-transparent text-center font-semibold text-gray-800 outline-none disabled:cursor-not-allowed dark:text-gray-100"
             />
             <span>张</span>
           </label>
-          <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-violet-50 px-3 text-xs font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-200" title={`${gallerySopPromptCount} 条提示词 × 每条 ${gallerySopImagesPerPrompt} 张`}>
+          <span
+            className="inline-flex h-8 shrink-0 items-center rounded-full bg-violet-50 px-3 text-xs font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-200"
+            title={`${gallerySopPromptCount} 条提示词 × 每条 ${gallerySopImagesPerPrompt} 张`}
+          >
             预计 {gallerySopTotalImages} 张
           </span>
           <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-gray-100 px-3 text-xs font-medium text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">
@@ -2967,7 +3029,7 @@ export default function InputBar() {
             aria-label="提示词完成后自动生图"
             disabled={gallerySopIsRunning}
             onClick={() => setGallerySopAutoGenerate(!gallerySopAutoGenerate)}
-            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${gallerySopAutoGenerate ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'}`}
+            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-50 ${gallerySopAutoGenerate ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'}`}
           >
             自动生图
             <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${gallerySopAutoGenerate ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}><span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${gallerySopAutoGenerate ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
@@ -2977,14 +3039,9 @@ export default function InputBar() {
             role="switch"
             aria-checked={gallerySopSecondReference}
             aria-label="实际生图时再次使用输入区参考图"
-            title="开启后，参考图先用于生成提示词，并在实际生图时再次传入"
             disabled={gallerySopIsRunning}
             onClick={() => setGallerySopSecondReference(!gallerySopSecondReference)}
-            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${
-              gallerySopSecondReference
-                ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200'
-                : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
-            }`}
+            className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-50 ${gallerySopSecondReference ? 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'}`}
           >
             二次参考
             <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${gallerySopSecondReference ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}><span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${gallerySopSecondReference ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
@@ -2992,10 +3049,16 @@ export default function InputBar() {
         </>}
         <button
           type="button"
-          onClick={() => openGallerySopBatch(false)}
-          aria-label={`${promptListActionLabel}，${progressLabel}`}
-          title={`${promptListActionLabel}，${progressLabel}`}
-          className="flex h-8 shrink-0 items-center gap-2 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs font-semibold text-gray-700 transition-[background-color,transform,box-shadow] duration-150 hover:bg-white active:scale-[0.97] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+          onClick={() => revealGallerySopBatch(gallerySopScopeId)}
+          aria-label={gallerySopIsRunning ? `${promptListActionLabel}，点击可查看或中止` : `${promptListActionLabel}，${progressLabel}`}
+          title={gallerySopIsRunning ? `${promptListActionLabel}，点击可查看或中止` : `${promptListActionLabel}，${progressLabel}`}
+          className={`flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-[background-color,transform,box-shadow] duration-150 active:scale-[0.97] ${
+            gallerySopRunStatus?.phase === 'error'
+              ? 'border-red-300/70 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20'
+              : gallerySopIsRunning
+                ? 'border-violet-300/70 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-200 dark:hover:bg-violet-500/20'
+                : 'border-gray-200/70 bg-white/55 text-gray-700 hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]'
+          }`}
         >
           {gallerySopIsRunning && <span className="h-2 w-2 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none" />}
           {promptListActionLabel}
@@ -3295,7 +3358,7 @@ export default function InputBar() {
           onUpdatePreferences={handleAssistantPreferencesChange}
           onFeedbackChange={setAssistantFeedbackForScope}
         />
-        <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
+        <div ref={cardRef} className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}
@@ -3812,12 +3875,15 @@ export default function InputBar() {
         document.body,
       )}
       {showAgentBatchPlanner && createPortal(
-        <AgentBatchPlannerModal onClose={() => setShowAgentBatchPlanner(false)} />,
+        <Suspense fallback={null}>
+          <AgentBatchPlannerModal onClose={() => setShowAgentBatchPlanner(false)} />
+        </Suspense>,
         document.body,
       )}
       {gallerySopBatchTabIds.map((tabId) => createPortal(
+        <Suspense fallback={null}>
         <GallerySopBatchModal
-          key={`${tabId}:${gallerySopIdsByTab[tabId] ?? ''}`}
+          key={tabId}
           workspaceTabId={tabId === '__default__' ? null : tabId}
           visible={showGallerySopBatch && visibleGallerySopBatchTabId === tabId}
           initialSopId={gallerySopIdsByTab[tabId] ?? ''}
@@ -3826,31 +3892,42 @@ export default function InputBar() {
           initialBrief={prompt}
           initialAutoGenerate={gallerySopAutoGenerateByTab[tabId] ?? false}
           initialSecondReference={gallerySopSecondReferenceByTab[tabId] ?? false}
-          autoStart={gallerySopAutoStart && visibleGallerySopBatchTabId === tabId}
-          onAutoStartConsumed={() => setGallerySopAutoStart(false)}
+          autoStart={gallerySopAutoStartTabId === tabId}
+          onAutoStartConsumed={() => setGallerySopAutoStartTabId(null)}
           onStatusChange={handleGallerySopRunStatusChange}
+          onNeedsAttention={(reason) => {
+            revealGallerySopBatch(tabId)
+            if (reason === 'existing-prompts') {
+              showToast('检测到上一批未提交的提示词，请先确认是继续提交还是清空重来', 'error')
+            }
+          }}
           onBackground={() => {
+            silentGallerySopTabsRef.current.add(tabId)
             setVisibleGallerySopBatchTabId(null)
             setShowGallerySopBatch(false)
-            setGallerySopAutoStart(false)
+            setGallerySopAutoStartTabId(null)
           }}
           onClose={() => {
+            silentGallerySopTabsRef.current.delete(tabId)
             setGallerySopBatchTabIds((current) => current.filter((id) => id !== tabId))
             setVisibleGallerySopBatchTabId((current) => current === tabId ? null : current)
             setShowGallerySopBatch(false)
-            setGallerySopAutoStart(false)
+            setGallerySopAutoStartTabId(null)
             refreshSavedSopPromptCount()
           }}
-        />,
+        />
+        </Suspense>,
         document.body,
       ))}
       {showGallerySopManagement && createPortal(
+        <Suspense fallback={null}>
         <GallerySopManagementCenter
           selectedSopId={gallerySopId}
           onApply={(item) => setGallerySopId(item.id)}
-          onClear={() => { setGallerySopId(''); setGallerySopAutoStart(false) }}
+          onClear={() => { setGallerySopId(''); setGallerySopAutoStartTabId(null) }}
           onClose={() => setShowGallerySopManagement(false)}
-        />,
+        />
+        </Suspense>,
         document.body,
       )}
     </>

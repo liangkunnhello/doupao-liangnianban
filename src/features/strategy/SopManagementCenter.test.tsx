@@ -36,6 +36,7 @@ vi.mock('../../lib/agentApi', () => agentApiMocks)
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 afterEach(() => {
+  vi.useRealTimers()
   window.localStorage.clear()
 })
 
@@ -50,6 +51,17 @@ const item: SopLibraryItem = {
   updatedAt: 1,
 }
 
+const item2: SopLibraryItem = {
+  id: 'sop-2',
+  name: '详情页 SOP',
+  description: '生成详情页场景',
+  content: '使用明亮背景并突出卖点。',
+  source: 'manual',
+  createdBy: 'user-1',
+  createdAt: 2,
+  updatedAt: 2,
+}
+
 function textContent(node: ReactTestInstance): string {
   return node.children.map((child) => typeof child === 'string' ? child : textContent(child)).join('')
 }
@@ -58,13 +70,13 @@ function findButton(root: ReactTestInstance, label: string) {
   return root.findAllByType('button').find((button) => textContent(button).includes(label))
 }
 
-function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[] } = {}) {
+function renderCenter(options: { selectedSopId?: string; tasks?: TaskRecord[]; items?: SopLibraryItem[] } = {}) {
   const onSaveItem = vi.fn()
   const onApply = vi.fn()
   const renderer = create(
     <SopManagementCenter
       groups={[]}
-      items={[item]}
+      items={options.items ?? [item]}
       tasks={options.tasks}
       metaInstructions={[]}
       currentUserId="user-1"
@@ -151,14 +163,77 @@ describe('SopManagementCenter apply and save actions', () => {
     result.renderer.unmount()
   })
 
+  it('automatically saves valid SOP edits after the debounce delay', () => {
+    vi.useFakeTimers()
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter()
+    })
+
+    const nameInput = result.renderer.root.findAllByType('input').find((input) => input.props.value === item.name)
+    act(() => nameInput!.props.onChange({ target: { value: '自动保存商品图 SOP' } }))
+
+    expect(result.onSaveItem).not.toHaveBeenCalled()
+    act(() => { vi.advanceTimersByTime(799) })
+    expect(result.onSaveItem).not.toHaveBeenCalled()
+
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(result.onSaveItem).toHaveBeenCalledOnce()
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: item.id,
+      name: '自动保存商品图 SOP',
+      updatedAt: expect.any(Number),
+    }))
+    expect(textContent(result.renderer.root)).toContain('修改已自动保存')
+    result.renderer.unmount()
+  })
+
+  it('flushes a pending automatic save before switching SOPs', () => {
+    vi.useFakeTimers()
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ items: [item, item2] })
+    })
+
+    const nameInput = result.renderer.root.findAllByType('input').find((input) => input.props.value === item.name)
+    act(() => nameInput!.props.onChange({ target: { value: '切换前保存的 SOP' } }))
+    act(() => result.renderer.root.findByProps({ title: item2.name }).props.onClick())
+
+    expect(result.onSaveItem).toHaveBeenCalledOnce()
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({
+      id: item.id,
+      name: '切换前保存的 SOP',
+    }))
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe(item2.content)
+
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(result.onSaveItem).toHaveBeenCalledOnce()
+    result.renderer.unmount()
+  })
+
   it('shows the currently selected SOP as already applied', () => {
     let result!: ReturnType<typeof renderCenter>
     act(() => {
       result = renderCenter({ selectedSopId: item.id })
     })
 
-    expect(findButton(result.renderer.root, '已应用')?.props.disabled).toBe(true)
+    expect(findButton(result.renderer.root, '已使用')?.props.disabled).toBe(true)
     expect(findButton(result.renderer.root, '保存修改')?.props.disabled).toBe(true)
+    result.renderer.unmount()
+  })
+
+  it('selects and shows the applied SOP in the editor when applying from the list row', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ items: [item, item2] })
+    })
+
+    const rowApplyButton = result.renderer.root.findByProps({ 'aria-label': `应用 ${item2.name}` })
+    act(() => rowApplyButton.props.onClick())
+
+    expect(result.onApply).toHaveBeenCalledWith(expect.objectContaining({ id: item2.id, name: item2.name }))
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({ id: item2.id, lastUsedAt: expect.any(Number) }))
+    expect(result.renderer.root.findAllByType('textarea').some((input) => input.props.value === item2.content)).toBe(true)
     result.renderer.unmount()
   })
 

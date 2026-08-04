@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
 import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, useStore } from '../store'
+import { useRuntimeStore } from '../stores/runtimeStore'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
@@ -564,7 +565,7 @@ export default function AgentWorkspace() {
     [conversation],
   )
 
-  const agentStreamingTexts = useStore((s) => s.agentStreamingTexts)
+  const agentStreamingTexts = useRuntimeStore((s) => s.agentStreamingTexts)
 
   const activeMessages = useMemo(() => {
     if (!conversation) return []

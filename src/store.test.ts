@@ -180,7 +180,7 @@ vi.mock('./lib/agentApi', () => ({
 import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, moveTasksToWorkspaceTab, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTasksFavoriteCollections, useStore } from './store'
+import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, moveTasksToWorkspaceTab, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTaskInStore, updateTasksFavoriteCollections, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -577,6 +577,28 @@ describe('workspace tab defaults', () => {
     expect(state.selectedTaskIds).toEqual([])
     expect(showToast).toHaveBeenCalledWith('已将 1 个任务移动到「目标标签」', 'success')
   })
+  it('updates only the workspace tabs containing a task in one state commit', async () => {
+    const target = task({ id: 'task-target' })
+    const untouched = task({ id: 'task-untouched' })
+    const targetTab = workspaceTab({ id: 'tab-target', tasks: [target] })
+    const untouchedTab = workspaceTab({ id: 'tab-untouched', tasks: [untouched], order: 1 })
+    useStore.setState({
+      tasks: [target, untouched],
+      workspaceTabs: [targetTab, untouchedTab],
+    })
+    const listener = vi.fn()
+    const unsubscribe = useStore.subscribe(listener)
+
+    await updateTaskInStore(target.id, { progressStage: 'previewing', progressMessage: 'loading' })
+    unsubscribe()
+
+    const state = useStore.getState()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(state.tasks[0]).toMatchObject({ progressStage: 'previewing', progressMessage: 'loading' })
+    expect(state.workspaceTabs[0].tasks[0]).toMatchObject({ progressStage: 'previewing', progressMessage: 'loading' })
+    expect(state.workspaceTabs[1]).toBe(untouchedTab)
+    expect(state.workspaceTabs[1].tasks[0]).toBe(untouched)
+  })
 })
 
 describe('schedule state', () => {
@@ -647,11 +669,14 @@ describe('schedule state', () => {
 
   it('returns to the schedule modal when closing a task opened from schedule', () => {
     useStore.getState().setScheduleModalOpen(false)
-    useStore.getState().setDetailTaskId('task-a', { returnToSchedule: true })
+    useStore.getState().setDetailTaskId('task-a', { returnToSchedule: true, imageId: 'image-b' })
+
+    expect(useStore.getState().detailImageId).toBe('image-b')
 
     useStore.getState().setDetailTaskId(null)
 
     expect(useStore.getState().detailTaskId).toBeNull()
+    expect(useStore.getState().detailImageId).toBeNull()
     expect(useStore.getState().schedule.modalOpen).toBe(true)
   })
 

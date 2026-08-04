@@ -479,7 +479,7 @@ export default function AgentBatchPlannerModal({ onClose }: { onClose: () => voi
             </div>
           </details>
 
-          <details className="group mt-2 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2 dark:border-violet-500/20 dark:bg-violet-500/[0.06]">
+          <details className="group mt-2 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2 dark:border-violet-500/20 dark:bg-violet-500/5">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-semibold text-violet-950 marker:hidden dark:text-violet-100"><span>生成策略预设 <span className="ml-1 text-xs font-normal text-violet-800/70 dark:text-violet-200/70">保存策略、占比、冗余、每日上限与执行顺序</span></span><span className="text-xs font-normal text-violet-700 group-open:hidden dark:text-violet-200">展开</span>{activePreset && <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-normal text-violet-700 dark:bg-violet-500/15 dark:text-violet-200">当前：{activePreset.name}</span>}</summary>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-[11px] text-violet-800/80 dark:text-violet-200/70">预设不会保存 API Key 或输出目录。</span>
@@ -633,8 +633,8 @@ export default function AgentBatchPlannerModal({ onClose }: { onClose: () => voi
           </div>
         </div>
       </div>
-      {pendingExecution && plan && <div className="absolute inset-0 flex items-center justify-center bg-black/45 p-4">
-        <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl dark:bg-gray-900"><h3 className="text-lg font-semibold text-gray-900 dark:text-white">确认{pendingExecution === 'immediate' ? '立即执行' : '按日自动执行'}</h3><div className="mt-3 space-y-1 text-sm text-gray-600 dark:text-gray-300"><p>计划：{draftName || '未命名批量任务'}</p><p>有效任务：{rows.length} 行；目标 {plan.targetCount} 张；冗余后 {plan.plannedCount} 张。</p><p>执行方式：{pendingExecution === 'immediate' ? `立即提交首日 ${plan.days[0]?.plannedCount ?? 0} 张，后续日期保留在队列中。` : `${startDate} 起按日提交，应用必须保持运行。`}</p><p>每日上限：{dailyLimit} 张；预计 {plan.days.length} 天。</p><p>API：{getAgentImageApiProfile(settings).name} / {getAgentImageApiProfile(settings).model}；最大并发 {getAgentImageApiProfile(settings).maxConcurrent}。</p><p>输出目录：{outputRoot}</p></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setPendingExecution(null)} className="rounded-lg px-3 py-2 text-sm text-gray-600 dark:text-gray-300">返回修改</button><button type="button" onClick={confirmExecution} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white">确认并创建队列</button></div></div>
+      {pendingExecution && plan && <div className="absolute inset-0 flex items-center justify-center bg-[hsl(var(--ds-color-scrim)/0.48)] p-4">
+        <div className="ds-modal-surface w-full max-w-lg rounded-2xl p-5"><h3 className="text-lg font-semibold text-gray-900 dark:text-white">确认{pendingExecution === 'immediate' ? '立即执行' : '按日自动执行'}</h3><div className="mt-3 space-y-1 text-sm text-gray-600 dark:text-gray-300"><p>计划：{draftName || '未命名批量任务'}</p><p>有效任务：{rows.length} 行；目标 {plan.targetCount} 张；冗余后 {plan.plannedCount} 张。</p><p>执行方式：{pendingExecution === 'immediate' ? `立即提交首日 ${plan.days[0]?.plannedCount ?? 0} 张，后续日期保留在队列中。` : `${startDate} 起按日提交，应用必须保持运行。`}</p><p>每日上限：{dailyLimit} 张；预计 {plan.days.length} 天。</p><p>API：{getAgentImageApiProfile(settings).name} / {getAgentImageApiProfile(settings).model}；最大并发 {getAgentImageApiProfile(settings).maxConcurrent}。</p><p>输出目录：{outputRoot}</p></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setPendingExecution(null)} className="rounded-lg px-3 py-2 text-sm text-gray-600 dark:text-gray-300">返回修改</button><button type="button" onClick={confirmExecution} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white">确认并创建队列</button></div></div>
       </div>}
     </div>
   )

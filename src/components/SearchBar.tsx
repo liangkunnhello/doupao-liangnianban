@@ -27,6 +27,7 @@ export default function SearchBar() {
     >
       <Toolbar label="画廊筛选操作" className="flex-shrink-0 z-20">
         <IconButton
+          size="lg"
           onClick={handleFavoriteClick}
           aria-label={filterFavorite ? '退出收藏夹视图' : '打开收藏夹'}
           aria-pressed={filterFavorite}
@@ -37,6 +38,7 @@ export default function SearchBar() {
         />
         {filterFavorite && (
           <IconButton
+            size="lg"
             onClick={openManageCollectionsModal}
             aria-label="管理收藏夹"
             className="gallery-toolbar__icon"
@@ -60,6 +62,7 @@ export default function SearchBar() {
         </div>
         {hasFailedTasks && (
           <IconButton
+            size="lg"
             onClick={clearFailedTasks}
             aria-label="清除失败记录"
             className="gallery-toolbar__icon gallery-toolbar__icon--danger"
@@ -68,13 +71,19 @@ export default function SearchBar() {
           />
         )}
       </Toolbar>
-      <div className="relative z-10 min-w-0 flex-1">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-wrap items-center gap-3">
+        <div className="min-w-[12rem] flex-1">
         <SearchField
           label="搜索任务"
           value={searchQuery}
           onChange={setSearchQuery}
           onClear={() => setSearchQuery('')}
           placeholder="搜索提示词、参数..."
+        />
+        </div>
+        <div
+          id="gallery-layout-controls"
+          className="gallery-layout-controls ml-auto flex min-w-0 items-center empty:hidden max-xl:ml-0 max-xl:w-full"
         />
       </div>
     </div>

@@ -1,13 +1,36 @@
-import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeMultipleTasks, removeTask, rerunSopBatchTasks } from '../store'
-import { getTaskGridColumnCount, getTaskGridVirtualWindow } from '../lib/taskGridVirtualWindow'
+import { useDeferredValue, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { useStore, reuseConfig, editOutputs, removeMultipleTasks, removeTask, rerunSopBatchTasks } from '../store'
+import { getTaskGridVirtualWindow } from '../lib/taskGridVirtualWindow'
+import { getGalleryImageAspectRatio, getGalleryImageGridMetrics } from '../lib/galleryImageGrid'
+import { buildGalleryMasonryLayout, getVisibleGalleryMasonryItems } from '../lib/galleryMasonryLayout'
+import { filterGalleryTasks } from '../lib/galleryTaskFilter'
 import { groupSopBatchTasks, type TaskGridItem } from '../lib/sopBatchTaskGrouping'
 import type { TaskRecord } from '../types'
-import { ImageIcon, SearchXIcon as SearchX } from '../design-system/icons'
-import { EmptyState } from '../design-system'
+import { Grid2X2Icon, ImageIcon, ListChecksIcon, SearchXIcon as SearchX } from '../design-system/icons'
+import { EmptyState, SegmentedControl } from '../design-system'
 import TaskCard from './TaskCard'
 import SopBatchTaskCard from './SopBatchTaskCard'
 import SopBatchDetailModal from './SopBatchDetailModal'
+import GalleryImageTile, { buildGalleryImageItems } from './GalleryImageTile'
+
+const GALLERY_COLUMNS_STORAGE_KEY = 'doupao.gallery-columns'
+const MIN_GALLERY_COLUMNS = 3
+const MAX_GALLERY_COLUMNS = 6
+const DEFAULT_GALLERY_COLUMNS = 4
+const GALLERY_IMAGE_GAP = 12
+const GALLERY_TASK_CARD_GAP = 16
+const TASK_CARD_ROW_HEIGHT = 192
+const GALLERY_MASONRY_SCROLL_STEP = 120
+
+function getInitialGalleryColumns() {
+  const defaultValue = DEFAULT_GALLERY_COLUMNS
+  if (typeof window === 'undefined') return defaultValue
+  const value = Number(window.localStorage.getItem(GALLERY_COLUMNS_STORAGE_KEY))
+  return Number.isFinite(value)
+    ? Math.min(MAX_GALLERY_COLUMNS, Math.max(MIN_GALLERY_COLUMNS, Math.round(value)))
+    : defaultValue
+}
 
 export default function TaskGrid() {
   const activeTabId = useStore((s) => s.activeWorkspaceTabId)
@@ -30,15 +53,27 @@ export default function TaskGrid() {
   const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds])
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
+  const galleryViewMode = useStore((s) => s.galleryViewMode)
+  const setGalleryViewMode = useStore((s) => s.setGalleryViewMode)
+  const galleryNavigateTaskId = useStore((s) => s.galleryNavigateTaskId)
+  const setGalleryNavigateTaskId = useStore((s) => s.setGalleryNavigateTaskId)
+  const setGalleryActiveTaskId = useStore((s) => s.setGalleryActiveTaskId)
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState(() => ({
-    scrollY: typeof window === 'undefined' ? 0 : window.scrollY,
     height: typeof window === 'undefined' ? 800 : window.innerHeight,
     width: typeof window === 'undefined' ? 1_024 : window.innerWidth,
   }))
+  const [scrollTop, setScrollTop] = useState(0)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
   const [batchDetail, setBatchDetail] = useState<{ sopName: string; tasks: TaskRecord[] } | null>(null)
+  const [galleryColumns, setGalleryColumns] = useState(getInitialGalleryColumns)
+  const [gridWidth, setGridWidth] = useState(0)
+  const [imageAspectRatios, setImageAspectRatios] = useState<Record<string, number>>({})
+  const [toolbarControlsTarget, setToolbarControlsTarget] = useState<HTMLElement | null>(null)
+  const gridPageTopRef = useRef(0)
+  const activeRowHeightRef = useRef(TASK_CARD_ROW_HEIGHT)
+  const scrollRowRef = useRef(-1)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
   const hasDragged = useRef(false)
@@ -50,53 +85,120 @@ export default function TaskGrid() {
   const startedOnCard = useRef(false)
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
+  const attachDragInteractionListenersRef = useRef<() => void>(() => {})
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-  const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = deferredSearchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite) {
-        if (!t.isFavorite) return false
-        if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t).includes(activeFavoriteCollectionId)) return false
-      } else {
-        // 在普通生图界面（非收藏夹模式下），不显示已收藏的专用收藏卡片
-        if (t.isFavorite) return false
-      }
-      
-      if (filterStatus !== 'all') {
-        if (filterStatus === 'error') {
-          if (t.status !== 'error' && !(t.status === 'done' && t.batchItemStatuses?.some((s) => s === 'error'))) return false
-        } else {
-          if (t.status !== filterStatus) return false
-        }
-      }
-      
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      const errorStr = t.error ? t.error.toLowerCase() : ''
-      const batchErrorStr = t.batchItemErrors?.map((e) => e.error.toLowerCase()).join(' ') ?? ''
-      return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q) || batchErrorStr.includes(q)
-    })
-  }, [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  const filteredTasks = useMemo(() => filterGalleryTasks({
+    tasks,
+    query: deferredSearchQuery,
+    filterStatus,
+    filterFavorite,
+    activeFavoriteCollectionId,
+  }), [tasks, deferredSearchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
   const gridItems = useMemo<TaskGridItem[]>(() => (
     filterFavorite
       ? filteredTasks.map((task) => ({ kind: 'task' as const, id: task.id, createdAt: task.createdAt, task }))
       : groupSopBatchTasks(filteredTasks)
   ), [filteredTasks, filterFavorite])
+  const galleryImageItems = useMemo(() => buildGalleryImageItems(filteredTasks), [filteredTasks])
+
+  useEffect(() => {
+    window.localStorage.setItem(GALLERY_COLUMNS_STORAGE_KEY, String(galleryColumns))
+  }, [galleryColumns])
+
+  useEffect(() => {
+    setToolbarControlsTarget(document.getElementById('gallery-layout-controls'))
+  }, [])
+
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+
+    const updateGridMetrics = () => {
+      gridPageTopRef.current = root.getBoundingClientRect().top + window.scrollY
+      const nextWidth = root.clientWidth
+      setGridWidth((current) => current === nextWidth ? current : nextWidth)
+      const nextScrollTop = Math.max(0, window.scrollY - gridPageTopRef.current)
+      scrollRowRef.current = -1
+      setScrollTop((current) => Math.abs(current - nextScrollTop) < 1 ? current : nextScrollTop)
+    }
+
+    updateGridMetrics()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateGridMetrics)
+      return () => window.removeEventListener('resize', updateGridMetrics)
+    }
+    const observer = new ResizeObserver(updateGridMetrics)
+    observer.observe(root)
+    window.addEventListener('resize', updateGridMetrics)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateGridMetrics)
+    }
+  }, [galleryViewMode, gridItems.length, galleryImageItems.length])
+  const gridContentWidth = gridWidth || viewport.width
+  const { columns: taskColumns } = getGalleryImageGridMetrics(
+    gridContentWidth,
+    galleryColumns,
+    GALLERY_TASK_CARD_GAP,
+  )
+  const virtualWindow = getTaskGridVirtualWindow({
+    itemCount: gridItems.length,
+    columns: taskColumns,
+    rowHeight: TASK_CARD_ROW_HEIGHT,
+    scrollTop,
+    viewportHeight: viewport.height,
+    overscanRows: 3,
+  })
+  const visibleItems = gridItems.slice(virtualWindow.start, virtualWindow.end)
+  const { columns: imageColumns, tileSize: imageTileSize } = getGalleryImageGridMetrics(
+    gridContentWidth,
+    galleryColumns,
+    GALLERY_IMAGE_GAP,
+  )
+  const galleryMasonryLayout = useMemo(() => buildGalleryMasonryLayout({
+    aspectRatios: galleryImageItems.map((item) => (
+      imageAspectRatios[item.imageId] ?? getGalleryImageAspectRatio(
+        item.task.actualParamsByImage?.[item.imageId]?.size ?? item.task.actualParams?.size ?? item.task.params.size,
+      )
+    )),
+    columnWidth: imageTileSize,
+    columns: imageColumns,
+    gap: GALLERY_IMAGE_GAP,
+  }), [galleryImageItems, imageAspectRatios, imageColumns, imageTileSize])
+  const visibleMasonryItems = useMemo(() => getVisibleGalleryMasonryItems(
+    galleryMasonryLayout,
+    scrollTop,
+    viewport.height,
+  ), [galleryMasonryLayout, scrollTop, viewport.height])
+  const firstVisibleImageTaskId = useMemo(() => {
+    const first = visibleMasonryItems.reduce<typeof visibleMasonryItems[number] | null>((current, item) => (
+      !current || item.top < current.top || (item.top === current.top && item.left < current.left) ? item : current
+    ), null)
+    return first ? galleryImageItems[first.index]?.task.id ?? null : null
+  }, [galleryImageItems, visibleMasonryItems])
+
+  activeRowHeightRef.current = galleryViewMode === 'images' ? GALLERY_MASONRY_SCROLL_STEP : TASK_CARD_ROW_HEIGHT
+
   useEffect(() => {
     let frame = 0
     const updateViewport = () => {
       if (frame) return
       frame = window.requestAnimationFrame(() => {
         frame = 0
-        setViewport({
-          scrollY: window.scrollY,
-          height: window.innerHeight,
-          width: window.innerWidth,
-        })
+        const nextHeight = window.innerHeight
+        const nextWidth = window.innerWidth
+        setViewport((current) => (
+          current.height === nextHeight && current.width === nextWidth
+            ? current
+            : { height: nextHeight, width: nextWidth }
+        ))
+
+        const nextScrollTop = Math.max(0, window.scrollY - gridPageTopRef.current)
+        const nextRow = Math.floor(nextScrollTop / Math.max(1, activeRowHeightRef.current))
+        if (nextRow === scrollRowRef.current) return
+        scrollRowRef.current = nextRow
+        setScrollTop((current) => Math.abs(current - nextScrollTop) < 1 ? current : nextScrollTop)
       })
     }
     window.addEventListener('scroll', updateViewport, { passive: true })
@@ -109,19 +211,35 @@ export default function TaskGrid() {
     }
   }, [])
 
-  const columns = getTaskGridColumnCount(viewport.width)
-  const gridPageTop = rootRef.current
-    ? rootRef.current.getBoundingClientRect().top + viewport.scrollY
-    : viewport.scrollY
-  const virtualWindow = getTaskGridVirtualWindow({
-    itemCount: gridItems.length,
-    columns,
-    rowHeight: 192,
-    scrollTop: Math.max(0, viewport.scrollY - gridPageTop),
-    viewportHeight: viewport.height,
-    overscanRows: 3,
-  })
-  const visibleItems = gridItems.slice(virtualWindow.start, virtualWindow.end)
+  useEffect(() => {
+    setGalleryActiveTaskId(galleryViewMode === 'images' ? firstVisibleImageTaskId : null)
+  }, [firstVisibleImageTaskId, galleryViewMode, setGalleryActiveTaskId])
+
+  useEffect(() => {
+    if (galleryViewMode !== 'images' || !galleryNavigateTaskId) return
+    const imageIndex = galleryImageItems.findIndex((item) => item.task.id === galleryNavigateTaskId)
+    if (imageIndex < 0) {
+      setGalleryNavigateTaskId(null)
+      return
+    }
+
+    const freshGridTop = rootRef.current
+      ? rootRef.current.getBoundingClientRect().top + window.scrollY
+      : gridPageTopRef.current
+    const headerHeight = document.querySelector<HTMLElement>('header[data-no-drag-select]')?.getBoundingClientRect().height ?? 0
+    const targetTop = freshGridTop + galleryMasonryLayout.items[imageIndex].top - headerHeight - 12
+    window.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    })
+    setGalleryNavigateTaskId(null)
+  }, [
+    galleryImageItems,
+    galleryNavigateTaskId,
+    galleryViewMode,
+    galleryMasonryLayout,
+    setGalleryNavigateTaskId,
+  ])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -156,6 +274,15 @@ export default function TaskGrid() {
     })
   }
 
+  const selectImageTileTask = (taskId: string, additive: boolean) => {
+    setSelectedTaskIds((current) => {
+      if (!additive) return current.length === 1 && current[0] === taskId ? current : [taskId]
+      return current.includes(taskId)
+        ? current.filter((id) => id !== taskId)
+        : [...current, taskId]
+    })
+  }
+
   const getPagePoint = (clientX: number, clientY: number) => ({
     pageX: clientX + window.scrollX,
     pageY: clientY + window.scrollY,
@@ -180,6 +307,7 @@ export default function TaskGrid() {
       currentPageX: point.pageX,
       currentPageY: point.pageY,
     })
+    attachDragInteractionListenersRef.current()
   }
 
   const updateSelectionFromPoint = (pageX: number, pageY: number) => {
@@ -220,6 +348,15 @@ export default function TaskGrid() {
   }
 
   useEffect(() => {
+    let dragInteractionListenersAttached = false
+
+    const detachDragInteractionListeners = () => {
+      if (!dragInteractionListenersAttached) return
+      document.removeEventListener('wheel', handleDocumentWheel, true)
+      window.removeEventListener('scroll', handleDocumentScroll, true)
+      dragInteractionListenersAttached = false
+    }
+
     const stopDragScroll = () => {
       if (dragScrollIntervalRef.current) {
         clearInterval(dragScrollIntervalRef.current)
@@ -248,6 +385,7 @@ export default function TaskGrid() {
       if (isDragging.current && suppressClick && hasDragged.current) {
         suppressClickUntil.current = Date.now() + 250
       }
+      detachDragInteractionListeners()
       stopDragScroll()
       isDragging.current = false
       dragStart.current = null
@@ -339,103 +477,202 @@ export default function TaskGrid() {
       endSelection(true, true)
     }
 
+    const attachDragInteractionListeners = () => {
+      if (dragInteractionListenersAttached) return
+      document.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
+      window.addEventListener('scroll', handleDocumentScroll, true)
+      dragInteractionListenersAttached = true
+    }
+
+    attachDragInteractionListenersRef.current = attachDragInteractionListeners
     document.addEventListener('mousedown', handleDocumentMouseDown, true)
     document.addEventListener('mousemove', handleDocumentMouseMove, true)
     document.addEventListener('mouseup', handleDocumentMouseUp, true)
-    document.addEventListener('wheel', handleDocumentWheel, { capture: true, passive: false })
-    window.addEventListener('scroll', handleDocumentScroll, true)
     return () => {
+      attachDragInteractionListenersRef.current = () => {}
+      detachDragInteractionListeners()
       stopDragScroll()
       document.removeEventListener('mousedown', handleDocumentMouseDown, true)
       document.removeEventListener('mousemove', handleDocumentMouseMove, true)
       document.removeEventListener('mouseup', handleDocumentMouseUp, true)
-      document.removeEventListener('wheel', handleDocumentWheel, true)
-      window.removeEventListener('scroll', handleDocumentScroll, true)
     }
   }, [clearSelection, isMac])
 
-  if (!gridItems.length) {
-    return (
-      <EmptyState
-        icon={searchQuery || filterFavorite ? <SearchX size={22} /> : <ImageIcon size={22} />}
-        title={searchQuery || filterFavorite ? '没有找到匹配的任务' : '从第一张图片开始'}
-        description={
-          searchQuery || filterFavorite
-            ? '尝试调整搜索词或筛选条件。'
-            : '在下方输入提示词，配置尺寸与质量后生成图片。'
-        }
-      />
-    )
-  }
+  const galleryLayoutControls = (
+    <div data-no-drag-select className="flex min-w-0 flex-wrap items-center justify-end gap-3 text-xs max-xl:justify-start">
+        <SegmentedControl
+          aria-label="画廊显示模式"
+          value={galleryViewMode}
+          onValueChange={setGalleryViewMode}
+          size="sm"
+          className="h-10"
+          options={[
+            {
+              value: 'tasks',
+              label: <span className="flex items-center gap-1.5"><ListChecksIcon size={14} />任务卡片</span>,
+            },
+            {
+              value: 'images',
+              label: <span className="flex items-center gap-1.5"><Grid2X2Icon size={14} />图片平铺</span>,
+            },
+          ]}
+        />
+
+        <span className="text-xs tabular-nums text-ds-muted">
+          {galleryViewMode === 'tasks' ? `${filteredTasks.length} 个任务` : `${galleryImageItems.length} 张图片`}
+        </span>
+
+        <SegmentedControl
+          aria-label="每行显示数量"
+          value={String(galleryColumns)}
+          onValueChange={(value) => setGalleryColumns(Number(value))}
+          options={['3', '4', '5', '6']}
+          size="sm"
+          className="h-10 shrink-0"
+        />
+
+    </div>
+  )
 
   return (
-    <div 
-      ref={rootRef}
-      data-task-grid-root
-      className="gallery-grid-shell relative min-h-[50vh]"
-    >
-      <div style={{ height: virtualWindow.totalHeight + 40 }}>
-        <div
-          ref={gridRef}
-          className="gallery-grid absolute left-0 right-0 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          style={{ top: virtualWindow.offsetTop }}
-        >
-          {visibleItems.map((item) => item.kind === 'task' ? (
-            <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.task.id}>
-              <TaskCard
-                task={item.task}
-                onClick={(e) => {
-                  if (Date.now() < suppressClickUntil.current) {
-                    e.preventDefault()
-                    return
-                  }
-                  suppressClickUntil.current = 0
-                  const isCtrl = isMac ? e.metaKey : e.ctrlKey
-                  if (isCtrl) {
-                    useStore.getState().toggleTaskSelection(item.task.id)
-                    return
-                  }
+    <>
+      {toolbarControlsTarget && createPortal(galleryLayoutControls, toolbarControlsTarget)}
+      <div className="gallery-grid-shell">
+      {galleryViewMode === 'tasks' && !gridItems.length && (
+        <EmptyState
+          icon={searchQuery || filterFavorite ? <SearchX size={22} /> : <ImageIcon size={22} />}
+          title={searchQuery || filterFavorite ? '没有找到匹配的任务' : '从第一张图片开始'}
+          description={
+            searchQuery || filterFavorite
+              ? '尝试调整搜索词或筛选条件。'
+              : '在下方输入提示词，配置尺寸与质量后生成图片。'
+          }
+        />
+      )}
 
-                  setDetailTaskId(item.task.id)
-                }}
-                onReuse={() => reuseConfig(item.task)}
-                onEditOutputs={() => editOutputs(item.task)}
-                onDelete={() => handleDelete(item.task)}
-                isSelected={selectedTaskIdSet.has(item.task.id)}
-              />
+      {galleryViewMode === 'images' && !galleryImageItems.length && (
+        <EmptyState
+          icon={<ImageIcon size={22} />}
+          title={filteredTasks.length ? '当前任务还没有输出图片' : '没有找到可平铺的图片'}
+          description={
+            filteredTasks.length
+              ? '生成完成后，所有输出图片会自动出现在这里。'
+              : '尝试调整搜索词或筛选条件，或先生成一批图片。'
+          }
+        />
+      )}
+
+      {galleryViewMode === 'tasks' && gridItems.length > 0 && (
+        <div ref={rootRef} data-task-grid-root className="relative min-h-[50vh]">
+          <div style={{ height: virtualWindow.totalHeight + 40 }}>
+            <div
+              ref={gridRef}
+              className="gallery-grid absolute left-0 right-0 grid gap-4"
+              style={{
+                gridTemplateColumns: `repeat(${taskColumns}, minmax(0, 1fr))`,
+                top: virtualWindow.offsetTop,
+              }}
+            >
+              {visibleItems.map((item) => item.kind === 'task' ? (
+                <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.task.id}>
+                  <TaskCard
+                    task={item.task}
+                    onClick={(e) => {
+                      if (Date.now() < suppressClickUntil.current) {
+                        e.preventDefault()
+                        return
+                      }
+                      suppressClickUntil.current = 0
+                      const isCtrl = isMac ? e.metaKey : e.ctrlKey
+                      if (isCtrl) {
+                        useStore.getState().toggleTaskSelection(item.task.id)
+                        return
+                      }
+
+                      setDetailTaskId(item.task.id)
+                    }}
+                    onReuse={() => reuseConfig(item.task)}
+                    onEditOutputs={() => editOutputs(item.task)}
+                    onDelete={() => handleDelete(item.task)}
+                    isSelected={selectedTaskIdSet.has(item.task.id)}
+                  />
+                </div>
+              ) : (
+                <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.tasks[0]?.id} data-task-ids={item.tasks.map((task) => task.id).join(',')}>
+                  <SopBatchTaskCard
+                    sopName={item.sopName}
+                    tasks={item.tasks}
+                    summary={item.summary}
+                    isSelected={item.tasks.length > 0 && item.tasks.every((task) => selectedTaskIdSet.has(task.id))}
+                    onClick={(event) => {
+                      if (Date.now() < suppressClickUntil.current) {
+                        event.preventDefault()
+                        return
+                      }
+                      suppressClickUntil.current = 0
+                      const isCtrl = isMac ? event.metaKey : event.ctrlKey
+                      if (isCtrl) {
+                        toggleBatchSelection(item.tasks)
+                        return
+                      }
+                      setBatchDetail({ sopName: item.sopName, tasks: item.tasks })
+                    }}
+                    onOpenBatch={() => setBatchDetail({ sopName: item.sopName, tasks: item.tasks })}
+                    onOpenImage={(imageId) => setLightboxImageId(imageId, item.tasks.flatMap((task) => task.outputImages))}
+                    onRerun={() => void rerunSopBatchTasks(item.tasks)}
+                    onDelete={() => handleDeleteBatch(item.tasks)}
+                  />
+                </div>
+              ))}
             </div>
-          ) : (
-            <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.tasks[0]?.id} data-task-ids={item.tasks.map((task) => task.id).join(',')}>
-              <SopBatchTaskCard
-                sopName={item.sopName}
-                tasks={item.tasks}
-                summary={item.summary}
-                isSelected={item.tasks.length > 0 && item.tasks.every((task) => selectedTaskIdSet.has(task.id))}
-                onClick={(event) => {
-                  if (Date.now() < suppressClickUntil.current) {
-                    event.preventDefault()
-                    return
-                  }
-                  suppressClickUntil.current = 0
-                  const isCtrl = isMac ? event.metaKey : event.ctrlKey
-                  if (isCtrl) {
-                    toggleBatchSelection(item.tasks)
-                    return
-                  }
-                  setBatchDetail({ sopName: item.sopName, tasks: item.tasks })
-                }}
-                onOpenBatch={() => setBatchDetail({ sopName: item.sopName, tasks: item.tasks })}
-                onOpenImage={(imageId) => setLightboxImageId(imageId, item.tasks.flatMap((task) => task.outputImages))}
-                onRerun={() => void rerunSopBatchTasks(item.tasks)}
-                onDelete={() => handleDeleteBatch(item.tasks)}
-              />
-            </div>
-          ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {galleryViewMode === 'images' && galleryImageItems.length > 0 && (
+        <div ref={rootRef} data-task-grid-root className="relative min-h-[50vh]">
+          <div style={{ height: galleryMasonryLayout.totalHeight }}>
+            <div
+              ref={gridRef}
+              className="absolute inset-0"
+            >
+              {visibleMasonryItems.map((layoutItem) => {
+                const item = galleryImageItems[layoutItem.index]
+                return (
+                <GalleryImageTile
+                  key={item.id}
+                  item={item}
+                  selected={selectedTaskIdSet.has(item.task.id)}
+                  style={{
+                    height: layoutItem.height,
+                    left: layoutItem.left,
+                    top: layoutItem.top,
+                    width: layoutItem.width,
+                  }}
+                  onAspectRatioChange={(aspectRatio) => {
+                    setImageAspectRatios((current) => (
+                      Math.abs((current[item.imageId] ?? 0) - aspectRatio) < 0.001
+                        ? current
+                        : { ...current, [item.imageId]: aspectRatio }
+                    ))
+                  }}
+                  onSelect={(additive) => {
+                    if (Date.now() < suppressClickUntil.current) return
+                    suppressClickUntil.current = 0
+                    selectImageTileTask(item.task.id, additive)
+                  }}
+                  onOpenDetail={() => setDetailTaskId(item.task.id, { imageId: item.imageId })}
+                />
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[var(--ds-z-dropdown)]"
+          className="pointer-events-none fixed z-[var(--ds-z-dropdown)] border border-ds-selection-border bg-ds-selection/70"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
             top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
@@ -444,12 +681,13 @@ export default function TaskGrid() {
           }}
         />
       )}
-      {batchDetail && <SopBatchDetailModal
+      {galleryViewMode === 'tasks' && batchDetail && <SopBatchDetailModal
         sopName={batchDetail.sopName}
         tasks={batchDetail.tasks}
         onClose={() => setBatchDetail(null)}
         onOpenImage={(imageId) => setLightboxImageId(imageId, batchDetail.tasks.flatMap((task) => task.outputImages))}
       />}
-    </div>
+      </div>
+    </>
   )
 }

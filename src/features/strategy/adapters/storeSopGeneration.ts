@@ -13,27 +13,33 @@ import {
   buildSopPromptBatchRequest,
   generateSopPromptBatches,
   parseSopPromptBatchResponse,
+  SOP_PROMPT_GENERATOR_INSTRUCTION,
   type SopPromptBatchContext,
 } from '../sopPromptBatch'
 import type { SopLibraryItem } from '../types'
 
-const SOP_PROMPT_TEXT_FORMAT = {
-  type: 'json_schema',
-  name: 'sop_prompt_batch',
-  strict: true,
-  schema: {
-    type: 'object',
-    properties: {
-      prompts: {
-        type: 'array',
-        description: '彼此不同、可直接用于图片生成模型的完整中文提示词',
-        items: { type: 'string' },
+function buildSopPromptTextFormat(quantity: number) {
+  const count = Math.max(1, Math.trunc(quantity))
+  return {
+    type: 'json_schema',
+    name: 'sop_prompt_batch',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        prompts: {
+          type: 'array',
+          description: `严格包含 ${count} 条彼此不同、可直接用于图片生成模型的完整中文提示词`,
+          minItems: count,
+          maxItems: count,
+          items: { type: 'string' },
+        },
       },
+      required: ['prompts'],
+      additionalProperties: false,
     },
-    required: ['prompts'],
-    additionalProperties: false,
-  },
-} as const
+  } as const
+}
 
 export const generateSopFromStore: GenerateSop = async (
   description,
@@ -103,7 +109,10 @@ export async function generatePromptsFromSopStore(
   let structuredOutputEnabled = true
 
   return generateSopPromptBatches(quantity, async (batchQuantity, existingPrompts) => {
-    const requestText = buildSopPromptBatchRequest(sop, batchQuantity, brief, options.context)
+    const requestText = buildSopPromptBatchRequest(sop, batchQuantity, brief, {
+      ...options.context,
+      existingPrompts,
+    })
     const input = options.referenceImages?.length
       ? [{
         role: 'user',
@@ -123,10 +132,10 @@ export async function generatePromptsFromSopStore(
       cache: 'no-store',
       body: JSON.stringify({
         model: profile.model || settings.model,
-        instructions: '你是严格的中文绘图提示词批量生成器。必须完整执行用户提供的 SOP，并只返回指定 JSON。',
+        instructions: SOP_PROMPT_GENERATOR_INSTRUCTION,
         input,
         max_output_tokens: 12000,
-        ...(useStructuredOutput ? { text: { format: SOP_PROMPT_TEXT_FORMAT } } : {}),
+        ...(useStructuredOutput ? { text: { format: buildSopPromptTextFormat(batchQuantity) } } : {}),
       }),
     })
 

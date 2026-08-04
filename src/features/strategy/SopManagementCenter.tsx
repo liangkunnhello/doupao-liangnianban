@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
-import { Button, Inline } from '../../design-system'
+import { Button, Dialog, IconButton, Inline, ScrollArea } from '../../design-system'
 import {
   CheckCircleIcon as CheckCircle2,
   CheckIcon as Check,
@@ -9,6 +9,7 @@ import {
   FileImageIcon as FileImage,
   FolderPlusIcon as FolderPlus,
   LibraryIcon as Library,
+  ListChecksIcon as ListChecks,
   LoaderCircleIcon as LoaderCircle,
   MousePointerClickIcon as MousePointerClick,
   PencilIcon as Pencil,
@@ -20,10 +21,11 @@ import {
   TrashIcon as Trash2,
   XCircleIcon as XCircle,
 } from '../../design-system/icons'
-import type { TaskRecord } from '../../types'
+import type { SopBatchSnapshot, TaskRecord } from '../../types'
 import { MAX_SOP_REFERENCE_IMAGES, type GenerateSop, type SopReferenceImage } from './sopGeneration'
 import { sopLibraryId } from './sopLibrary'
 import { getSopCoverCandidates } from './sopCover'
+import { getAllSopBatchSnapshots } from '../../lib/db'
 import SopCoverImage from './SopCoverImage'
 import SopTextEditor from './SopTextEditor'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction } from './types'
@@ -43,6 +45,8 @@ type GenerationJob = {
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const SOP_MANAGEMENT_MODAL_MODE_STORAGE_KEY = 'doupao.sop-management-modal-mode'
+const SOP_AUTO_SAVE_DELAY_MS = 800
+type AutoSaveState = 'idle' | 'pending' | 'saved' | 'blocked'
 
 function readImage(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -119,6 +123,26 @@ export default function SopManagementCenter({
   const [job, setJob] = useState<GenerationJob>({ status: 'idle', message: '等待生成' })
   const [elapsed, setElapsed] = useState(0)
   const [coverPickerOpen, setCoverPickerOpen] = useState(false)
+  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false)
+  const [snapshotsForItem, setSnapshotsForItem] = useState<SopBatchSnapshot[]>([])
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false)
+  const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle')
+  const autoSaveTimerRef = useRef<number | null>(null)
+
+  const viewGeneratedPrompts = async (item: SopLibraryItem) => {
+    setSnapshotDialogOpen(true)
+    setSnapshotsLoading(true)
+    try {
+      const all = await getAllSopBatchSnapshots()
+      setSnapshotsForItem(
+        all
+          .filter((snapshot) => snapshot.sop.id === item.id)
+          .sort((a, b) => b.createdAt - a.createdAt),
+      )
+    } finally {
+      setSnapshotsLoading(false)
+    }
+  }
 
   const filteredItems = useMemo(() => {
     const groupedItems = selectedGroupId === 'favorites'
@@ -143,18 +167,23 @@ export default function SopManagementCenter({
     itemDraft.groupId !== persistedItem.groupId ||
     itemDraft.coverImageId !== persistedItem.coverImageId
   ))
+  const itemDraftValid = Boolean(itemDraft?.name.trim() && itemDraft?.content.trim())
   const coverCandidates = useMemo(
     () => getSopCoverCandidates(itemDraft?.id ?? '', tasks),
     [itemDraft?.id, tasks],
   )
   const itemApplied = Boolean(itemDraft && selectedSopId === itemDraft.id)
-  const itemEditorHint = itemDirty
-    ? itemApplied
-      ? '有未保存修改；保存后会更新当前已应用的 SOP。'
-      : '有未保存修改；保存后才能应用这个版本。'
-    : itemApplied
-      ? '当前 SOP 已应用。只有修改内容后才需要保存。'
-      : '无需编辑即可直接应用；只有修改内容后才需要保存。'
+  const itemEditorHint = autoSaveState === 'saved'
+    ? '修改已自动保存。'
+    : itemDirty
+      ? itemDraftValid
+        ? itemApplied
+          ? '修改将在 1 秒内自动保存，并更新当前使用的 SOP。'
+          : '修改将在 1 秒内自动保存。'
+        : '名称和正文不能为空，当前修改尚未保存。'
+      : itemApplied
+        ? '当前 SOP 已使用。'
+        : '无需编辑即可直接应用。'
 
   useEffect(() => {
     if (job.status !== 'running' || !job.startedAt) return
@@ -208,6 +237,37 @@ export default function SopManagementCenter({
     }
   }, [editingGroupId])
 
+  useEffect(() => {
+    setAutoSaveState('idle')
+  }, [selectedItemId])
+
+  useEffect(() => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+    if (!itemDirty || !itemDraft) return
+    if (!itemDraft.name.trim() || !itemDraft.content.trim()) {
+      setAutoSaveState('blocked')
+      return
+    }
+
+    const draftToSave = itemDraft
+    setAutoSaveState('pending')
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      onSaveItem({ ...draftToSave, updatedAt: Date.now() })
+      setAutoSaveState('saved')
+    }, SOP_AUTO_SAVE_DELAY_MS)
+
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current)
+        autoSaveTimerRef.current = null
+      }
+    }
+  }, [itemDirty, itemDraft, onSaveItem])
+
   const startRenameGroup = (group: SopGroup) => {
     setEditingGroupId(group.id)
     setEditingGroupName(group.name)
@@ -227,8 +287,23 @@ export default function SopManagementCenter({
 
   const cancelRenameGroup = () => setEditingGroupId(null)
 
+  const saveItemDraftNow = (draft = itemDraft) => {
+    if (!draft?.name.trim() || !draft.content.trim()) return false
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+    onSaveItem({ ...draft, updatedAt: Date.now() })
+    setAutoSaveState('idle')
+    return true
+  }
+
   const runAfterDraftConfirmation = (action: () => void) => {
     if (!itemDirty) {
+      action()
+      return
+    }
+    if (saveItemDraftNow()) {
       action()
       return
     }
@@ -246,36 +321,49 @@ export default function SopManagementCenter({
   }
 
   const selectItem = (item: SopLibraryItem) => {
+    if (item.id === selectedItemId) {
+      if (itemDirty) saveItemDraftNow()
+      setCoverPickerOpen(false)
+      return
+    }
     const select = () => {
       setSelectedItemId(item.id)
       setItemDraft(item)
       setCoverPickerOpen(false)
     }
-    if (item.id === selectedItemId) select()
-    else runAfterDraftConfirmation(select)
+    runAfterDraftConfirmation(select)
   }
 
   const openCoverPickerForItem = (item: SopLibraryItem) => {
+    if (item.id === selectedItemId) {
+      setCoverPickerOpen(true)
+      return
+    }
     const open = () => {
       setSelectedItemId(item.id)
       setItemDraft(item)
       setCoverPickerOpen(true)
     }
-    if (item.id === selectedItemId) open()
-    else runAfterDraftConfirmation(open)
+    runAfterDraftConfirmation(open)
   }
 
   const applyItem = (item: SopLibraryItem) => {
-    const applied = { ...item, lastUsedAt: Date.now() }
-    onSaveItem(applied)
-    onApply?.(applied)
+    runAfterDraftConfirmation(() => {
+      const source = item.id === selectedItemId && itemDraft ? itemDraft : item
+      const applied = { ...source, lastUsedAt: Date.now() }
+      onSaveItem(applied)
+      onApply?.(applied)
+      setSelectedItemId(applied.id)
+      setItemDraft(applied)
+      setCoverPickerOpen(false)
+    })
   }
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.key.toLocaleLowerCase() !== 's' || (!event.ctrlKey && !event.metaKey) || !itemDraft) return
       event.preventDefault()
-      if (itemDraft.name.trim() && itemDraft.content.trim()) onSaveItem({ ...itemDraft, updatedAt: Date.now() })
+      saveItemDraftNow()
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
@@ -505,7 +593,7 @@ export default function SopManagementCenter({
                         <SopCoverImage imageId={selectedItemId === item.id ? itemDraft?.coverImageId : item.coverImageId} alt={`${item.name} 封面`} fallbackText={item.name.trim().slice(0, 1) || 'S'} className="h-12 w-12 rounded-lg" />
                       </button>
                       <button type="button" onClick={() => selectItem(item)} title={item.name} className="sop-center-sop-main">
-                        <span className="block truncate text-sm font-semibold">{item.name}</span>
+                        <span className="block min-w-0 w-full truncate text-sm font-semibold">{item.name}</span>
                         <span className="sop-center-sop-params" aria-label="SOP 参数">
                           <span>{groupName}</span>
                           {selectedSopId === item.id && <span className="sop-center-sop-applied">使用中</span>}
@@ -535,7 +623,7 @@ export default function SopManagementCenter({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-[1_1_18rem]">
                     <h3 className="font-semibold">SOP 参数与正文</h3>
-                    <p className="sop-center-quiet-text mt-1 text-xs">{itemEditorHint} Ctrl/Cmd+S 可快捷保存。</p>
+                    <p className="sop-center-quiet-text mt-1 text-xs" aria-live="polite">{itemEditorHint} Ctrl/Cmd+S 可立即保存。</p>
                   </div>
                   <Inline className="max-w-full" justify="flex-end">
                     {onApply && <Button
@@ -545,15 +633,23 @@ export default function SopManagementCenter({
                       leadingIcon={<MousePointerClick size={15} />}
                       className={itemApplied ? 'text-[hsl(var(--ds-color-success))]' : undefined}
                     >
-                      {itemApplied ? '已应用' : '应用 SOP'}
+                      {itemApplied ? '已使用' : '应用 SOP'}
                     </Button>}
                     <Button
                       disabled={!itemDirty || !itemDraft.name.trim() || !itemDraft.content.trim()}
-                      onClick={() => onSaveItem({ ...itemDraft, updatedAt: Date.now() })}
+                      onClick={() => saveItemDraftNow()}
                       variant={itemDirty ? 'primary' : 'secondary'}
                       leadingIcon={<Save size={15} />}
                     >
                       保存修改
+                    </Button>
+                    <Button
+                      disabled={!persistedItem}
+                      onClick={() => persistedItem && viewGeneratedPrompts(persistedItem)}
+                      variant="secondary"
+                      leadingIcon={<ListChecks size={15} />}
+                    >
+                      生成提示词
                     </Button>
                     {onClear && selectedSopId && <Button onClick={onClear} variant="secondary">取消应用</Button>}
                   </Inline>
@@ -687,7 +783,7 @@ export default function SopManagementCenter({
               role="dialog"
               aria-modal="true"
               aria-labelledby="sop-cover-picker-title"
-              className="flex max-h-[min(76vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] shadow-2xl"
+              className="flex max-h-[min(76vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-[var(--ds-radius-xl)] border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] shadow-[var(--ds-shadow-lg)]"
             >
               <header className="flex items-start justify-between gap-4 border-b border-[hsl(var(--ds-color-border))] px-5 py-4">
                 <div className="min-w-0">
@@ -739,6 +835,53 @@ export default function SopManagementCenter({
           </div>
         )}
       </div>
+
+      <Dialog
+        open={snapshotDialogOpen}
+        onOpenChange={setSnapshotDialogOpen}
+        title={`「${persistedItem?.name ?? '当前 SOP'}」生成的提示词`}
+        size="lg"
+      >
+        <div className="flex min-h-[12rem] flex-col">
+          {snapshotsLoading ? (
+            <div className="flex flex-1 items-center justify-center gap-2 text-sm text-[hsl(var(--ds-color-text-muted))]">
+              <LoaderCircle size={16} className="animate-spin" />
+              加载中…
+            </div>
+          ) : snapshotsForItem.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-[hsl(var(--ds-color-border))] px-6 text-center">
+              <ListChecks size={24} className="text-[hsl(var(--ds-color-text-subtle))]" />
+              <p className="mt-3 text-sm font-medium">暂无生成记录</p>
+              <p className="sop-center-quiet-text mt-1 text-xs">该 SOP 尚未生成过提示词。</p>
+            </div>
+          ) : (
+            <ScrollArea maxHeight="60vh" className="space-y-5 pr-2">
+              {snapshotsForItem.map((snapshot) => (
+                <div key={snapshot.id} className="space-y-2 border-b border-[hsl(var(--ds-color-border))] pb-4 last:border-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="min-w-0 flex-1 truncate text-sm font-semibold">{snapshot.title || '未命名提示词集'}</h4>
+                    <span className="shrink-0 text-xs text-[hsl(var(--ds-color-text-muted))]">{new Date(snapshot.createdAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                  <ul className="space-y-2">
+                    {snapshot.prompts.filter((prompt) => !prompt.deleted).map((prompt, index) => (
+                      <li key={prompt.id} className="flex items-start gap-2 rounded-lg border border-[hsl(var(--ds-color-border))] p-2.5 text-sm">
+                        <span className="shrink-0 pt-0.5 text-xs text-[hsl(var(--ds-color-text-muted))]">{index + 1}.</span>
+                        <span className="flex-1 whitespace-pre-wrap leading-relaxed">{prompt.text}</span>
+                        <IconButton
+                          onClick={() => navigator.clipboard.writeText(prompt.text)}
+                          aria-label="复制提示词"
+                          icon={<Copy size={14} />}
+                          size="sm"
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </ScrollArea>
+          )}
+        </div>
+      </Dialog>
     </div>
   )
 }

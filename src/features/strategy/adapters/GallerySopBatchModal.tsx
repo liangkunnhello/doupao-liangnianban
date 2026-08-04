@@ -1,12 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   BookmarkIcon as Bookmark,
   BookOpenCheckIcon as BookOpenCheck,
   CheckCircleIcon as CheckCircle2,
+  CheckIcon as Check,
+  ChevronDownIcon as ChevronDown,
+  ChevronRightIcon as ChevronRight,
+  ClipboardPlusIcon as ClipboardPlus,
   CloseIcon as X,
   CopyIcon as Copy,
+  FolderIcon as Folder,
+  FolderOpenIcon as FolderOpen,
+  FolderPlusIcon as FolderPlus,
+  GripVerticalIcon as GripVertical,
   ImageIcon,
   LoaderCircleIcon as LoaderCircle,
+  MoreHorizontalIcon as MoreHorizontal,
   PauseIcon as Pause,
   PlayIcon as Play,
   PlusIcon as Plus,
@@ -17,14 +26,15 @@ import {
   TrashIcon as Trash2,
   XCircleIcon as XCircle,
 } from '../../../design-system/icons'
-import { ensureImageCached, submitTaskWithData, useStore } from '../../../store'
-import type { InputImage, SopBatchSnapshot } from '../../../types'
+import { ensureImageCached, ensureImageThumbnailCached, submitTaskWithData, subscribeImageThumbnail, useStore } from '../../../store'
+import type { InputImage, SopBatchSnapshot, TaskRecord } from '../../../types'
 import { deleteSopBatchSnapshot, getAllSopBatchSnapshots, getSopBatchSnapshot, putSopBatchSnapshot } from '../../../lib/db'
 import { useRequirementPrototype } from '../../requirementPrototype/store'
 import {
   allocateSopPromptCounts,
   getSopRunCounts,
   getSopTotalImageCount,
+  MAX_SOP_IMAGES_PER_PROMPT,
   normalizeSopPromptCandidates,
   selectSopPromptSources,
   SOP_HIGH_VOLUME_WARNING_THRESHOLD,
@@ -36,10 +46,47 @@ import { Switch, useDialogFocusTrap } from '../../../design-system'
 import { isModalBackdropEvent } from '../../../lib/modalBackdrop'
 import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../../../hooks/useLargeModalMode'
 import LargeModalToggle from '../../../components/LargeModalToggle'
+import {
+  duplicatePromptLibraryFolderTree,
+  flattenPromptLibraryFolders,
+  getFolderDescendantIds,
+  getFolderPath,
+  getSortedFolderChildren,
+  getUniqueFolderName,
+  LEGACY_PROMPT_GROUPS_STORAGE_KEY,
+  movePromptLibraryFolder,
+  movePromptLibraryFolderToParent,
+  normalizePromptLibraryFolders,
+  PROMPT_LIBRARY_FOLDERS_STORAGE_KEY,
+  type FolderDropPosition,
+  type PromptLibraryFolder,
+} from './promptLibraryTree'
+import { getPromptRunImageLinks, type PromptRunImageLink } from './promptRunImageLinks'
 
 type BatchStatus = 'idle' | 'generating' | 'paused' | 'ready' | 'submitting' | 'success' | 'error'
 type SourceStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
 const PROMPT_MANAGEMENT_MODAL_MODE_STORAGE_KEY = 'doupao.prompt-management-modal-mode'
+const ALL_PROMPT_GROUPS = 'all'
+const UNGROUPED_PROMPT_GROUP = 'ungrouped'
+const PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY = 'doupao.prompt-library-collapsed-folders.v1'
+
+type PromptGroupFilter = string
+type PromptLibraryItemRef = { type: 'folder' | 'run'; id: string }
+type PromptLibraryClipboard = {
+  mode: 'copy' | 'cut'
+  item: PromptLibraryItemRef
+}
+type PromptLibraryContextMenu = {
+  x: number
+  y: number
+  item: PromptLibraryItemRef | { type: 'background'; id: string }
+}
+type PromptLibraryDrag = PromptLibraryItemRef | null
+type PromptLibraryDropTarget = {
+  type: 'folder' | 'run' | 'root'
+  id: string
+  position: FolderDropPosition
+} | null
 
 type SopPromptSource = {
   id: string
@@ -94,6 +141,23 @@ function promptRunId() {
   return `sop-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function promptCollectionGroupId() {
+  return `prompt-group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function readPromptCollectionGroups(runs: SopBatchSnapshot[]) {
+  let parsed: unknown = []
+  try {
+    const stored = window.localStorage.getItem(PROMPT_LIBRARY_FOLDERS_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_PROMPT_GROUPS_STORAGE_KEY)
+      ?? '[]'
+    parsed = JSON.parse(stored)
+  } catch {
+    window.localStorage.removeItem(PROMPT_LIBRARY_FOLDERS_STORAGE_KEY)
+  }
+  return normalizePromptLibraryFolders(parsed, runs)
+}
+
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === 'AbortError'
 }
@@ -119,6 +183,9 @@ function getPromptRunTitle(run: SopBatchSnapshot) {
 export function getGallerySopPromptRunStorageKey(tabId: string | null) {
   return `doupao.gallery-sop-prompt-run.${tabId ?? 'default'}`
 }
+
+/** 静默自动启动被阻断的原因 */
+export type SopAutoStartBlockReason = 'existing-prompts'
 
 export type GallerySopRunStatus = {
   workspaceTabId: string | null
@@ -152,12 +219,39 @@ function SourceThumb({ source, fit = 'cover' }: { source: SopPromptSource; fit?:
   }, [source.dataUrl, source.imageId])
 
   if (source.kind === 'text') {
-    return <div className="flex h-full w-full items-center justify-center bg-violet-50 text-violet-600 dark:bg-violet-950/30 dark:text-violet-300"><BookOpenCheck size={18} /></div>
+    return <div className="flex h-full w-full items-center justify-center bg-ds-selection text-ds-primary"><BookOpenCheck size={18} /></div>
   }
 
   return dataUrl
     ? <img src={dataUrl} alt={source.label} className={`h-full w-full ${fit === 'contain' ? 'object-contain' : 'object-cover'}`} />
-    : <div className="flex h-full w-full items-center justify-center bg-gray-100 text-gray-400 dark:bg-gray-800"><ImageIcon size={18} /></div>
+    : <div className="flex h-full w-full items-center justify-center bg-ds-subtle text-ds-muted"><ImageIcon size={18} /></div>
+}
+
+function OutputImageThumb({ imageId, label }: { imageId: string; label: string }) {
+  const [thumbnailSrc, setThumbnailSrc] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const applyThumbnail = (thumbnail: { dataUrl: string }) => {
+      if (!cancelled) setThumbnailSrc(thumbnail.dataUrl)
+    }
+    const unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
+    void ensureImageThumbnailCached(imageId)
+      .then((thumbnail) => {
+        if (thumbnail) applyThumbnail(thumbnail)
+      })
+      .catch(() => {
+        if (!cancelled) setThumbnailSrc('')
+      })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [imageId])
+
+  return thumbnailSrc
+    ? <img src={thumbnailSrc} alt={label} className="h-full w-full object-cover" />
+    : <div className="flex h-full w-full items-center justify-center bg-ds-subtle text-ds-muted"><ImageIcon size={16} /></div>
 }
 
 export default function GallerySopBatchModal({
@@ -175,6 +269,7 @@ export default function GallerySopBatchModal({
   onBackground,
   onAutoStartConsumed,
   onStatusChange,
+  onNeedsAttention,
 }: {
   onClose: () => void
   initialSopId?: string
@@ -190,13 +285,20 @@ export default function GallerySopBatchModal({
   onBackground?: () => void
   onAutoStartConsumed?: () => void
   onStatusChange?: (status: GallerySopRunStatus) => void
+  /**
+   * 静默（后台）自动启动被阻断时回调，宿主需据此把弹窗显式呈现给用户，
+   * 避免用户按下发送后「什么都没发生」。
+   */
+  onNeedsAttention?: (reason: SopAutoStartBlockReason) => void
 }) {
   const { largeView, toggleLargeView } = useLargeModalMode(PROMPT_MANAGEMENT_MODAL_MODE_STORAGE_KEY)
   const items = useRequirementPrototype((state) => state.sopLibrary)
   const params = useStore((state) => state.params)
+  const adNegativeRuleProfiles = useStore((state) => state.settings.adNegativeRuleProfiles)
   const inputImages = useStore((state) => state.inputImages)
   const inputImageFolder = useStore((state) => state.inputImageFolder)
   const customOutputPath = useStore((state) => state.customOutputPath)
+  const tasks = useStore((state) => state.tasks)
   const activeWorkspaceTabId = useStore((state) => state.activeWorkspaceTabId)
   const workspaceTabs = useStore((state) => state.workspaceTabs)
   const showToast = useStore((state) => state.showToast)
@@ -204,6 +306,9 @@ export default function GallerySopBatchModal({
   const setInputImages = useStore((state) => state.setInputImages)
   const setInputImageFolder = useStore((state) => state.setInputImageFolder)
   const setParams = useStore((state) => state.setParams)
+  // 直接读取父级实时传入的当前 SOP：父级在每次切换 SOP 时都会传入最新的
+  // initialSopId（来自 gallerySopIdsByTab[tabId]），因此弹窗内"当前 SOP"会
+  // 立即同步刷新，不会停留在 mount 时锁定的旧 SOP（避免点击应用时回退到上一个 SOP）。
   const selectedSopId = initialSopId
   const [promptCount, setPromptCount] = useState(initialPromptCount)
   const [imagesPerPrompt, setImagesPerPrompt] = useState(initialImagesPerPrompt)
@@ -213,15 +318,41 @@ export default function GallerySopBatchModal({
   const [sources, setSources] = useState<SourceRun[]>([])
   const [prompts, setPrompts] = useState<PromptDraft[]>([])
   const [status, setStatus] = useState<BatchStatus>('idle')
-  const [statusMessage, setStatusMessage] = useState('提示词列表为空，可从输入区主按钮生成')
+  const [statusMessage, setStatusMessage] = useState('提示词列表为空，可新建或从 SOP 生成')
   const [error, setError] = useState('')
   const [activeRunId, setActiveRunId] = useState(promptRunId)
   const [recentRuns, setRecentRuns] = useState<SopBatchSnapshot[]>([])
   const [runTitle, setRunTitle] = useState('')
   const [librarySearch, setLibrarySearch] = useState('')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [promptGroups, setPromptGroups] = useState<PromptLibraryFolder[]>([])
+  const [selectedPromptGroupId, setSelectedPromptGroupId] = useState<PromptGroupFilter>(ALL_PROMPT_GROUPS)
+  const [editingPromptGroupId, setEditingPromptGroupId] = useState<string | 'new' | null>(null)
+  const [editingPromptGroupParentId, setEditingPromptGroupParentId] = useState<string | null>(null)
+  const [promptGroupNameDraft, setPromptGroupNameDraft] = useState('')
+  const [collapsedPromptGroupIds, setCollapsedPromptGroupIds] = useState<Set<string>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY) ?? '[]')
+      return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : [])
+    } catch {
+      return new Set()
+    }
+  })
+  const [selectedLibraryItem, setSelectedLibraryItem] = useState<PromptLibraryItemRef | null>(null)
+  const [libraryClipboard, setLibraryClipboard] = useState<PromptLibraryClipboard | null>(null)
+  const [libraryContextMenu, setLibraryContextMenu] = useState<PromptLibraryContextMenu | null>(null)
+  const [libraryDrag, setLibraryDrag] = useState<PromptLibraryDrag>(null)
+  const [libraryDropTarget, setLibraryDropTarget] = useState<PromptLibraryDropTarget>(null)
   const [restoreComplete, setRestoreComplete] = useState(false)
   const [previewSource, setPreviewSource] = useState<SopPromptSource | null>(null)
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set())
+  const [batchEditMode, setBatchEditMode] = useState<null | 'tags' | 'group'>(null)
+  const [batchTagDraft, setBatchTagDraft] = useState('')
+  const [batchGroupTarget, setBatchGroupTarget] = useState<string>('')
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const marqueeRef = useRef<{ x0: number; y0: number; additive: boolean } | null>(null)
+  const lastClickedRunIdRef = useRef<string | null>(null)
   const autoStartRef = useRef(false)
   const autoGenerateRef = useRef(initialAutoGenerate)
   const secondReferenceRef = useRef(initialSecondReference)
@@ -268,12 +399,39 @@ export default function GallerySopBatchModal({
     [allSources, brief, targetCount],
   )
   const visiblePrompts = prompts.filter((item) => !item.deleted && item.promptText.trim())
-  const aiCount = prompts.filter((item) => !item.deleted && item.origin === 'ai' && item.promptText.trim()).length
   const missingCount = Math.max(0, targetCount - visiblePrompts.length)
   const activeRun = recentRuns.find((run) => run.id === activeRunId)
+  const activePromptImageLinks = useMemo<PromptRunImageLink[]>(
+    () => activeRun ? getPromptRunImageLinks(activeRun, tasks) : [],
+    [activeRun, tasks],
+  )
+  const activePromptImageLinksByPromptId = useMemo(() => {
+    const linksByPromptId = new Map<string, PromptRunImageLink[]>()
+    activePromptImageLinks.forEach((link) => {
+      const current = linksByPromptId.get(link.promptId) ?? []
+      current.push(link)
+      linksByPromptId.set(link.promptId, current)
+    })
+    return linksByPromptId
+  }, [activePromptImageLinks])
+  const runImageSummaryById = useMemo(() => {
+    const runIds = new Set(recentRuns.map((run) => run.id))
+    const taskRunIds = new Map(recentRuns.flatMap((run) => (run.taskIds ?? []).map((taskId) => [taskId, run.id])))
+    const summaries = new Map<string, { count: number }>()
+    tasks.forEach((task) => {
+      const runId = task.sopBatch?.snapshotId ?? taskRunIds.get(task.id)
+      if (!runId || !runIds.has(runId) || !task.outputImages.length) return
+      const summary = summaries.get(runId) ?? { count: 0 }
+      summary.count += task.outputImages.length
+      summaries.set(runId, summary)
+    })
+    return summaries
+  }, [recentRuns, tasks])
+  const selectedPromptGroup = promptGroups.find((group) => group.id === selectedPromptGroupId)
+  const flatPromptGroups = useMemo(() => flattenPromptLibraryFolders(promptGroups), [promptGroups])
   const filteredRuns = useMemo(() => {
     const keyword = librarySearch.trim().toLocaleLowerCase()
-    return recentRuns.filter((run) => {
+    const runs = recentRuns.filter((run) => {
       if (favoritesOnly && !run.pinned) return false
       if (!keyword) return true
       return [
@@ -283,6 +441,9 @@ export default function GallerySopBatchModal({
         ...run.prompts.map((prompt) => prompt.text),
       ].some((value) => value.toLocaleLowerCase().includes(keyword))
     })
+    return runs.sort((left, right) =>
+      (left.promptOrder ?? Number.MAX_SAFE_INTEGER) - (right.promptOrder ?? Number.MAX_SAFE_INTEGER)
+      || getRunUpdatedAt(right) - getRunUpdatedAt(left))
   }, [favoritesOnly, librarySearch, recentRuns])
   const getPromptReferenceSources = (item: PromptDraft) => {
     const source = allSources.find((candidate) => candidate.id === item.sourceId)
@@ -349,7 +510,7 @@ export default function GallerySopBatchModal({
     setPrompts([])
     setStatus('idle')
     setError('')
-    setStatusMessage('提示词列表为空，可从输入区主按钮生成')
+    setStatusMessage('提示词列表为空，可新建或从 SOP 生成')
     writeRunPointer(
       nextRunId,
       [],
@@ -413,6 +574,12 @@ export default function GallerySopBatchModal({
       batchIds: patch.batchIds ?? previous?.batchIds ?? [],
       taskIds: patch.taskIds ?? previous?.taskIds ?? [],
       title: runTitle.trim() || previous?.title,
+      promptGroup: patch.promptGroup ?? previous?.promptGroup ?? (selectedPromptGroup
+        ? { id: selectedPromptGroup.id, name: selectedPromptGroup.name }
+        : undefined),
+      promptOrder: patch.promptOrder ?? previous?.promptOrder ?? getNextPromptOrder(
+        previous?.promptGroup?.id ?? selectedPromptGroup?.id ?? null,
+      ),
       sop: {
         id: snapshotSop.id,
         name: snapshotSop.name,
@@ -474,6 +641,7 @@ export default function GallerySopBatchModal({
 
   const applyPromptRun = async (run: SopBatchSnapshot, message: string, restoreGenerationContext = false) => {
     if (run.id !== activeRunIdRef.current) await flushPromptRunSnapshot()
+    setSelectedLibraryItem({ type: 'run', id: run.id })
     const sourceByImageId = new Map(run.referenceImageIds.map((imageId, index) => [
       imageId,
       {
@@ -561,6 +729,9 @@ export default function GallerySopBatchModal({
       const sortedRuns = allRuns
         .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || getRunUpdatedAt(b) - getRunUpdatedAt(a))
       setRecentRuns(sortedRuns)
+      const restoredGroups = readPromptCollectionGroups(sortedRuns)
+      setPromptGroups(restoredGroups)
+      window.localStorage.setItem(PROMPT_LIBRARY_FOLDERS_STORAGE_KEY, JSON.stringify(restoredGroups))
 
       let persisted: Partial<PersistedSopPromptRun> | null = null
       try {
@@ -637,7 +808,7 @@ export default function GallerySopBatchModal({
         setSources([])
         setPrompts([])
         setStatus('idle')
-        setStatusMessage('提示词列表为空，可从输入区主按钮生成')
+        setStatusMessage('提示词列表为空，可新建或从 SOP 生成')
         writeRunPointer(newRunId, [], autoGenerateRef.current, initialBrief, initialPromptCount, initialImagesPerPrompt)
       }
       if (active) setRestoreComplete(true)
@@ -655,7 +826,7 @@ export default function GallerySopBatchModal({
       generationAbortRef.current?.abort(new DOMException('SOP 已切换或工作台已关闭', 'AbortError'))
       generationAbortRef.current = null
     }
-  }, [promptRunStorageKey, selectedSopId])
+  }, [promptRunStorageKey, initialSopId])
 
   useEffect(() => () => {
     componentActiveRef.current = false
@@ -714,6 +885,486 @@ export default function GallerySopBatchModal({
     await toggleRunPinned(run)
   }
 
+  const persistPromptGroups = (nextGroups: PromptLibraryFolder[]) => {
+    setPromptGroups(nextGroups)
+    window.localStorage.setItem(PROMPT_LIBRARY_FOLDERS_STORAGE_KEY, JSON.stringify(nextGroups))
+    return nextGroups
+  }
+
+  const getNextPromptOrder = (folderId: string | null, runs = recentRuns) => {
+    const siblingOrders = runs
+      .filter((run) => (run.promptGroup?.id ?? null) === folderId)
+      .map((run) => run.promptOrder ?? -1)
+    return siblingOrders.length ? Math.max(...siblingOrders) + 1 : 0
+  }
+
+  const movePromptCollectionToGroup = async (
+    run: SopBatchSnapshot,
+    groupId: string,
+    resolvedGroup?: PromptLibraryFolder,
+    order?: number,
+  ) => {
+    if (run.id === activeRunIdRef.current) await flushPromptRunSnapshot()
+    const latest = await getSopBatchSnapshot(run.id) ?? run
+    const group = resolvedGroup ?? promptGroups.find((item) => item.id === groupId)
+    const updated: SopBatchSnapshot = {
+      ...latest,
+      promptGroup: group ? { id: group.id, name: group.name } : undefined,
+      promptOrder: order ?? getNextPromptOrder(group?.id ?? null),
+    }
+    await putSopBatchSnapshot(updated)
+    updateRecentRun(updated)
+    if (run.id === activeRunIdRef.current) {
+      if (
+        selectedPromptGroupId !== ALL_PROMPT_GROUPS
+        && selectedPromptGroupId !== UNGROUPED_PROMPT_GROUP
+        && selectedPromptGroupId === run.promptGroup?.id
+      ) {
+        setSelectedPromptGroupId(group?.id ?? UNGROUPED_PROMPT_GROUP)
+      }
+      setStatusMessage(group ? `已移动到文件夹「${group.name}」` : '已移至根目录')
+    }
+  }
+
+  const reorderPromptCollections = async (
+    sourceRunId: string,
+    targetRunId: string,
+    position: Exclude<FolderDropPosition, 'inside'>,
+  ) => {
+    if (sourceRunId === targetRunId) return
+    await flushPromptRunSnapshot()
+    const source = recentRuns.find((run) => run.id === sourceRunId)
+    const target = recentRuns.find((run) => run.id === targetRunId)
+    if (!source || !target || (source.promptGroup?.id ?? null) !== (target.promptGroup?.id ?? null)) return
+    const folderId = source.promptGroup?.id ?? null
+    const siblings = recentRuns
+      .filter((run) => (run.promptGroup?.id ?? null) === folderId && run.id !== sourceRunId)
+      .sort((left, right) =>
+        (left.promptOrder ?? Number.MAX_SAFE_INTEGER) - (right.promptOrder ?? Number.MAX_SAFE_INTEGER)
+        || getRunUpdatedAt(right) - getRunUpdatedAt(left))
+    const targetIndex = siblings.findIndex((run) => run.id === targetRunId)
+    if (targetIndex < 0) return
+    siblings.splice(targetIndex + (position === 'after' ? 1 : 0), 0, source)
+    const reordered = siblings.map((run, index) => ({ ...run, promptOrder: index }))
+    await Promise.all(reordered.map((run) => putSopBatchSnapshot(run)))
+    const byId = new Map(reordered.map((run) => [run.id, run]))
+    setRecentRuns((current) => current.map((run) => byId.get(run.id) ?? run))
+  }
+
+  const beginCreatePromptGroup = (parentId?: string | null) => {
+    const resolvedParentId = parentId === undefined ? selectedPromptGroup?.id ?? null : parentId
+    setEditingPromptGroupId('new')
+    setEditingPromptGroupParentId(resolvedParentId)
+    setPromptGroupNameDraft('')
+    if (resolvedParentId) {
+      setCollapsedPromptGroupIds((current) => {
+        const next = new Set(current)
+        next.delete(resolvedParentId)
+        return next
+      })
+    }
+  }
+
+  const beginRenamePromptGroup = (group: PromptLibraryFolder) => {
+    setEditingPromptGroupId(group.id)
+    setEditingPromptGroupParentId(group.parentId)
+    setPromptGroupNameDraft(group.name)
+  }
+
+  const cancelPromptGroupEdit = () => {
+    setEditingPromptGroupId(null)
+    setEditingPromptGroupParentId(null)
+    setPromptGroupNameDraft('')
+  }
+
+  const savePromptGroup = async () => {
+    const name = promptGroupNameDraft.trim()
+    if (!name) {
+      showToast('请输入文件夹名称', 'info')
+      return
+    }
+    const duplicate = promptGroups.some((group) =>
+      group.id !== editingPromptGroupId
+      && group.parentId === editingPromptGroupParentId
+      && group.name.localeCompare(name, 'zh-CN', { sensitivity: 'base' }) === 0)
+    if (duplicate) {
+      showToast('同一层级已存在同名文件夹', 'info')
+      return
+    }
+
+    if (editingPromptGroupId === 'new') {
+      const now = Date.now()
+      const group: PromptLibraryFolder = {
+        id: promptCollectionGroupId(),
+        name,
+        parentId: editingPromptGroupParentId,
+        order: getSortedFolderChildren(promptGroups, editingPromptGroupParentId).length,
+        createdAt: now,
+        updatedAt: now,
+      }
+      persistPromptGroups([...promptGroups, group])
+      setSelectedPromptGroupId(group.id)
+      setSelectedLibraryItem({ type: 'folder', id: group.id })
+      cancelPromptGroupEdit()
+      showToast(`已新建文件夹「${name}」`, 'success')
+      return
+    }
+
+    const current = promptGroups.find((group) => group.id === editingPromptGroupId)
+    if (!current) return
+    await flushPromptRunSnapshot()
+    const updatedGroup = { ...current, name, updatedAt: Date.now() }
+    persistPromptGroups(promptGroups.map((group) => group.id === current.id ? updatedGroup : group))
+    const updatedRuns = recentRuns.map((run) =>
+      run.promptGroup?.id === current.id
+        ? { ...run, promptGroup: { id: current.id, name } }
+        : run)
+    await Promise.all(updatedRuns
+      .filter((run, index) => run !== recentRuns[index])
+      .map((run) => putSopBatchSnapshot(run)))
+    setRecentRuns(updatedRuns)
+    cancelPromptGroupEdit()
+    showToast(`文件夹已重命名为「${name}」`, 'success')
+  }
+
+  const performDeletePromptGroup = async (group: PromptLibraryFolder) => {
+    await flushPromptRunSnapshot()
+    const parent = group.parentId ? promptGroups.find((folder) => folder.id === group.parentId) : undefined
+    const promotedChildren = getSortedFolderChildren(promptGroups, group.id)
+    const parentSiblingCount = getSortedFolderChildren(
+      promptGroups.filter((folder) => folder.id !== group.id && folder.parentId !== group.id),
+      group.parentId,
+    ).length
+    const nextGroups = promptGroups
+      .filter((item) => item.id !== group.id)
+      .map((item) => {
+        const promotedIndex = promotedChildren.findIndex((child) => child.id === item.id)
+        return promotedIndex < 0
+          ? item
+          : {
+              ...item,
+              parentId: group.parentId,
+              order: parentSiblingCount + promotedIndex,
+              updatedAt: Date.now(),
+            }
+      })
+    const nextRunOrder = getNextPromptOrder(group.parentId, recentRuns.filter((run) => run.promptGroup?.id !== group.id))
+    let promotedRunIndex = 0
+    const updatedRuns = recentRuns.map((run) => {
+      if (run.promptGroup?.id !== group.id) return run
+      const updated = {
+        ...run,
+        promptGroup: parent ? { id: parent.id, name: parent.name } : undefined,
+        promptOrder: nextRunOrder + promotedRunIndex,
+      }
+      promotedRunIndex += 1
+      return updated
+    })
+    await Promise.all(updatedRuns
+      .filter((run, index) => run !== recentRuns[index])
+      .map((run) => putSopBatchSnapshot(run)))
+    setRecentRuns(updatedRuns)
+    persistPromptGroups(nextGroups)
+    if (selectedPromptGroupId === group.id) {
+      setSelectedPromptGroupId(parent?.id ?? UNGROUPED_PROMPT_GROUP)
+    }
+    if (editingPromptGroupId === group.id) cancelPromptGroupEdit()
+    if (selectedLibraryItem?.type === 'folder' && selectedLibraryItem.id === group.id) setSelectedLibraryItem(null)
+    showToast(`已删除文件夹「${group.name}」，其中内容已移至上一级`, 'success')
+  }
+
+  const deletePromptGroup = (group: PromptLibraryFolder) => {
+    const directRunCount = recentRuns.filter((run) => run.promptGroup?.id === group.id).length
+    const childCount = promptGroups.filter((folder) => folder.parentId === group.id).length
+    setConfirmDialog({
+      title: '删除提示词文件夹？',
+      message: directRunCount || childCount
+        ? `「${group.name}」中的 ${childCount} 个子文件夹和 ${directRunCount} 个提示词集会移至上一级，不会被删除。`
+        : `将删除空文件夹「${group.name}」。`,
+      confirmText: '删除文件夹',
+      tone: 'danger',
+      action: () => void performDeletePromptGroup(group),
+    })
+  }
+
+  const togglePromptGroupCollapsed = (groupId: string) => {
+    setCollapsedPromptGroupIds((current) => {
+      const next = new Set(current)
+      if (next.has(groupId)) next.delete(groupId)
+      else next.add(groupId)
+      window.localStorage.setItem(PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
+
+  const duplicatePromptRunToFolder = async (
+    run: SopBatchSnapshot,
+    folderId: string | null,
+    openAfterCopy = false,
+  ) => {
+    if (run.id === activeRunIdRef.current) await flushPromptRunSnapshot()
+    const latest = await getSopBatchSnapshot(run.id) ?? run
+    const folder = folderId ? promptGroups.find((item) => item.id === folderId) : undefined
+    const now = Date.now()
+    const duplicated: SopBatchSnapshot = {
+      ...latest,
+      id: promptRunId(),
+      title: `${getPromptRunTitle(latest)} 副本`,
+      promptGroup: folder ? { id: folder.id, name: folder.name } : undefined,
+      promptOrder: getNextPromptOrder(folder?.id ?? null),
+      batchId: '',
+      batchIds: [],
+      taskIds: [],
+      createdAt: now,
+      updatedAt: now,
+      status: 'ready',
+      pinned: false,
+      prompts: latest.prompts.map((prompt) => ({ ...prompt, id: promptItemId(prompt.sourceId ?? 'text-to-image') })),
+    }
+    await putSopBatchSnapshot(duplicated)
+    updateRecentRun(duplicated)
+    if (openAfterCopy) {
+      setSelectedLibraryItem({ type: 'run', id: duplicated.id })
+      await applyPromptRun(duplicated, '已创建提示词集副本')
+    }
+    return duplicated
+  }
+
+  const copyOrCutLibraryItem = (mode: 'copy' | 'cut', item = selectedLibraryItem) => {
+    if (!item) {
+      showToast('请先选择文件夹或提示词集', 'info')
+      return
+    }
+    setLibraryClipboard({ mode, item })
+    setSelectedLibraryItem(item)
+    setLibraryContextMenu(null)
+    showToast(mode === 'copy' ? '已复制，可粘贴到其他文件夹' : '已剪切，可粘贴到其他文件夹', 'success')
+  }
+
+  const pasteLibraryItem = async (targetFolderId?: string | null) => {
+    if (!libraryClipboard) {
+      showToast('剪贴板中没有可粘贴的内容', 'info')
+      return
+    }
+    const destinationId = targetFolderId === undefined ? selectedPromptGroup?.id ?? null : targetFolderId
+    if (libraryClipboard.item.type === 'run') {
+      const run = recentRuns.find((item) => item.id === libraryClipboard.item.id)
+      if (!run) {
+        setLibraryClipboard(null)
+        return
+      }
+      if (libraryClipboard.mode === 'cut') {
+        await movePromptCollectionToGroup(run, destinationId ?? '')
+        setLibraryClipboard(null)
+        showToast('提示词集已移动', 'success')
+      } else {
+        await duplicatePromptRunToFolder(run, destinationId)
+        showToast('已粘贴提示词集副本', 'success')
+      }
+      return
+    }
+
+    const folder = promptGroups.find((item) => item.id === libraryClipboard.item.id)
+    if (!folder) {
+      setLibraryClipboard(null)
+      return
+    }
+    if (folder.id === destinationId || (destinationId && getFolderDescendantIds(promptGroups, folder.id).has(destinationId))) {
+      showToast('不能粘贴到自身或其子文件夹中', 'info')
+      return
+    }
+    if (libraryClipboard.mode === 'cut') {
+      const moved = movePromptLibraryFolderToParent(promptGroups, folder.id, destinationId)
+      persistPromptGroups(moved)
+      setLibraryClipboard(null)
+      setSelectedPromptGroupId(folder.id)
+      showToast('文件夹已移动', 'success')
+      return
+    }
+
+    const duplicated = duplicatePromptLibraryFolderTree(
+      promptGroups,
+      folder.id,
+      destinationId,
+      promptCollectionGroupId,
+    )
+    const copiedRuns = recentRuns
+      .filter((run) => run.promptGroup?.id && duplicated.idMap.has(run.promptGroup.id))
+      .map((run) => {
+        const copiedFolderId = duplicated.idMap.get(run.promptGroup!.id)!
+        const copiedFolder = duplicated.folders.find((item) => item.id === copiedFolderId)!
+        const now = Date.now()
+        return {
+          ...run,
+          id: promptRunId(),
+          title: getPromptRunTitle(run),
+          promptGroup: { id: copiedFolder.id, name: copiedFolder.name },
+          batchId: '',
+          batchIds: [],
+          taskIds: [],
+          createdAt: now,
+          updatedAt: now,
+          status: 'ready' as const,
+          pinned: false,
+          prompts: run.prompts.map((prompt) => ({
+            ...prompt,
+            id: promptItemId(prompt.sourceId ?? 'text-to-image'),
+          })),
+        }
+      })
+    await Promise.all(copiedRuns.map((run) => putSopBatchSnapshot(run)))
+    persistPromptGroups(duplicated.folders)
+    setRecentRuns((current) => [...copiedRuns, ...current])
+    const copiedRootId = duplicated.idMap.get(folder.id)
+    if (copiedRootId) setSelectedPromptGroupId(copiedRootId)
+    showToast(`已复制文件夹及其中 ${copiedRuns.length} 个提示词集`, 'success')
+  }
+
+  const openLibraryContextMenu = (
+    event: ReactMouseEvent,
+    item: PromptLibraryContextMenu['item'],
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (item.type !== 'background') setSelectedLibraryItem(item)
+    setLibraryContextMenu({ x: event.clientX, y: event.clientY, item })
+  }
+
+  const startLibraryDrag = (event: DragEvent, item: PromptLibraryItemRef) => {
+    if (running || editingPromptGroupId !== null) {
+      event.preventDefault()
+      return
+    }
+    setLibraryDrag(item)
+    setSelectedLibraryItem(item)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('application/x-doupao-prompt-library', JSON.stringify(item))
+    event.dataTransfer.setData('text/plain', item.id)
+  }
+
+  const finishLibraryDrag = () => {
+    setLibraryDrag(null)
+    setLibraryDropTarget(null)
+  }
+
+  const getFolderDropPosition = (event: DragEvent<HTMLElement>): FolderDropPosition => {
+    if (libraryDrag?.type === 'run') return 'inside'
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientY - bounds.top) / Math.max(bounds.height, 1)
+    if (ratio < 0.25) return 'before'
+    if (ratio > 0.75) return 'after'
+    return 'inside'
+  }
+
+  const dragOverPromptFolder = (event: DragEvent<HTMLElement>, folder: PromptLibraryFolder) => {
+    if (!libraryDrag) return
+    const position = getFolderDropPosition(event)
+    if (
+      libraryDrag.type === 'folder'
+      && (libraryDrag.id === folder.id
+        || (position === 'inside' && getFolderDescendantIds(promptGroups, libraryDrag.id).has(folder.id)))
+    ) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setLibraryDropTarget({ type: 'folder', id: folder.id, position })
+  }
+
+  const dropOnPromptFolder = async (
+    event: DragEvent<HTMLElement>,
+    folder: PromptLibraryFolder,
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const drag = libraryDrag
+    const position = libraryDropTarget?.type === 'folder' && libraryDropTarget.id === folder.id
+      ? libraryDropTarget.position
+      : 'inside'
+    finishLibraryDrag()
+    if (!drag) return
+    if (drag.type === 'folder') {
+      const moved = movePromptLibraryFolder(promptGroups, drag.id, folder.id, position)
+      if (moved === promptGroups) {
+        showToast('不能将文件夹移动到自身或其子文件夹中', 'info')
+        return
+      }
+      persistPromptGroups(moved)
+      if (position === 'inside') {
+        setCollapsedPromptGroupIds((current) => {
+          const next = new Set(current)
+          next.delete(folder.id)
+          window.localStorage.setItem(PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY, JSON.stringify([...next]))
+          return next
+        })
+      }
+      showToast(position === 'inside' ? `已移入「${folder.name}」` : '文件夹顺序已更新', 'success')
+      return
+    }
+    const run = recentRuns.find((item) => item.id === drag.id)
+    if (!run) return
+    await movePromptCollectionToGroup(run, folder.id, folder)
+    showToast(`已移入「${folder.name}」`, 'success')
+  }
+
+  const dragOverPromptRoot = (event: DragEvent<HTMLElement>) => {
+    if (!libraryDrag) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setLibraryDropTarget({ type: 'root', id: '', position: 'inside' })
+  }
+
+  const dropOnPromptRoot = async (event: DragEvent<HTMLElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const drag = libraryDrag
+    finishLibraryDrag()
+    if (!drag) return
+    if (drag.type === 'folder') {
+      persistPromptGroups(movePromptLibraryFolderToParent(promptGroups, drag.id, null))
+      showToast('文件夹已移至根目录', 'success')
+      return
+    }
+    const run = recentRuns.find((item) => item.id === drag.id)
+    if (run) {
+      await movePromptCollectionToGroup(run, '')
+      showToast('提示词集已移至根目录', 'success')
+    }
+  }
+
+  const dragOverPromptRun = (event: DragEvent<HTMLElement>, targetRun: SopBatchSnapshot) => {
+    if (
+      libraryDrag?.type !== 'run'
+      || libraryDrag.id === targetRun.id
+      || librarySearch.trim()
+      || favoritesOnly
+    ) return
+    const source = recentRuns.find((run) => run.id === libraryDrag.id)
+    if (!source || (source.promptGroup?.id ?? null) !== (targetRun.promptGroup?.id ?? null)) return
+    event.preventDefault()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const position = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+    setLibraryDropTarget({ type: 'run', id: targetRun.id, position })
+  }
+
+  const dropOnPromptRun = async (event: DragEvent<HTMLElement>, targetRun: SopBatchSnapshot) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const drag = libraryDrag
+    const position = libraryDropTarget?.type === 'run' && libraryDropTarget.id === targetRun.id
+      ? libraryDropTarget.position
+      : 'after'
+    finishLibraryDrag()
+    if (drag?.type === 'run') {
+      await reorderPromptCollections(drag.id, targetRun.id, position === 'before' ? 'before' : 'after')
+      showToast('提示词集顺序已更新', 'success')
+    }
+  }
+
+  const getPromptFolderRecursiveRunCount = (folderId: string) => {
+    const ids = getFolderDescendantIds(promptGroups, folderId)
+    ids.add(folderId)
+    return recentRuns.filter((run) => run.promptGroup?.id && ids.has(run.promptGroup.id)).length
+  }
+
   const performDeleteRun = async (run: SopBatchSnapshot) => {
     if (run.taskIds?.length || run.batchId) {
       showToast('该运行记录已关联生图任务，不能直接删除', 'info')
@@ -733,7 +1384,7 @@ export default function GallerySopBatchModal({
         setSources([])
         setPrompts([])
         setStatus('idle')
-        setStatusMessage('提示词仓库为空，可新建提示词集或从 SOP 生成')
+        setStatusMessage('提示词集为空，可新建或从 SOP 生成')
         writeRunPointer(newRunId, [])
       }
     }
@@ -751,6 +1402,161 @@ export default function GallerySopBatchModal({
       confirmText: '确认删除',
       tone: 'danger',
       action: () => void performDeleteRun(run),
+    })
+  }
+
+  const clearRunSelection = () => setSelectedRunIds(new Set())
+
+  const toggleRunSelection = (runId: string, mode: 'replace' | 'add' | 'toggle' = 'toggle') => {
+    setSelectedRunIds((current) => {
+      const next = new Set(mode === 'replace' ? [] : current)
+      if (mode === 'add') {
+        next.add(runId)
+      } else if (mode === 'replace') {
+        next.add(runId)
+      } else if (next.has(runId)) {
+        next.delete(runId)
+      } else {
+        next.add(runId)
+      }
+      return next
+    })
+  }
+
+  const selectAllFilteredRuns = () => setSelectedRunIds(new Set(filteredRuns.map((run) => run.id)))
+
+  const invertRunSelection = () =>
+    setSelectedRunIds(new Set(filteredRuns.map((run) => run.id).filter((id) => !selectedRunIds.has(id))))
+
+  const applyMarqueeSelection = (rect: { x0: number; y0: number; x1: number; y1: number }, additive: boolean) => {
+    const container = listRef.current
+    if (!container) return
+    const listRect = container.getBoundingClientRect()
+    const left = Math.min(rect.x0, rect.x1) - listRect.left
+    const right = Math.max(rect.x0, rect.x1) - listRect.left
+    const top = Math.min(rect.y0, rect.y1) - listRect.top
+    const bottom = Math.max(rect.y0, rect.y1) - listRect.top
+    const hits = new Set<string>()
+    container.querySelectorAll<HTMLElement>('[data-run-id]').forEach((node) => {
+      const itemRect = node.getBoundingClientRect()
+      const itemLeft = itemRect.left - listRect.left
+      const itemRight = itemRect.right - listRect.left
+      const itemTop = itemRect.top - listRect.top
+      const itemBottom = itemRect.bottom - listRect.top
+      const intersects = itemRight >= left && itemLeft <= right && itemBottom >= top && itemTop <= bottom
+      if (intersects) {
+        const id = node.dataset.runId
+        if (id) hits.add(id)
+      }
+    })
+    setSelectedRunIds((current) => {
+      const next = additive ? new Set(current) : new Set<string>()
+      hits.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  const getSelectedRuns = () => recentRuns.filter((run) => selectedRunIds.has(run.id))
+
+  const batchUpdateTags = async (mode: 'merge' | 'replace') => {
+    const rawTags = batchTagDraft.split(/[，,]/).map((tag) => tag.trim()).filter(Boolean)
+    if (rawTags.length === 0) {
+      showToast('请输入至少一个标签', 'info')
+      return
+    }
+    const targets = getSelectedRuns()
+    if (targets.length === 0) {
+      showToast('请先选择提示词集', 'info')
+      return
+    }
+    let ok = 0
+    let failed = 0
+    await flushPromptRunSnapshot()
+    for (const run of targets) {
+      try {
+        const latest = await getSopBatchSnapshot(run.id) ?? run
+        const merged = mode === 'replace'
+          ? rawTags
+          : Array.from(new Set([...(latest.tags ?? []), ...rawTags]))
+        const updated: SopBatchSnapshot = { ...latest, tags: merged, updatedAt: Date.now() }
+        await putSopBatchSnapshot(updated)
+        updateRecentRun(updated)
+        ok += 1
+      } catch {
+        failed += 1
+      }
+    }
+    setBatchEditMode(null)
+    setBatchTagDraft('')
+    clearRunSelection()
+    if (ok > 0 && failed === 0) showToast(`已为 ${ok} 个提示词集${mode === 'replace' ? '替换' : '添加'}标签`, 'success')
+    else if (ok > 0) showToast(`成功 ${ok} 个，失败 ${failed} 个`, 'info')
+    else showToast('批量编辑标签失败', 'error')
+  }
+
+  const batchMoveToGroup = async () => {
+    const targets = getSelectedRuns()
+    if (targets.length === 0) {
+      showToast('请先选择提示词集', 'info')
+      return
+    }
+    const group = batchGroupTarget ? promptGroups.find((folder) => folder.id === batchGroupTarget) : undefined
+    let ok = 0
+    let failed = 0
+    await flushPromptRunSnapshot()
+    for (const run of targets) {
+      try {
+        await movePromptCollectionToGroup(run, batchGroupTarget, group)
+        ok += 1
+      } catch {
+        failed += 1
+      }
+    }
+    setBatchEditMode(null)
+    setBatchGroupTarget('')
+    clearRunSelection()
+    const label = group ? `「${group.name}」` : '根目录'
+    if (ok > 0 && failed === 0) showToast(`已将 ${ok} 个提示词集移动到 ${label}`, 'success')
+    else if (ok > 0) showToast(`成功 ${ok} 个，失败 ${failed} 个`, 'info')
+    else showToast('批量移动分类失败', 'error')
+  }
+
+  const batchDeleteRuns = () => {
+    const targets = getSelectedRuns()
+    const removable = targets.filter((run) => !run.taskIds?.length && !run.batchId)
+    const locked = targets.length - removable.length
+    if (removable.length === 0) {
+      showToast(locked > 0 ? '所选提示词集均已关联生图任务，不能删除' : '请先选择提示词集', 'info')
+      return
+    }
+    setConfirmDialog({
+      title: `批量删除 ${removable.length} 个提示词集？`,
+      message: locked > 0
+        ? `将永久删除 ${removable.length} 个提示词集（另有 ${locked} 个已关联生图任务被跳过），此操作不可撤销。`
+        : `将永久删除 ${removable.length} 个提示词集，此操作不可撤销。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+      action: async () => {
+        let ok = 0
+        let failed = 0
+        await flushPromptRunSnapshot()
+        for (const run of removable) {
+          try {
+            if (run.id === activeRunIdRef.current) await flushPromptRunSnapshot()
+            await deleteSopBatchSnapshot(run.id)
+            ok += 1
+          } catch {
+            failed += 1
+          }
+        }
+        const remainingRuns = recentRuns.filter((item) => !removable.some((run) => run.id === item.id))
+        setRecentRuns(remainingRuns)
+        clearRunSelection()
+        setBatchEditMode(null)
+        if (ok > 0 && failed === 0) showToast(`已删除 ${ok} 个提示词集`, 'success')
+        else if (ok > 0) showToast(`成功 ${ok} 个，失败 ${failed} 个`, 'info')
+        else showToast('批量删除失败', 'error')
+      },
     })
   }
 
@@ -775,6 +1581,10 @@ export default function GallerySopBatchModal({
     const snapshot: SopBatchSnapshot = {
       id: runId,
       title: '未命名提示词集',
+      promptGroup: selectedPromptGroup
+        ? { id: selectedPromptGroup.id, name: selectedPromptGroup.name }
+        : undefined,
+      promptOrder: getNextPromptOrder(selectedPromptGroup?.id ?? null),
       batchId: '',
       workspaceTabId: targetWorkspaceTabId,
       createdAt: now,
@@ -813,30 +1623,8 @@ export default function GallerySopBatchModal({
     }
     await putSopBatchSnapshot(snapshot)
     updateRecentRun(snapshot)
+    setSelectedLibraryItem({ type: 'run', id: snapshot.id })
     await applyPromptRun(snapshot, '已新建提示词集，修改内容会自动保存')
-  }
-
-  const duplicateActiveRun = async () => {
-    if (!activeRun) return
-    await flushPromptRunSnapshot()
-    const latest = await getSopBatchSnapshot(activeRun.id) ?? activeRun
-    const now = Date.now()
-    const duplicated: SopBatchSnapshot = {
-      ...latest,
-      id: promptRunId(),
-      title: `${getPromptRunTitle(latest)} 副本`,
-      batchId: '',
-      batchIds: [],
-      taskIds: [],
-      createdAt: now,
-      updatedAt: now,
-      status: 'ready',
-      pinned: false,
-      prompts: latest.prompts.map((prompt) => ({ ...prompt, id: promptItemId(prompt.sourceId ?? 'text-to-image') })),
-    }
-    await putSopBatchSnapshot(duplicated)
-    updateRecentRun(duplicated)
-    await applyPromptRun(duplicated, '已创建提示词集副本')
   }
 
   const copyActivePrompts = async () => {
@@ -845,6 +1633,15 @@ export default function GallerySopBatchModal({
     try {
       await navigator.clipboard.writeText(text)
       showToast(`已复制 ${visiblePrompts.length} 条提示词`, 'success')
+    } catch {
+      showToast('复制失败，请检查系统剪贴板权限', 'error')
+    }
+  }
+
+  const copyImagePrompt = async (text: string, revised: boolean) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast(revised ? '已复制图片反推提示词' : '已复制提交提示词', 'success')
     } catch {
       showToast('复制失败，请检查系统剪贴板权限', 'error')
     }
@@ -1276,7 +2073,7 @@ export default function GallerySopBatchModal({
     if (replacingCurrent && !replaceConfirmed) {
       setConfirmDialog({
         title: '生成新的提示词列表？',
-        message: '当前提示词列表会保留在提示词仓库中，并创建一份新的列表。',
+        message: '当前提示词列表会保留在提示词库中，并创建一份新的列表。',
         confirmText: '继续生成',
         action: () => void generatePromptList(true),
       })
@@ -1392,15 +2189,78 @@ export default function GallerySopBatchModal({
 
   useEffect(() => {
     if (!restoreComplete || !autoStart || autoStartRef.current || running || !selectedSop) return
-    if (visiblePrompts.length > 0) return
+    // 上一轮残留的提示词会阻断自动生成。此处必须显式通知宿主，
+    // 否则静默运行时用户按下发送后会毫无反馈。
+    if (visiblePrompts.length > 0) {
+      autoStartRef.current = true
+      onAutoStartConsumed?.()
+      onNeedsAttention?.('existing-prompts')
+      return
+    }
     autoStartRef.current = true
     onAutoStartConsumed?.()
     void generateForSources()
-  }, [autoStart, onAutoStartConsumed, restoreComplete, running, selectedSop, visiblePrompts.length])
+  }, [autoStart, onAutoStartConsumed, onNeedsAttention, restoreComplete, running, selectedSop, visiblePrompts.length])
 
   useEffect(() => {
     if (!autoStart) autoStartRef.current = false
   }, [autoStart])
+
+  useEffect(() => {
+    if (!visible || !libraryContextMenu) return
+    const closeContextMenu = () => setLibraryContextMenu(null)
+    window.addEventListener('resize', closeContextMenu)
+    window.addEventListener('blur', closeContextMenu)
+    document.addEventListener('mousedown', closeContextMenu)
+    return () => {
+      window.removeEventListener('resize', closeContextMenu)
+      window.removeEventListener('blur', closeContextMenu)
+      document.removeEventListener('mousedown', closeContextMenu)
+    }
+  }, [libraryContextMenu, visible])
+
+  useEffect(() => {
+    if (!visible) return
+    const handleLibraryShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return
+      const commandKey = event.ctrlKey || event.metaKey
+      if (commandKey && event.key.toLocaleLowerCase() === 'c') {
+        event.preventDefault()
+        copyOrCutLibraryItem('copy')
+        return
+      }
+      if (commandKey && event.key.toLocaleLowerCase() === 'x') {
+        event.preventDefault()
+        copyOrCutLibraryItem('cut')
+        return
+      }
+      if (commandKey && event.key.toLocaleLowerCase() === 'v') {
+        event.preventDefault()
+        void pasteLibraryItem()
+        return
+      }
+      if (event.key === 'F2' && selectedLibraryItem?.type === 'folder') {
+        const folder = promptGroups.find((item) => item.id === selectedLibraryItem.id)
+        if (folder) {
+          event.preventDefault()
+          beginRenamePromptGroup(folder)
+        }
+        return
+      }
+      if (event.key !== 'Delete' || !selectedLibraryItem) return
+      event.preventDefault()
+      if (selectedLibraryItem.type === 'folder') {
+        const folder = promptGroups.find((item) => item.id === selectedLibraryItem.id)
+        if (folder) deletePromptGroup(folder)
+      } else {
+        const run = recentRuns.find((item) => item.id === selectedLibraryItem.id)
+        if (run) deleteRun(run)
+      }
+    }
+    window.addEventListener('keydown', handleLibraryShortcut)
+    return () => window.removeEventListener('keydown', handleLibraryShortcut)
+  })
 
   useCloseOnEscape(visible && !previewSource, closeSafely)
   useCloseOnEscape(visible && Boolean(previewSource), () => setPreviewSource(null))
@@ -1408,17 +2268,200 @@ export default function GallerySopBatchModal({
   useDialogFocusTrap(visible && !previewSource, modalRef)
   useDialogFocusTrap(visible && Boolean(previewSource), previewRef)
 
+  const renderPromptRunTreeItem = (run: SopBatchSnapshot, depth: number): ReactNode => {
+    const available = run.prompts.filter((item) => !item.deleted && item.text.trim()).length
+    const selected = run.id === activeRunId
+    const imageCount = runImageSummaryById.get(run.id)?.count ?? 0
+    const checked = selectedRunIds.has(run.id)
+    const dragging = libraryDrag?.type === 'run' && libraryDrag.id === run.id
+    const cut = libraryClipboard?.mode === 'cut'
+      && libraryClipboard.item.type === 'run'
+      && libraryClipboard.item.id === run.id
+    const dropPosition = libraryDropTarget?.type === 'run' && libraryDropTarget.id === run.id
+      ? libraryDropTarget.position
+      : null
+    return (
+      <div
+        role="treeitem"
+        aria-level={depth + 1}
+        aria-selected={selected}
+        aria-label={`提示词集 ${getPromptRunTitle(run)}`}
+        key={run.id}
+        data-run-id={run.id}
+        draggable={!running}
+        onDragStart={(event) => startLibraryDrag(event, { type: 'run', id: run.id })}
+        onDragEnd={finishLibraryDrag}
+        onDragOver={(event) => dragOverPromptRun(event, run)}
+        onDrop={(event) => void dropOnPromptRun(event, run)}
+        onContextMenu={(event) => openLibraryContextMenu(event, { type: 'run', id: run.id })}
+        className={`group/run relative grid min-h-11 grid-cols-[0.75rem_1.25rem_minmax(0,1fr)_1.75rem] items-center gap-1.5 rounded-lg pr-1 transition-colors ${checked || selected ? 'bg-ds-selection text-ds-selection-text' : 'text-ds-text hover:bg-ds-surface'} ${dragging ? 'opacity-35' : ''} ${cut ? 'opacity-50' : ''}`}
+        style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 6}px` }}
+      >
+        {dropPosition === 'before' && <span className="pointer-events-none absolute -top-px left-2 right-2 h-0.5 rounded-full bg-ds-primary" />}
+        {dropPosition === 'after' && <span className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ds-primary" />}
+        <span title="拖拽移动或排序" className="flex cursor-grab items-center justify-center text-ds-muted opacity-45 transition-opacity group-hover/run:opacity-100 active:cursor-grabbing"><GripVertical size={12} /></span>
+        <label data-no-marquee className="flex shrink-0 cursor-pointer items-center justify-center" onClick={(event) => event.stopPropagation()} aria-label={checked ? `取消选择 ${getPromptRunTitle(run)}` : `选择 ${getPromptRunTitle(run)}`}>
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={running}
+            onClick={(event) => {
+              if (event.shiftKey && lastClickedRunIdRef.current) {
+                const ids = filteredRuns.map((item) => item.id)
+                const from = ids.indexOf(lastClickedRunIdRef.current)
+                const to = ids.indexOf(run.id)
+                if (from !== -1 && to !== -1) {
+                  const [start, end] = from < to ? [from, to] : [to, from]
+                  event.preventDefault()
+                  setSelectedRunIds((current) => {
+                    const next = new Set(current)
+                    ids.slice(start, end + 1).forEach((id) => next.add(id))
+                    return next
+                  })
+                  return
+                }
+              }
+              lastClickedRunIdRef.current = run.id
+            }}
+            onChange={(event) => {
+              event.stopPropagation()
+              toggleRunSelection(run.id)
+            }}
+            className="h-3.5 w-3.5 cursor-pointer rounded border-ds-border text-ds-primary accent-[hsl(var(--ds-color-primary))] focus-visible:ring-2 focus-visible:ring-ds-primary"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={(event) => {
+            if (event.shiftKey || event.metaKey || event.ctrlKey) {
+              lastClickedRunIdRef.current = run.id
+              toggleRunSelection(run.id)
+              return
+            }
+            setSelectedLibraryItem({ type: 'run', id: run.id })
+            setSelectedPromptGroupId(run.promptGroup?.id ?? UNGROUPED_PROMPT_GROUP)
+            void applyPromptRun(run, `已打开提示词集「${getPromptRunTitle(run)}」`)
+          }}
+          disabled={running || selected}
+          aria-label={`查看提示词集 ${getPromptRunTitle(run)}`}
+          className="flex min-w-0 items-center gap-2 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-default"
+        >
+          <BookOpenCheck size={14} className={`shrink-0 ${selected ? 'text-ds-primary' : 'text-ds-muted'}`} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-medium">{getPromptRunTitle(run)}</span>
+            <span className="mt-0.5 block truncate text-[10px] text-ds-muted">{available} 条 · {imageCount} 图 · {getRunStatusLabel(run)}</span>
+          </span>
+        </button>
+        <button type="button" onClick={() => void toggleRunPinned(run)} disabled={running} aria-label={run.pinned ? `取消收藏 ${getPromptRunTitle(run)}` : `收藏 ${getPromptRunTitle(run)}`} aria-pressed={Boolean(run.pinned)} className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40 ${run.pinned ? 'text-ds-warning' : 'text-ds-muted opacity-50 hover:bg-ds-subtle hover:text-ds-text group-hover/run:opacity-100'}`}><Bookmark size={13} fill={run.pinned ? 'currentColor' : 'none'} /></button>
+      </div>
+    )
+  }
+
+  const renderPromptFolderTree = (parentId: string | null, depth = 0): ReactNode =>
+    getSortedFolderChildren(promptGroups, parentId).map((folder) => {
+      const children = getSortedFolderChildren(promptGroups, folder.id)
+      const directRuns = filteredRuns.filter((run) => run.promptGroup?.id === folder.id)
+      const descendantIds = getFolderDescendantIds(promptGroups, folder.id)
+      const hasVisibleRuns = directRuns.length > 0
+        || filteredRuns.some((run) => run.promptGroup?.id && descendantIds.has(run.promptGroup.id))
+      const filterActive = Boolean(librarySearch.trim() || favoritesOnly)
+      if (filterActive && !hasVisibleRuns) return null
+      const collapsed = !filterActive && collapsedPromptGroupIds.has(folder.id)
+      const selected = selectedPromptGroupId === folder.id
+      const dragging = libraryDrag?.type === 'folder' && libraryDrag.id === folder.id
+      const cut = libraryClipboard?.mode === 'cut'
+        && libraryClipboard.item.type === 'folder'
+        && libraryClipboard.item.id === folder.id
+      const dropPosition = libraryDropTarget?.type === 'folder' && libraryDropTarget.id === folder.id
+        ? libraryDropTarget.position
+        : null
+      return (
+        <div key={folder.id} role="none">
+          <div
+            role="treeitem"
+            aria-level={depth + 1}
+            aria-expanded={children.length ? !collapsed : undefined}
+            draggable={!running && editingPromptGroupId !== folder.id}
+            onDragStart={(event) => startLibraryDrag(event, { type: 'folder', id: folder.id })}
+            onDragEnd={finishLibraryDrag}
+            onDragOver={(event) => dragOverPromptFolder(event, folder)}
+            onDrop={(event) => void dropOnPromptFolder(event, folder)}
+            onContextMenu={(event) => openLibraryContextMenu(event, { type: 'folder', id: folder.id })}
+            className={`group/folder relative flex min-h-8 items-center rounded-lg pr-1 transition-colors ${
+              selected
+                ? 'bg-ds-selection text-ds-selection-text'
+                : 'text-ds-muted hover:bg-ds-surface hover:text-ds-text'
+            } ${dragging ? 'opacity-35' : ''} ${cut ? 'opacity-50' : ''} ${
+              dropPosition === 'inside' ? 'bg-ds-selection ring-2 ring-inset ring-ds-selection-border' : ''
+            }`}
+            style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 2}px` }}
+          >
+            {dropPosition === 'before' && <span className="pointer-events-none absolute -top-px left-2 right-2 h-0.5 rounded-full bg-ds-primary" />}
+            {dropPosition === 'after' && <span className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ds-primary" />}
+            {children.length > 0 || directRuns.length > 0
+              ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      togglePromptGroupCollapsed(folder.id)
+                    }}
+                    aria-label={collapsed ? `展开文件夹 ${folder.name}` : `收起文件夹 ${folder.name}`}
+                    className="flex h-7 w-6 shrink-0 items-center justify-center rounded text-ds-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"
+                  >
+                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  </button>
+                )
+              : <span aria-hidden="true" className="h-7 w-6 shrink-0" />}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPromptGroupId(folder.id)
+                setSelectedLibraryItem({ type: 'folder', id: folder.id })
+                setLibraryContextMenu(null)
+              }}
+              onDoubleClick={() => (children.length > 0 || directRuns.length > 0) && togglePromptGroupCollapsed(folder.id)}
+              aria-pressed={selected}
+              aria-label={`查看文件夹 ${folder.name}`}
+              className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"
+            >
+              {selected ? <FolderOpen size={13} /> : <Folder size={13} />}
+              <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+              <span className="text-[10px] opacity-65">{getPromptFolderRecursiveRunCount(folder.id)}</span>
+            </button>
+            <button
+              type="button"
+              onClick={(event) => openLibraryContextMenu(event, { type: 'folder', id: folder.id })}
+              aria-label={`更多文件夹操作 ${folder.name}`}
+              title="更多操作"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ds-muted opacity-60 transition-colors hover:bg-ds-subtle hover:text-ds-text focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary group-hover/folder:opacity-100"
+            >
+              <MoreHorizontal size={13} />
+            </button>
+          </div>
+          {!collapsed && (children.length > 0 || directRuns.length > 0) && (
+            <div role="group">
+              {renderPromptFolderTree(folder.id, depth + 1)}
+              {directRuns.map((run) => renderPromptRunTreeItem(run, depth + 1))}
+            </div>
+          )}
+        </div>
+      )
+    })
+
   if (!visible) return null
 
   const statusMetaClass = status === 'success'
-    ? 'text-emerald-700 dark:text-emerald-300'
+    ? 'text-ds-success'
     : status === 'error'
-      ? 'text-red-700 dark:text-red-300'
+      ? 'text-ds-danger'
       : status === 'paused'
-        ? 'text-amber-700 dark:text-amber-300'
+        ? 'text-ds-warning'
       : running
-        ? 'text-violet-700 dark:text-violet-300'
-        : 'text-gray-500 dark:text-gray-400'
+        ? 'text-ds-primary'
+        : 'text-ds-muted'
+  const showRunToolbar = Boolean(selectedSop || running || error)
+  const promptListReady = visiblePrompts.length > 0 && missingCount === 0
 
   return (
     <div className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4 animate-overlay-in motion-reduce:animate-none" onMouseDown={(event) => {
@@ -1433,173 +2476,288 @@ export default function GallerySopBatchModal({
         aria-modal="true"
         aria-labelledby="gallery-sop-title"
       >
-        <header className="flex items-center justify-between border-b border-gray-200/80 px-5 py-4 dark:border-white/[0.08] sm:px-6">
+        <header className="flex items-center justify-between border-b border-ds-border px-5 py-4 sm:px-6">
           <div>
             <h2 id="gallery-sop-title" className="flex items-center gap-2 text-lg font-semibold">
-              <BookOpenCheck size={20} className="text-violet-600" />
-              提示词仓库与生图
+              <BookOpenCheck size={20} className="text-ds-primary" />
+              提示词管理
             </h2>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-ds-muted">
               {selectedSop
-                ? `当前 SOP：${selectedSop.name} · ${targetCount} 条提示词 × 每条 ${targetImagesPerPrompt} 张 = 预计 ${totalImageCount} 张`
-                : '无需加载 SOP，可直接查看、整理和复用程序之前保存的提示词。'}
+                ? `当前 SOP：${selectedSop.name} · ${targetCount} 条提示词 · 预计 ${totalImageCount} 张图片`
+                : '整理、编辑和复用已保存的提示词集。'}
             </p>
           </div>
           <div className="flex items-center gap-2">
             <LargeModalToggle largeView={largeView} dialogName="提示词管理" onToggle={toggleLargeView} />
-            <button type="button" onClick={closeSafely} aria-label={status === 'paused' ? '转入后台保持 SOP 提示词暂停' : running ? '转入后台继续生成 SOP 提示词' : '关闭 SOP 提示词列表'} title={status === 'paused' ? '关闭后保持暂停，可稍后继续' : running ? '关闭后将在后台继续生成' : '关闭 SOP 提示词列表'} className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:text-gray-300 dark:hover:bg-white/[0.06]"><X size={18} /></button>
+            <button type="button" onClick={closeSafely} aria-label={status === 'paused' ? '转入后台保持 SOP 提示词暂停' : running ? '转入后台继续生成 SOP 提示词' : '关闭 SOP 提示词列表'} title={status === 'paused' ? '关闭后保持暂停，可稍后继续' : running ? '关闭后将在后台继续生成' : '关闭 SOP 提示词列表'} className="flex h-10 w-10 items-center justify-center rounded-xl text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><X size={18} /></button>
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col bg-gray-50/70 p-4 dark:bg-black/20 sm:p-5">
-          <div aria-live="polite" className={`mb-4 rounded-xl border p-4 ${status === 'success' ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/25 dark:bg-emerald-500/[0.08]' : status === 'error' ? 'border-red-200 bg-red-50 dark:border-red-500/25 dark:bg-red-500/[0.08]' : status === 'paused' ? 'border-amber-200 bg-amber-50 dark:border-amber-500/25 dark:bg-amber-500/[0.08]' : running ? 'border-violet-200 bg-violet-50 dark:border-violet-500/25 dark:bg-violet-500/[0.08]' : 'border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.035]'}`}>
-            <div className="grid items-center gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto]">
-              <div className="flex min-w-0 items-center gap-3 self-center">
-                {status === 'paused' ? <Pause size={20} className="shrink-0 text-amber-600" /> : running ? <LoaderCircle size={20} className="shrink-0 animate-spin text-violet-600" /> : status === 'success' ? <CheckCircle2 size={20} className="shrink-0 text-emerald-600" /> : status === 'error' ? <XCircle size={20} className="shrink-0 text-red-600" /> : <ImageIcon size={20} className="shrink-0 text-gray-400" />}
-                <div className="min-w-0">
-                  <p className="text-sm font-medium leading-5">{statusMessage}</p>
-                  <p className={`mt-0.5 text-xs leading-5 ${statusMetaClass}`}>
-                    {selectedSop
-                      ? `请求 ${targetCount} · 智能生成 ${aiCount} · 当前可用 ${visiblePrompts.length} · 缺口 ${missingCount} · 预计图片 ${visiblePrompts.length * targetImagesPerPrompt}/${totalImageCount}`
-                      : `仓库 ${recentRuns.length} 个提示词集 · 当前提示词 ${visiblePrompts.length} 条`}
-                  </p>
+        <div className="flex min-h-0 flex-1 flex-col bg-ds-canvas p-4 sm:p-5">
+          {showRunToolbar && (
+            <div aria-live="polite" className={`mb-3 rounded-xl border px-3 py-2.5 ${status === 'error' ? 'border-ds-danger/30 bg-ds-danger/10' : status === 'paused' ? 'border-ds-warning/30 bg-ds-warning/10' : running ? 'border-ds-primary/30 bg-ds-primary/10' : 'border-ds-border bg-ds-surface'}`}>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex min-w-[15rem] flex-1 items-center gap-2.5">
+                  {status === 'paused' ? <Pause size={16} className="shrink-0 text-ds-warning" /> : running ? <LoaderCircle size={16} className="shrink-0 animate-spin text-ds-primary" /> : status === 'success' ? <CheckCircle2 size={16} className="shrink-0 text-ds-success" /> : status === 'error' ? <XCircle size={16} className="shrink-0 text-ds-danger" /> : <ImageIcon size={16} className="shrink-0 text-ds-muted" />}
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium leading-5">{statusMessage}</p>
+                    <p className={`text-[11px] leading-4 ${statusMetaClass}`}>
+                      {selectedSop
+                        ? `${visiblePrompts.length}/${targetCount} 条就绪 · 预计 ${totalImageCount} 张图片${missingCount ? ` · 还缺 ${missingCount} 条` : ''}`
+                        : `已保存 ${recentRuns.length} 个提示词集`}
+                    </p>
+                  </div>
+                </div>
+
+                {selectedSop && (
+                  <details className="group relative shrink-0">
+                    <summary
+                      aria-label="打开批次设置"
+                      className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-xs text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary [&::-webkit-details-marker]:hidden"
+                    >
+                      <span>批次</span>
+                      <span className="font-semibold text-ds-text">{targetCount} × {targetImagesPerPrompt}</span>
+                      <ChevronDown size={12} className="transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-xl border border-ds-border bg-ds-surface p-3 shadow-ds-md">
+                      <div className="mb-3 flex items-center justify-between">
+                        <span className="text-xs font-semibold">批次设置</span>
+                        <span className="text-[10px] text-ds-muted">预计 {totalImageCount} 张</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="rounded-lg border border-ds-border p-2.5">
+                          <span className="block text-[10px] text-ds-muted">提示词数量</span>
+                          <input type="number" min={1} value={targetCount} onChange={(event) => event.target.value && setPromptCount(Number(event.target.value))} disabled={running} aria-label="SOP 提示词数量" className="mt-1 w-full bg-transparent text-base font-semibold outline-none disabled:opacity-50" />
+                        </label>
+                        <label className="rounded-lg border border-ds-border p-2.5">
+                          <span className="block text-[10px] text-ds-muted">每条图片数</span>
+                          <input type="number" min={1} max={MAX_SOP_IMAGES_PER_PROMPT} value={targetImagesPerPrompt} onChange={(event) => event.target.value && setImagesPerPrompt(Number(event.target.value))} disabled={running} aria-label="每条提示词生成图片数" className="mt-1 w-full bg-transparent text-base font-semibold outline-none disabled:opacity-50" />
+                        </label>
+                      </div>
+                      <label className="mt-2 flex h-9 items-center justify-between rounded-lg border border-ds-border px-2.5">
+                        <span className="text-xs text-ds-muted">信息流审核规则</span>
+                        <select
+                          value={params.adNegativeRuleId}
+                          onChange={(event) => setParams({ adNegativeRuleId: event.target.value })}
+                          disabled={running}
+                          aria-label="选择信息流审核规则"
+                          className="max-w-36 cursor-pointer bg-transparent text-xs font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {adNegativeRuleProfiles.map((rule) => <option key={rule.id} value={rule.id}>{rule.name}</option>)}
+                        </select>
+                      </label>
+                      <Switch checked={autoGenerate} onCheckedChange={toggleAutoGenerate} disabled={running} aria-label="每生成一条提示词立即发送生图" label={<span className="text-xs">生成提示词后自动生图</span>} className="mt-2 flex h-9 w-full justify-between rounded-lg px-2" />
+                      <Switch checked={secondReference} onCheckedChange={toggleSecondReference} disabled={running} aria-label="实际生图时再次使用输入区参考图" title="开启后，参考图先用于生成提示词，并在实际生图时再次传入" label={<span className="text-xs">生图时再次使用参考图</span>} className="flex h-9 w-full justify-between rounded-lg px-2" />
+                    </div>
+                  </details>
+                )}
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {promptGenerationActive && <>
+                    <button type="button" onClick={status === 'paused' ? resumePromptGeneration : pausePromptGeneration} aria-label={status === 'paused' ? '继续提示词生成' : '暂停提示词生成'} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-ds-warning/30 bg-ds-surface px-2.5 text-xs font-medium text-ds-warning transition-colors hover:bg-ds-warning/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-warning">
+                      {status === 'paused' ? <Play size={13} /> : <Pause size={13} />}{status === 'paused' ? '继续' : '暂停'}
+                    </button>
+                    <button type="button" onClick={cancelPromptGeneration} aria-label="取消提示词生成" className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-ds-danger/30 bg-ds-surface px-2.5 text-xs font-medium text-ds-danger transition-colors hover:bg-ds-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-danger"><XCircle size={13} />取消</button>
+                  </>}
+                  {!promptGenerationActive && selectedSop && visiblePrompts.length > 0 && !promptListReady && (
+                    <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`重新生成 ${targetCount} 条 SOP 提示词`} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-ds-primary px-3 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><RefreshCw size={13} />重新生成 {targetCount} 条</button>
+                  )}
+                  {!promptGenerationActive && selectedSop && promptListReady && <>
+                    <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`重新生成 ${targetCount} 条 SOP 提示词`} title="重新生成提示词" className="flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><RefreshCw size={13} /></button>
+                    <button type="button" aria-label={activeRunSubmittedRef.current ? '当前 SOP 生图任务已发送' : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`} onClick={() => void submitPromptList()} disabled={running || activeRunSubmittedRef.current} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-ds-primary px-3 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:bg-ds-subtle disabled:text-ds-muted"><Send size={13} />{activeRunSubmittedRef.current ? '已发送' : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张`}</button>
+                  </>}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                {promptGenerationActive && <>
-                  <button
-                    type="button"
-                    onClick={status === 'paused' ? resumePromptGeneration : pausePromptGeneration}
-                    aria-label={status === 'paused' ? '继续提示词生成' : '暂停提示词生成'}
-                    className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-200 bg-white px-3 text-xs font-medium text-amber-700 transition hover:border-amber-300 hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-amber-500/30 dark:bg-white/[0.06] dark:text-amber-200 dark:hover:bg-amber-500/10"
-                  >
-                    {status === 'paused' ? <Play size={14} /> : <Pause size={14} />}
-                    {status === 'paused' ? '继续' : '暂停'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={cancelPromptGeneration}
-                    aria-label="取消提示词生成"
-                    className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 bg-white px-3 text-xs font-medium text-red-700 transition hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-red-500/30 dark:bg-white/[0.06] dark:text-red-200 dark:hover:bg-red-500/10"
-                  >
-                    <XCircle size={14} />
-                    取消
-                  </button>
-                </>}
-                {sources.length > 0 && selectedSop && <button
-                  type="button"
-                  onClick={() => void generatePromptList()}
-                  disabled={running}
-                  aria-label={`重新生成 ${targetCount} 条 SOP 提示词`}
-                  className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-500/30 dark:bg-white/[0.06] dark:text-violet-200 dark:hover:bg-violet-500/10"
-                >
-                  <Sparkles size={14} />
-                  重新生成提示词
-                </button>}
-                {selectedSop && <>
-                  <Switch
-                    checked={autoGenerate}
-                    onCheckedChange={toggleAutoGenerate}
-                    disabled={running}
-                    aria-label="每生成一条提示词立即发送生图"
-                    label={<span className="whitespace-nowrap text-xs">逐条生成并生图</span>}
-                    className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
-                  />
-                  <Switch
-                    checked={secondReference}
-                    onCheckedChange={toggleSecondReference}
-                    disabled={running}
-                    aria-label="实际生图时再次使用输入区参考图"
-                    title="开启后，参考图先用于生成提示词，并在实际生图时再次传入"
-                    label={<span className="whitespace-nowrap text-xs">二次参考</span>}
-                    className="h-9 rounded-lg border border-gray-200 bg-white px-3 dark:border-white/[0.12] dark:bg-white/[0.06]"
-                  />
-                  <button
-                    type="button"
-                    aria-label={activeRunSubmittedRef.current ? '当前 SOP 生图任务已发送' : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`}
-                    onClick={() => void submitPromptList()}
-                    disabled={running || visiblePrompts.length === 0 || missingCount > 0 || activeRunSubmittedRef.current}
-                    className="flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border border-violet-600 bg-violet-600 px-3 text-xs font-medium text-white transition hover:border-violet-700 hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:border-violet-200 disabled:bg-violet-50 disabled:text-violet-300 dark:disabled:border-violet-500/20 dark:disabled:bg-violet-500/10 dark:disabled:text-violet-400/60"
-                  >
-                    <Send size={14} />
-                    {activeRunSubmittedRef.current ? `已发送 ${visiblePrompts.length * targetImagesPerPrompt} 张` : `生成 ${visiblePrompts.length * targetImagesPerPrompt} 张图片`}
-                  </button>
-                </>}
-              </div>
+              {error && <p role="alert" className="mt-2 text-xs leading-5 text-ds-danger">{error}</p>}
+              {selectedSop && totalImageCount >= SOP_HIGH_VOLUME_WARNING_THRESHOLD && <p className="mt-2 text-xs leading-5 text-ds-warning">本次预计生成 {totalImageCount} 张图片，可能产生较高费用，请确认数量后再提交。</p>}
             </div>
-            {error && <p role="alert" className="mt-2 text-xs leading-5 text-red-700 dark:text-red-300">{error}</p>}
-            {selectedSop && totalImageCount >= SOP_HIGH_VOLUME_WARNING_THRESHOLD && <p className="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">本次预计生成 {totalImageCount} 张图片，可能产生较高费用，请确认数量后再提交。</p>}
-          </div>
+          )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/[0.1] dark:bg-gray-900 md:grid-cols-[minmax(260px,320px)_minmax(0,1fr)]">
-            <aside className="flex min-h-0 flex-col border-b border-gray-200 bg-gray-50/70 dark:border-white/[0.08] dark:bg-gray-950/60 md:border-b-0 md:border-r">
-              <div className="border-b border-gray-200 p-3 dark:border-white/[0.08]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-ds-border bg-ds-surface md:grid-cols-[minmax(260px,320px)_minmax(0,1fr)]">
+            <aside className="flex min-h-0 flex-col border-b border-ds-border bg-ds-subtle md:border-b-0 md:border-r">
+              <div className="border-b border-ds-border p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold">提示词仓库</h3>
-                    <p className="mt-0.5 text-[11px] text-gray-500">{recentRuns.length} 个持久化提示词集</p>
+                    <h3 className="text-sm font-semibold">提示词集</h3>
+                    <p className="mt-0.5 text-[11px] text-ds-muted">提示词集直接归入文件夹</p>
                   </div>
-                  <button type="button" onClick={() => void createPromptCollection()} disabled={running} aria-label="新建提示词集" className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 text-xs font-medium text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} />新建</button>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => void pasteLibraryItem()} disabled={running || !libraryClipboard} aria-label="粘贴到当前文件夹" title="粘贴（Ctrl+V）" className="flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-25"><ClipboardPlus size={14} /></button>
+                    <button type="button" onClick={() => beginCreatePromptGroup()} disabled={running || editingPromptGroupId !== null} aria-label="新建提示词文件夹" title={selectedPromptGroup ? `在「${selectedPromptGroup.name}」中新建子文件夹` : '新建根文件夹'} className="flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-30"><FolderPlus size={14} /></button>
+                    <button type="button" onClick={() => void createPromptCollection()} disabled={running} aria-label="新建提示词集" className="flex h-8 items-center gap-1.5 rounded-lg bg-ds-primary px-2.5 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} />新建</button>
+                  </div>
                 </div>
-                <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 focus-within:border-violet-500 focus-within:ring-2 focus-within:ring-violet-100 dark:border-white/[0.1] dark:bg-gray-900 dark:focus-within:ring-violet-950">
-                  <Search size={14} className="shrink-0 text-gray-400" />
-                  <input value={librarySearch} onChange={(event) => setLibrarySearch(event.target.value)} aria-label="搜索提示词仓库" placeholder="搜索名称、SOP 或内容" className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-gray-400" />
+                <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-ds-border bg-ds-surface px-2.5 focus-within:border-ds-primary focus-within:ring-2 focus-within:ring-ds-primary/20">
+                  <Search size={14} className="shrink-0 text-ds-muted" />
+                  <input value={librarySearch} onChange={(event) => setLibrarySearch(event.target.value)} aria-label="搜索提示词集" placeholder="搜索提示词名称或内容" className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-ds-muted" />
                 </label>
-                <button type="button" onClick={() => setFavoritesOnly((current) => !current)} aria-pressed={favoritesOnly} className={`mt-2 flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${favoritesOnly ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]'}`}><Bookmark size={13} fill={favoritesOnly ? 'currentColor' : 'none'} />仅看收藏</button>
+                <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+                  <button type="button" onClick={() => setFavoritesOnly((current) => !current)} aria-pressed={favoritesOnly} className={`flex h-7 items-center gap-1.5 rounded-lg px-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary ${favoritesOnly ? 'bg-ds-warning/10 text-ds-warning' : 'text-ds-muted hover:bg-ds-surface hover:text-ds-text'}`}><Bookmark size={12} fill={favoritesOnly ? 'currentColor' : 'none'} />收藏</button>
+                  <span className="flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-ds-muted" title={`新建位置：${selectedPromptGroup ? getFolderPath(promptGroups, selectedPromptGroup.id).map((folder) => folder.name).join(' / ') : '根目录'}`}><FolderOpen size={12} className="shrink-0" /><span className="truncate">{selectedPromptGroup ? getFolderPath(promptGroups, selectedPromptGroup.id).map((folder) => folder.name).join(' / ') : '根目录'}</span></span>
+                  {selectedPromptGroup && <button type="button" onClick={() => { setSelectedPromptGroupId(ALL_PROMPT_GROUPS); setSelectedLibraryItem(null) }} aria-label="返回根目录" title="返回根目录" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><X size={11} /></button>}
+                  <span className="ml-auto shrink-0 text-ds-muted">{filteredRuns.length} 项</span>
+                </div>
+                {editingPromptGroupId && (
+                  <form aria-label="提示词文件夹编辑" onSubmit={(event) => { event.preventDefault(); void savePromptGroup() }} className="mt-2 rounded-lg bg-ds-surface p-1.5 shadow-ds-sm">
+                    <p className="mb-1 px-1 text-[10px] text-ds-muted">
+                      {editingPromptGroupId === 'new'
+                        ? `新建于：${editingPromptGroupParentId ? getFolderPath(promptGroups, editingPromptGroupParentId).map((folder) => folder.name).join(' / ') : '根目录'}`
+                        : '重命名文件夹'}
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <input autoFocus value={promptGroupNameDraft} onChange={(event) => setPromptGroupNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') cancelPromptGroupEdit() }} maxLength={40} aria-label={editingPromptGroupId === 'new' ? '新文件夹名称' : '重命名文件夹'} placeholder="输入文件夹名称" className="h-8 min-w-0 flex-1 rounded-lg border border-ds-border bg-ds-surface px-2 text-xs outline-none focus:border-ds-primary focus:ring-2 focus:ring-ds-primary/20" />
+                      <button type="submit" aria-label="保存提示词文件夹" className="flex h-8 w-8 items-center justify-center rounded-lg bg-ds-primary text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><Check size={13} /></button>
+                      <button type="button" onClick={cancelPromptGroupEdit} aria-label="取消编辑提示词文件夹" className="flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><X size={13} /></button>
+                    </div>
+                  </form>
+                )}
+                {libraryClipboard && (
+                  <p className="mt-2 flex items-center gap-1.5 px-1 text-[10px] text-ds-primary">
+                    {libraryClipboard.mode === 'cut' ? '已剪切' : '已复制'} · 当前目标：{selectedPromptGroup?.name ?? '根目录'}
+                    <button type="button" onClick={() => setLibraryClipboard(null)} className="underline underline-offset-2">取消</button>
+                  </p>
+                )}
               </div>
-
-              <div role="list" aria-label="提示词仓库列表" className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-                {filteredRuns.map((run) => {
-                  const available = run.prompts.filter((item) => !item.deleted && item.text.trim()).length
-                  const selected = run.id === activeRunId
-                  return (
-                    <article role="listitem" key={run.id} className={`group grid grid-cols-[2.25rem_minmax(0,1fr)_2rem] items-center gap-2 rounded-xl border p-2 transition ${selected ? 'border-violet-300 bg-violet-50 shadow-sm dark:border-violet-500/40 dark:bg-violet-500/10' : 'border-transparent hover:border-gray-200 hover:bg-white dark:hover:border-white/[0.08] dark:hover:bg-white/[0.04]'}`}>
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${selected ? 'bg-violet-600 text-white' : 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-300'}`}><BookOpenCheck size={16} /></div>
-                      <button type="button" onClick={() => void applyPromptRun(run, `已打开提示词集「${getPromptRunTitle(run)}」`)} disabled={running || selected} aria-label={`查看提示词集 ${getPromptRunTitle(run)}`} className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-default">
-                        <span className="block truncate text-xs font-semibold">{getPromptRunTitle(run)}</span>
-                        <span className="mt-0.5 block truncate text-[11px] text-gray-500 dark:text-gray-400">{run.sop.name} · {available} 条 · {getRunStatusLabel(run)}</span>
-                        <span className="mt-0.5 block text-[10px] text-gray-400">{new Date(getRunUpdatedAt(run)).toLocaleString()}</span>
-                      </button>
-                      <button type="button" onClick={() => void toggleRunPinned(run)} disabled={running} aria-label={run.pinned ? `取消收藏 ${getPromptRunTitle(run)}` : `收藏 ${getPromptRunTitle(run)}`} aria-pressed={Boolean(run.pinned)} className={`flex h-8 w-8 items-center justify-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-40 ${run.pinned ? 'text-amber-500' : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-white/[0.06]'}`}><Bookmark size={14} fill={run.pinned ? 'currentColor' : 'none'} /></button>
-                    </article>
-                  )
-                })}
+              {selectedRunIds.size > 0 && (
+                <div className="border-b border-ds-border bg-ds-selection px-3 py-2">
+                  {batchEditMode === null && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="mr-1 shrink-0 rounded-md bg-ds-surface px-1.5 py-0.5 text-[11px] font-semibold text-ds-selection-text">已选 {selectedRunIds.size} 项</span>
+                      <button type="button" onClick={selectAllFilteredRuns} disabled={running} className="flex h-7 items-center rounded-lg px-2 text-[11px] text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40">全选</button>
+                      <button type="button" onClick={invertRunSelection} disabled={running} className="flex h-7 items-center rounded-lg px-2 text-[11px] text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40">反选</button>
+                      <span className="mx-0.5 h-4 w-px bg-ds-border" />
+                      <button type="button" onClick={() => { setBatchEditMode('tags'); setBatchTagDraft('') }} disabled={running} className="flex h-7 items-center gap-1 rounded-lg bg-ds-surface px-2 text-[11px] text-ds-primary transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><Bookmark size={12} />调标签</button>
+                      <button type="button" onClick={() => { setBatchEditMode('group'); setBatchGroupTarget('') }} disabled={running} className="flex h-7 items-center gap-1 rounded-lg bg-ds-surface px-2 text-[11px] text-ds-primary transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><Folder size={12} />移动</button>
+                      <button type="button" onClick={batchDeleteRuns} disabled={running} className="flex h-7 items-center gap-1 rounded-lg bg-ds-surface px-2 text-[11px] text-ds-danger transition-colors hover:bg-ds-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-danger disabled:opacity-40"><Trash2 size={12} />删除</button>
+                      <button type="button" onClick={clearRunSelection} className="ml-auto flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><X size={12} />取消选择</button>
+                    </div>
+                  )}
+                  {batchEditMode === 'tags' && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="shrink-0 text-[11px] font-medium text-ds-text">批量标签</span>
+                      <input value={batchTagDraft} onChange={(event) => setBatchTagDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void batchUpdateTags('merge') }} placeholder="多个标签用逗号分隔" aria-label="批量标签" className="h-7 min-w-0 flex-1 rounded-lg border border-ds-border bg-ds-surface px-2 text-[11px] outline-none focus:border-ds-primary focus:ring-2 focus:ring-ds-primary/20" />
+                      <button type="button" onClick={() => void batchUpdateTags('merge')} className="flex h-7 items-center rounded-lg bg-ds-primary px-2 text-[11px] text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary">追加</button>
+                      <button type="button" onClick={() => void batchUpdateTags('replace')} className="flex h-7 items-center rounded-lg bg-ds-surface px-2 text-[11px] text-ds-primary transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary">替换</button>
+                      <button type="button" onClick={() => { setBatchEditMode(null); setBatchTagDraft('') }} className="flex h-7 items-center rounded-lg px-2 text-[11px] text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary">取消</button>
+                    </div>
+                  )}
+                  {batchEditMode === 'group' && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="shrink-0 text-[11px] font-medium text-ds-text">移动到</span>
+                      <select value={batchGroupTarget} onChange={(event) => setBatchGroupTarget(event.target.value)} aria-label="批量目标文件夹" className="h-7 min-w-0 flex-1 rounded-lg border border-ds-border bg-ds-surface px-2 text-[11px] text-ds-text outline-none focus:border-ds-primary focus:ring-2 focus:ring-ds-primary/20">
+                        <option value="">根目录</option>
+                        {flatPromptGroups.map(({ folder, depth }) => <option key={folder.id} value={folder.id}>{`${'　'.repeat(depth)}${depth ? '└ ' : ''}${folder.name}`}</option>)}
+                      </select>
+                      <button type="button" onClick={() => void batchMoveToGroup()} className="flex h-7 items-center rounded-lg bg-ds-primary px-2 text-[11px] text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary">应用</button>
+                      <button type="button" onClick={() => { setBatchEditMode(null); setBatchGroupTarget('') }} className="flex h-7 items-center rounded-lg px-2 text-[11px] text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary">取消</button>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div
+                ref={listRef}
+                role="tree"
+                aria-label="提示词集目录"
+                className={`relative min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2 ${libraryDropTarget?.type === 'root' ? 'ring-2 ring-inset ring-ds-selection-border' : ''}`}
+                onDragOver={(event) => { if (event.target === event.currentTarget) dragOverPromptRoot(event) }}
+                onDrop={(event) => void dropOnPromptRoot(event)}
+                onContextMenu={(event) => openLibraryContextMenu(event, { type: 'background', id: '' })}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return
+                  if (event.target instanceof HTMLElement && event.target.closest('[data-no-marquee]')) return
+                  const additive = event.ctrlKey || event.metaKey || event.shiftKey
+                  marqueeRef.current = { x0: event.clientX, y0: event.clientY, additive }
+                  setMarquee({ x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY })
+                }}
+                onMouseMove={(event) => {
+                  if (!marqueeRef.current) return
+                  setMarquee((current) => current && { ...current, x1: event.clientX, y1: event.clientY })
+                }}
+                onMouseUp={() => {
+                  if (marqueeRef.current && marquee) {
+                    applyMarqueeSelection(marquee, marqueeRef.current.additive)
+                  }
+                  marqueeRef.current = null
+                  setMarquee(null)
+                }}
+                onMouseLeave={() => {
+                  if (marqueeRef.current && marquee) {
+                    applyMarqueeSelection(marquee, marqueeRef.current.additive)
+                  }
+                  marqueeRef.current = null
+                  setMarquee(null)
+                }}
+              >
+                {renderPromptFolderTree(null)}
+                {filteredRuns
+                  .filter((run) => !run.promptGroup?.id)
+                  .map((run) => renderPromptRunTreeItem(run, 0))}
                 {filteredRuns.length === 0 && (
-                  <div className="flex min-h-40 flex-col items-center justify-center px-4 text-center text-gray-500">
+                  <div className="flex min-h-40 flex-col items-center justify-center px-4 text-center text-ds-muted">
                     <BookOpenCheck size={22} />
-                    <p className="mt-2 text-xs font-medium">{recentRuns.length ? '没有匹配的提示词集' : '提示词仓库还是空的'}</p>
-                    <p className="mt-1 text-[11px] leading-5">{recentRuns.length ? '试试其他关键词或关闭收藏筛选。' : '新建一个，或从 SOP 生成后自动保存。'}</p>
+                    <p className="mt-2 text-xs font-medium">{recentRuns.length ? '没有匹配的提示词集' : '还没有提示词集'}</p>
+                    <p className="mt-1 text-[11px] leading-5">{recentRuns.length ? '尝试其他关键词或关闭收藏筛选。' : '新建一个，或从 SOP 生成后自动保存。'}</p>
                   </div>
                 )}
+                {marquee && listRef.current && (() => {
+                  const rect = listRef.current.getBoundingClientRect()
+                  const left = Math.min(marquee.x0, marquee.x1) - rect.left
+                  const top = Math.min(marquee.y0, marquee.y1) - rect.top
+                  const width = Math.abs(marquee.x1 - marquee.x0)
+                  const height = Math.abs(marquee.y1 - marquee.y0)
+                  return (
+                    <div
+                      aria-hidden
+                      className="pointer-events-none absolute z-10 border border-ds-selection-border bg-ds-selection/70"
+                      style={{ left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` }}
+                    />
+                  )
+                })()}
               </div>
             </aside>
 
             <section className="flex min-h-0 min-w-0 flex-col">
               {activeRun || sources.length > 0 ? (
                 <>
-                  <div className="border-b border-gray-200 p-4 dark:border-white/[0.08]">
+                  <div className="border-b border-ds-border p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-[16rem] flex-1">
-                        <input value={runTitle} onChange={(event) => updateActiveRunMetadata({ title: event.target.value })} disabled={running} aria-label="提示词集名称" placeholder="未命名提示词集" className="w-full border-0 bg-transparent p-0 text-base font-semibold outline-none placeholder:text-gray-400 focus:ring-0 disabled:opacity-60" />
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <input value={runTitle} onChange={(event) => updateActiveRunMetadata({ title: event.target.value })} disabled={running} aria-label="提示词集名称" placeholder="未命名提示词集" className="w-full border-0 bg-transparent p-0 text-base font-semibold outline-none placeholder:text-ds-muted focus:ring-0 disabled:opacity-60" />
+                        <p className="mt-1 text-xs text-ds-muted">
                           {activeRun?.sop.name ?? selectedSop?.name ?? '独立提示词集'} · {visiblePrompts.length} 条提示词 · {activeRun ? getRunStatusLabel(activeRun) : '编辑中'}
                           {activeRun ? ` · ${new Date(getRunUpdatedAt(activeRun)).toLocaleString()}` : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
                         {status === 'paused'
-                          ? <span className="mr-1 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300"><Pause size={13} />已暂停</span>
-                          : running && <span className="mr-1 flex items-center gap-1.5 rounded-lg bg-violet-50 px-2 py-1.5 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-300"><LoaderCircle size={13} className="animate-spin" />处理中</span>}
-                        <button type="button" onClick={() => void toggleActiveRunPinned()} disabled={running || !activeRun} aria-label={activeRun?.pinned ? '取消收藏当前提示词集' : '收藏当前提示词集'} aria-pressed={Boolean(activeRun?.pinned)} title={activeRun?.pinned ? '取消收藏' : '收藏'} className={`flex h-9 w-9 items-center justify-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-40 ${activeRun?.pinned ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]'}`}><Bookmark size={15} fill={activeRun?.pinned ? 'currentColor' : 'none'} /></button>
-                        <button type="button" onClick={() => void copyActivePrompts()} disabled={running || visiblePrompts.length === 0} aria-label="复制全部提示词" title="复制全部" className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"><Copy size={15} /></button>
-                        <button type="button" onClick={() => void duplicateActiveRun()} disabled={running || !activeRun} aria-label="复制当前提示词集为副本" title="创建副本" className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"><Plus size={15} /></button>
-                        <button type="button" onClick={() => activeRun && void deleteRun(activeRun)} disabled={running || !activeRun || Boolean(activeRun?.taskIds?.length || activeRun?.batchId)} aria-label="删除当前提示词集" title={activeRun?.taskIds?.length || activeRun?.batchId ? '已关联生图任务，不能删除' : '删除提示词集'} className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-red-950/30"><Trash2 size={15} /></button>
+                          ? <span className="mr-1 flex items-center gap-1.5 rounded-lg bg-ds-warning/10 px-2 py-1.5 text-xs text-ds-warning"><Pause size={13} />已暂停</span>
+                          : running && <span className="mr-1 flex items-center gap-1.5 rounded-lg bg-ds-primary/10 px-2 py-1.5 text-xs text-ds-primary"><LoaderCircle size={13} className="animate-spin" />处理中</span>}
+                        <button type="button" onClick={() => void toggleActiveRunPinned()} disabled={running || !activeRun} aria-label={activeRun?.pinned ? '取消收藏当前提示词集' : '收藏当前提示词集'} aria-pressed={Boolean(activeRun?.pinned)} title={activeRun?.pinned ? '取消收藏' : '收藏'} className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40 ${activeRun?.pinned ? 'bg-ds-warning/10 text-ds-warning' : 'text-ds-muted hover:bg-ds-subtle hover:text-ds-text'}`}><Bookmark size={15} fill={activeRun?.pinned ? 'currentColor' : 'none'} /></button>
+                        <button type="button" onClick={() => void copyActivePrompts()} disabled={running || visiblePrompts.length === 0} aria-label="复制全部提示词" title="复制全部" className="flex h-9 w-9 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-30"><Copy size={15} /></button>
+                        <button type="button" onClick={(event) => activeRun && openLibraryContextMenu(event, { type: 'run', id: activeRun.id })} disabled={running || !activeRun} aria-label="更多提示词集操作" title="更多操作" className="flex h-9 w-9 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-subtle hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-30"><MoreHorizontal size={15} /></button>
                       </div>
                     </div>
-                    <label className="mt-3 block">
-                      <span className="mb-1 block text-[11px] font-medium text-gray-500">本次要求 / 说明</span>
-                      <textarea value={brief} onChange={(event) => updateActiveRunMetadata({ brief: event.target.value })} disabled={running} rows={2} aria-label="提示词集说明" placeholder="记录用途、风格、限制或其他上下文" className="min-h-14 w-full resize-y rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs leading-5 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-gray-950 dark:focus:ring-violet-950" />
-                    </label>
+                    <details className="group mt-3 rounded-lg bg-ds-subtle">
+                      <summary aria-label="展开提示词集信息" className="flex h-9 cursor-pointer list-none items-center gap-2 px-3 text-xs text-ds-muted outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ds-primary [&::-webkit-details-marker]:hidden">
+                        <span className="font-medium text-ds-text">提示词集信息</span>
+                        <span className="min-w-0 flex-1 truncate text-[11px]">{activeRun?.promptGroup?.name ?? '根目录'}{brief.trim() ? ' · 已填写说明' : ''}</span>
+                        <ChevronDown size={13} className="transition-transform group-open:rotate-180" />
+                      </summary>
+                      <div className="grid gap-3 border-t border-ds-border p-3 sm:grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)]">
+                        <label className="block text-[11px] font-medium text-ds-muted">
+                          <span className="mb-1 block">所属文件夹</span>
+                          <select value={activeRun?.promptGroup?.id ?? ''} onChange={(event) => activeRun && void movePromptCollectionToGroup(activeRun, event.target.value)} disabled={running || !activeRun} aria-label="提示词集所属文件夹" className="h-9 w-full rounded-lg border border-ds-border bg-ds-surface px-2 text-xs text-ds-text outline-none focus:border-ds-primary focus:ring-2 focus:ring-ds-primary/20 disabled:opacity-50">
+                            <option value="">根目录</option>
+                            {flatPromptGroups.map(({ folder, depth }) => <option key={folder.id} value={folder.id}>{`${'　'.repeat(depth)}${depth ? '└ ' : ''}${folder.name}`}</option>)}
+                          </select>
+                        </label>
+                        <label className="block text-[11px] font-medium text-ds-muted">
+                          <span className="mb-1 block">说明</span>
+                          <textarea value={brief} onChange={(event) => updateActiveRunMetadata({ brief: event.target.value })} disabled={running} rows={2} aria-label="提示词集说明" placeholder="记录用途、风格或限制" className="min-h-9 w-full resize-y rounded-lg border border-ds-border bg-ds-surface px-3 py-2 text-xs leading-5 outline-none focus:border-ds-primary focus:ring-2 focus:ring-ds-primary/20 disabled:opacity-60" />
+                        </label>
+                      </div>
+                    </details>
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -1609,36 +2767,74 @@ export default function GallerySopBatchModal({
                 const sourceMissing = Math.max(0, sourceRun.requestedCount - sourceAvailable)
                 const canRetrySource = Boolean(selectedSop && sourceMissing > 0 && sourceRun.status !== 'running')
                 return (
-                  <article key={sourceRun.source.id} className="mb-4 overflow-hidden rounded-xl border border-gray-200 dark:border-white/[0.1]">
-                    <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 bg-gray-50 px-3 py-2.5 dark:border-white/[0.08] dark:bg-gray-950">
+                  <article key={sourceRun.source.id} className="mb-4 overflow-hidden rounded-xl border border-ds-border">
+                    <div className="flex flex-wrap items-center gap-3 border-b border-ds-border bg-ds-subtle px-3 py-2.5">
                       <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg"><SourceThumb source={sourceRun.source} /></div>
                       <div className="min-w-[12rem] flex-1">
                         <h4 className="truncate text-sm font-semibold">{sourceRun.source.label}</h4>
-                        <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        <p className="mt-0.5 text-xs text-ds-muted">
                           目标 {sourceRun.requestedCount} 条 · 已有 {sourceAvailable} 条
                           {sourceMissing > 0 ? ` · 待补 ${sourceMissing} 条` : ''}
                         </p>
-                        {sourceRun.error && <p className="mt-1 text-xs leading-5 text-red-600 dark:text-red-300">{sourceRun.error}</p>}
+                        {sourceRun.error && <p className="mt-1 text-xs leading-5 text-ds-danger">{sourceRun.error}</p>}
                       </div>
                       <div className="flex items-center gap-2">
-                        {sourceRun.status === 'running' && <span className="flex items-center gap-1.5 text-xs text-violet-700 dark:text-violet-300"><LoaderCircle size={13} className="animate-spin" />生成中</span>}
+                        {sourceRun.status === 'running' && <span className="flex items-center gap-1.5 text-xs text-ds-primary"><LoaderCircle size={13} className="animate-spin" />生成中</span>}
                         {canRetrySource && (
-                          <button type="button" onClick={() => void generateForSources(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-2.5 text-xs font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-500/30 dark:bg-gray-900 dark:text-violet-200 dark:hover:bg-violet-500/10"><RefreshCw size={13} />补齐 {sourceMissing} 条</button>
+                          <button type="button" onClick={() => void generateForSources(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-ds-primary/30 bg-ds-surface px-2.5 text-xs font-medium text-ds-primary transition-colors hover:bg-ds-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><RefreshCw size={13} />补齐 {sourceMissing} 条</button>
                         )}
-                        <button type="button" onClick={() => addManualPrompt(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.1] dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-white/[0.06]"><Plus size={13} />新增提示词</button>
+                        <button type="button" onClick={() => addManualPrompt(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-xs font-medium text-ds-text transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} />新增提示词</button>
                       </div>
                     </div>
                     <div className="space-y-3 p-3">
                       {sourcePrompts.map((item, index) => {
                         const referenceSources = getPromptReferenceSources(item)
+                        const outputLinks = activePromptImageLinksByPromptId.get(item.id) ?? []
                         return (
-                          <div key={item.id} className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-start gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-gray-900">
-                            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${item.origin === 'ai' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'}`}>{index + 1}</span>
+                          <div id={`prompt-output-${item.id}`} key={item.id} className="grid scroll-mt-4 grid-cols-[2rem_minmax(0,1fr)_auto] items-start gap-3 rounded-xl border border-ds-border bg-ds-surface p-3">
+                            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${item.origin === 'ai' ? 'bg-ds-primary/10 text-ds-primary' : 'bg-ds-info/10 text-ds-info'}`}>{index + 1}</span>
                             <div className="min-w-0 flex-1">
-                              <textarea value={item.promptText} onChange={(event) => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, promptText: event.target.value, edited: true } : entry))} rows={5} disabled={running} aria-label={`第 ${index + 1} 条提示词`} className="min-h-32 w-full resize-y rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm leading-6 text-gray-900 outline-none transition focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-gray-950 dark:text-gray-100 dark:focus:ring-violet-950" />
+                              <textarea value={item.promptText} onChange={(event) => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, promptText: event.target.value, edited: true } : entry))} rows={5} disabled={running} aria-label={`第 ${index + 1} 条提示词`} className="min-h-32 w-full resize-y rounded-lg border border-ds-border bg-ds-subtle px-3 py-2.5 text-sm leading-6 text-ds-text outline-none transition-colors focus:border-ds-primary focus:bg-ds-surface focus:ring-2 focus:ring-ds-primary/20 disabled:opacity-60" />
+                              {activeRun && (
+                                <section aria-label={`第 ${index + 1} 条提示词的生成结果`} className="mt-3 border-t border-ds-border pt-3">
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <span className="text-[11px] font-semibold text-ds-text">生成结果</span>
+                                    <span className="text-[11px] tabular-nums text-ds-muted">{outputLinks.length} 张图片</span>
+                                  </div>
+                                  {outputLinks.length > 0 ? (
+                                    <div className="grid gap-2 lg:grid-cols-2">
+                                      {outputLinks.map((outputLink, outputIndex) => {
+                                        const promptText = outputLink.revisedPrompt ?? outputLink.taskPrompt
+                                        const isRevised = Boolean(outputLink.revisedPrompt)
+                                        return (
+                                          <article key={outputLink.imageId} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-2 rounded-lg bg-ds-subtle p-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => setPreviewSource({ id: `output-${outputLink.imageId}`, label: `图片 ${outputIndex + 1}`, kind: 'image', imageId: outputLink.imageId })}
+                                              aria-label={`查看第 ${index + 1} 条提示词的生成图片 ${outputIndex + 1}`}
+                                              className="aspect-square overflow-hidden rounded-md border border-ds-border bg-ds-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"
+                                            >
+                                              <OutputImageThumb imageId={outputLink.imageId} label={`提示词 ${index + 1} 的生成图片 ${outputIndex + 1}`} />
+                                            </button>
+                                            <div className="min-w-0">
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className={`truncate text-[10px] font-medium ${isRevised ? 'text-ds-primary' : 'text-ds-muted'}`}>{isRevised ? '图片反推 / 改写提示词' : '提交提示词'}</span>
+                                                <button type="button" onClick={() => void copyImagePrompt(promptText, isRevised)} aria-label={`复制第 ${index + 1} 条提示词的图片 ${outputIndex + 1} 提示词`} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"><Copy size={12} /></button>
+                                              </div>
+                                              <p className="mt-1 max-h-12 overflow-hidden text-[11px] leading-4 text-ds-text">{promptText}</p>
+                                            </div>
+                                          </article>
+                                        )
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <p className="rounded-lg bg-ds-subtle px-2.5 py-2 text-[11px] text-ds-muted">尚未生成图片；任务完成后会自动显示在这里。</p>
+                                  )}
+                                </section>
+                              )}
                               {referenceSources.length > 0 && (
                                 <div className="mt-2 flex min-w-0 items-center gap-2">
-                                  <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">参考图</span>
+                                  <span className="shrink-0 text-[11px] text-ds-muted">参考图</span>
                                   <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1">
                                     {referenceSources.map((referenceSource, referenceIndex) => (
                                       <button
@@ -1647,55 +2843,120 @@ export default function GallerySopBatchModal({
                                         onClick={() => setPreviewSource(referenceSource)}
                                         aria-label={`查看第 ${index + 1} 条提示词的参考图 ${referenceIndex + 1} 大图`}
                                         title={`${referenceSource.label} · 点击查看大图`}
-                                        className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-100 transition hover:border-violet-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 dark:border-white/[0.12] dark:bg-gray-800"
+                                        className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-ds-border bg-ds-subtle transition-colors hover:border-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"
                                       >
                                         <SourceThumb source={referenceSource} />
                                       </button>
                                     ))}
                                   </div>
-                                  <span className="shrink-0 text-[11px] text-gray-400">{referenceSources.length} 张</span>
+                                  <span className="shrink-0 text-[11px] text-ds-muted">{referenceSources.length} 张</span>
                                 </div>
                               )}
-                              <p className="mt-1.5 text-[11px] text-gray-500 dark:text-gray-400">{item.edited ? '已编辑' : item.origin === 'ai' ? '智能生成' : '手动添加'} · 已自动保存 · {item.promptText.trim().length} 字</p>
+                              <p className="mt-1.5 text-[11px] text-ds-muted">{item.edited ? '已编辑并自动保存' : item.origin === 'ai' ? '智能生成' : '手动添加'}</p>
                             </div>
                             <div className="flex items-center gap-1">
-                              {selectedSop && <button type="button" onClick={() => void regeneratePrompt(item)} disabled={running} aria-label={`重新生成第 ${index + 1} 条提示词`} title="重新生成" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-violet-50 hover:text-violet-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-violet-950/30"><RefreshCw size={15} /></button>}
-                              <button type="button" onClick={() => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, deleted: true } : entry))} disabled={running} aria-label={`删除第 ${index + 1} 条提示词`} title="删除提示词" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-red-950/30"><Trash2 size={15} /></button>
+                              {selectedSop && <button type="button" onClick={() => void regeneratePrompt(item)} disabled={running} aria-label={`重新生成第 ${index + 1} 条提示词`} title="重新生成" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-primary/10 hover:text-ds-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><RefreshCw size={15} /></button>}
+                              <button type="button" onClick={() => updatePrompts((current) => current.map((entry) => entry.id === item.id ? { ...entry, deleted: true } : entry))} disabled={running} aria-label={`删除第 ${index + 1} 条提示词`} title="删除提示词" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-danger/10 hover:text-ds-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-danger disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={15} /></button>
                             </div>
                           </div>
                         )
                       })}
-                      {!sourcePrompts.length && <p className="rounded-lg border border-dashed border-gray-300 p-4 text-center text-xs text-gray-500 dark:border-white/[0.1]">当前没有提示词，可点击“新增提示词”手动添加。</p>}
+                      {!sourcePrompts.length && <p className="rounded-lg border border-dashed border-ds-border p-4 text-center text-xs text-ds-muted">当前没有提示词，可点击“新增提示词”手动添加。</p>}
                     </div>
                   </article>
                 )
               })}
               {!sources.length && (
-                <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 px-6 text-center text-gray-500 dark:border-white/[0.1]">
+                <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-ds-border px-6 text-center text-ds-muted">
                   <BookOpenCheck size={26} />
                   <p className="mt-3 text-sm font-medium">这个提示词集还没有内容</p>
                   <p className="mt-1 max-w-md text-xs leading-5">可以从 SOP 生成，也可以新建独立提示词集后手动整理。</p>
                   <div className="mt-4 flex items-center gap-2">
-                    <button type="button" onClick={() => void createPromptCollection()} disabled={running} className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-40 dark:border-white/[0.1] dark:bg-gray-900 dark:text-gray-200"><Plus size={14} />新建提示词集</button>
-                    {selectedSop && (
-                      <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`生成 ${targetCount} 条 SOP 提示词`} className="flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-4 text-xs font-medium text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-violet-200 dark:disabled:bg-violet-500/20 dark:disabled:text-violet-300"><Sparkles size={14} />生成 {targetCount} 条提示词</button>
-                    )}
+                    {selectedSop
+                      ? <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`生成 ${targetCount} 条 SOP 提示词`} className="flex h-9 items-center gap-2 rounded-lg bg-ds-primary px-4 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-ds-subtle disabled:text-ds-muted"><Sparkles size={14} />从当前 SOP 生成</button>
+                      : <button type="button" onClick={() => void createPromptCollection()} disabled={running} className="flex h-9 items-center gap-2 rounded-lg bg-ds-primary px-4 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><Plus size={14} />新建提示词集</button>}
                   </div>
                 </div>
               )}
                   </div>
                 </>
               ) : (
-                <div className="flex min-h-64 flex-1 flex-col items-center justify-center px-6 text-center text-gray-500">
+                <div className="flex min-h-64 flex-1 flex-col items-center justify-center px-6 text-center text-ds-muted">
                   <BookOpenCheck size={28} />
-                  <p className="mt-3 text-sm font-medium">{recentRuns.length ? '从左侧选择一个提示词集' : '建立你的第一个提示词集'}</p>
-                  <p className="mt-1 max-w-md text-xs leading-5">{recentRuns.length ? '右侧会显示完整提示词、说明与可复用操作。' : '提示词会持久化保存在本机应用数据中，不依赖当前是否加载 SOP。'}</p>
-                  <button type="button" onClick={() => void createPromptCollection()} disabled={running} className="mt-4 flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-4 text-xs font-medium text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-40"><Plus size={14} />新建提示词集</button>
-                  {selectedSop && <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`生成 ${targetCount} 条 SOP 提示词`} className="mt-2 flex h-9 items-center gap-2 rounded-lg border border-violet-200 bg-white px-4 text-xs font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-40 dark:border-violet-500/30 dark:bg-gray-900 dark:text-violet-200"><Sparkles size={14} />从当前 SOP 生成</button>}
+                  <p className="mt-3 text-sm font-medium">
+                    {filteredRuns.length
+                      ? '从左侧选择一个提示词集'
+                      : selectedPromptGroup
+                        ? `「${selectedPromptGroup.name}」还是空的`
+                        : selectedPromptGroupId === UNGROUPED_PROMPT_GROUP
+                          ? '根目录还没有提示词集'
+                          : '建立你的第一个提示词集'}
+                  </p>
+                  <p className="mt-1 max-w-md text-xs leading-5">
+                    {filteredRuns.length
+                      ? '右侧会显示完整提示词、说明与可复用操作。'
+                      : '新建的提示词集会直接保存到当前文件夹，也可以从其他文件夹拖拽移入。'}
+                  </p>
+                  {selectedSop
+                    ? <button type="button" onClick={() => void generatePromptList()} disabled={running} aria-label={`生成 ${targetCount} 条 SOP 提示词`} className="mt-4 flex h-9 items-center gap-2 rounded-lg bg-ds-primary px-4 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><Sparkles size={14} />从当前 SOP 生成</button>
+                    : <button type="button" onClick={() => void createPromptCollection()} disabled={running} className="mt-4 flex h-9 items-center gap-2 rounded-lg bg-ds-primary px-4 text-xs font-medium text-[hsl(var(--ds-color-text-inverse))] transition-colors hover:bg-[hsl(var(--ds-color-primary-hover))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:opacity-40"><Plus size={14} />新建提示词集</button>}
                 </div>
               )}
             </section>
           </div>
+          {libraryContextMenu && (() => {
+            const contextFolder = libraryContextMenu.item.type === 'folder'
+              ? promptGroups.find((folder) => folder.id === libraryContextMenu.item.id)
+              : undefined
+            const contextRun = libraryContextMenu.item.type === 'run'
+              ? recentRuns.find((run) => run.id === libraryContextMenu.item.id)
+              : undefined
+            const pasteTargetId = contextFolder?.id
+              ?? contextRun?.promptGroup?.id
+              ?? selectedPromptGroup?.id
+              ?? null
+            const menuItemClass = 'flex h-8 w-full items-center justify-between gap-4 rounded-md px-2.5 text-left text-xs text-ds-text transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-35'
+            return (
+              <div
+                role="menu"
+                aria-label="提示词库操作"
+                onMouseDown={(event) => event.stopPropagation()}
+                className="fixed z-[calc(var(--ds-z-modal)+20)] w-52 rounded-xl border border-ds-border bg-ds-surface p-1.5 shadow-ds-md"
+                style={{
+                  left: Math.max(8, Math.min(libraryContextMenu.x, window.innerWidth - 220)),
+                  top: Math.max(8, Math.min(libraryContextMenu.y, window.innerHeight - 330)),
+                }}
+              >
+                {contextFolder && (
+                  <>
+                    <button type="button" role="menuitem" aria-label={`在 ${contextFolder.name} 中新建子文件夹`} onClick={() => { setLibraryContextMenu(null); beginCreatePromptGroup(contextFolder.id) }} className={menuItemClass}><span>新建子文件夹</span><FolderPlus size={13} /></button>
+                    <button type="button" role="menuitem" aria-label={`重命名文件夹 ${contextFolder.name}`} onClick={() => { setLibraryContextMenu(null); beginRenamePromptGroup(contextFolder) }} className={menuItemClass}><span>重命名</span><span className="text-[10px] text-ds-muted">F2</span></button>
+                    <div className="my-1 border-t border-ds-border" />
+                  </>
+                )}
+                {contextRun && (
+                  <button type="button" role="menuitem" onClick={() => { setLibraryContextMenu(null); void applyPromptRun(contextRun, `已打开提示词集「${getPromptRunTitle(contextRun)}」`) }} className={menuItemClass}><span>打开提示词集</span><BookOpenCheck size={13} /></button>
+                )}
+                {libraryContextMenu.item.type !== 'background' && (
+                  <>
+                    <button type="button" role="menuitem" onClick={() => copyOrCutLibraryItem('copy', libraryContextMenu.item as PromptLibraryItemRef)} className={menuItemClass}><span>复制</span><span className="text-[10px] text-ds-muted">Ctrl+C</span></button>
+                    <button type="button" role="menuitem" onClick={() => copyOrCutLibraryItem('cut', libraryContextMenu.item as PromptLibraryItemRef)} className={menuItemClass}><span>剪切</span><span className="text-[10px] text-ds-muted">Ctrl+X</span></button>
+                  </>
+                )}
+                {contextRun && (
+                  <button type="button" role="menuitem" onClick={() => { setLibraryContextMenu(null); void duplicatePromptRunToFolder(contextRun, contextRun.promptGroup?.id ?? null) }} className={menuItemClass}><span>创建副本</span><Copy size={13} /></button>
+                )}
+                <button type="button" role="menuitem" disabled={!libraryClipboard} onClick={() => { setLibraryContextMenu(null); void pasteLibraryItem(pasteTargetId) }} className={menuItemClass}><span>粘贴到这里</span><span className="text-[10px] text-ds-muted">Ctrl+V</span></button>
+                {libraryContextMenu.item.type === 'background' && (
+                  <button type="button" role="menuitem" onClick={() => { setLibraryContextMenu(null); beginCreatePromptGroup(selectedPromptGroup?.id ?? null) }} className={menuItemClass}><span>新建文件夹</span><FolderPlus size={13} /></button>
+                )}
+                {(contextFolder || contextRun) && <div className="my-1 border-t border-ds-border" />}
+                {contextFolder && <button type="button" role="menuitem" aria-label={`删除文件夹 ${contextFolder.name}`} onClick={() => { setLibraryContextMenu(null); deletePromptGroup(contextFolder) }} className={`${menuItemClass} text-ds-danger hover:bg-ds-danger/10`}><span>删除文件夹</span><Trash2 size={13} /></button>}
+                {contextRun && <button type="button" role="menuitem" disabled={Boolean(contextRun.taskIds?.length || contextRun.batchId)} onClick={() => { setLibraryContextMenu(null); deleteRun(contextRun) }} className={`${menuItemClass} text-ds-danger hover:bg-ds-danger/10`}><span>删除提示词集</span><Trash2 size={13} /></button>}
+                <p className="mt-1 border-t border-ds-border px-2.5 pt-1.5 text-[10px] text-ds-muted">可拖拽移动；拖到上下边缘调整顺序</p>
+              </div>
+            )
+          })()}
         </div>
         {previewSource && (
           <div

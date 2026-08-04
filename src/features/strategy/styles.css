@@ -34,8 +34,8 @@
     minmax(420px, 1fr)
     clamp(360px, 27vw, 440px);
   background:
-    radial-gradient(circle at 50% -20%, rgb(59 130 246 / 0.06), transparent 42%),
-    rgb(249 250 251);
+    radial-gradient(circle at 50% -20%, hsl(158 25% 32% / 0.05), transparent 42%),
+    hsl(var(--ds-color-surface));
 }
 
 @media (max-width: 1180px) {
@@ -46,30 +46,49 @@
 
 .dark .strategy-workspace-grid {
   background:
-    radial-gradient(circle at 50% -20%, rgb(59 130 246 / 0.08), transparent 42%),
-    rgb(3 7 18);
+    radial-gradient(circle at 50% -20%, hsl(158 18% 58% / 0.06), transparent 42%),
+    hsl(var(--ds-color-surface));
 }
 
 .sop-center-overlay {
-  background: hsl(var(--ds-color-scrim) / 0.42);
-  backdrop-filter: blur(10px);
+  background: hsl(var(--ds-color-scrim) / 0.48);
+  backdrop-filter: none;
 }
 
 .sop-center-dialog {
   background: hsl(var(--ds-color-surface-raised));
   border: 1px solid hsl(var(--ds-color-border));
-  border-radius: 1.25rem;
-  box-shadow: 0 24px 72px rgb(0 0 0 / 0.34);
+  border-radius: var(--ds-radius-xl);
+  box-shadow: var(--ds-shadow-lg);
   color: hsl(var(--ds-color-text));
   font-family: var(--ds-font-sans);
   height: min(86vh, 860px);
   line-height: var(--ds-line-height-normal);
   max-width: min(1420px, calc(100vw - 2rem));
+
+  /* 局部覆盖强调色令牌，使本弹窗（含左侧目录栏）与 SOP 功能线 violet 一致，
+     不影响其它皮肤或弹窗。 */
+  --ds-color-primary: 262 83% 58%;
+  --ds-color-primary-hover: 262 83% 50%;
+  --ds-color-primary-subtle: 262 83% 96%;
+  --ds-color-focus: 262 83% 60%;
+  --ds-color-selection-surface: 262 90% 96%;
+  --ds-color-selection-border: 262 70% 78%;
+  --ds-color-selection-text: 262 60% 35%;
+}
+
+.dark .sop-center-dialog {
+  --ds-color-primary: 262 83% 72%;
+  --ds-color-primary-hover: 262 83% 78%;
+  --ds-color-primary-subtle: 262 40% 24%;
+  --ds-color-focus: 262 83% 72%;
+  --ds-color-selection-surface: 262 40% 24%;
+  --ds-color-selection-border: 262 60% 60%;
+  --ds-color-selection-text: 262 80% 88%;
 }
 
 .sop-center-header {
   align-items: center;
-  background: linear-gradient(180deg, hsl(var(--ds-color-surface-raised)), hsl(var(--ds-color-surface)));
   border-bottom: 1px solid hsl(var(--ds-color-border));
   display: flex;
   gap: 1rem;

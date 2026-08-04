@@ -347,6 +347,15 @@ export interface SopBatchSnapshot {
   id: string
   /** 用户可编辑的提示词集标题；旧记录缺省时由 SOP 名称、本次要求或日期生成。 */
   title?: string
+  /** 用户自定义标签，用于检索与批量归类。 */
+  tags?: string[]
+  /** 提示词仓库中的可选文件夹；名称冗余保存，便于备份恢复后重建目录树。 */
+  promptGroup?: {
+    id: string
+    name: string
+  }
+  /** 提示词集在所属文件夹中的自定义排序位置。 */
+  promptOrder?: number
   batchId: string
   workspaceTabId: string | null
   createdAt: number

@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, useRef, type ReactNode, type KeyboardEvent } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask, removeMultipleTasks } from '../store'
+import { useRuntimeStore } from '../stores/runtimeStore'
 import { updateTaskPrompt } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
@@ -82,7 +83,7 @@ function TaskCard({
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
-  const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const streamPreviewSrc = useRuntimeStore((s) => s.streamPreviews[task.id] || '')
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)

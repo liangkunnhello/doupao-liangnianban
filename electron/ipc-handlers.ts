@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'path'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, renameSync, openSync, readSync, closeSync, rmdirSync } from 'fs'
+import { promises as fsPromises } from 'fs'
 import sizeOf from 'image-size'
 import { writeStreamingZip, type StreamingZipRequest } from './streaming-zip'
 
@@ -72,6 +73,40 @@ function normalizeFsPath(value: string): string {
 function addAllowedRoot(value: string | null | undefined): void {
   if (!value) return
   sessionAllowedRoots.add(normalizeFsPath(value))
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsPromises.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function listBackupFiles(backupDir: string, baseName: string): Promise<string[]> {
+  const names = await fsPromises.readdir(backupDir)
+  const entries: Array<{ fullPath: string; mtimeMs: number }> = []
+  for (const name of names) {
+    if (!name.startsWith(`${baseName}-`)) continue
+    const fullPath = path.join(backupDir, name)
+    try {
+      entries.push({ fullPath, mtimeMs: (await fsPromises.stat(fullPath)).mtimeMs })
+    } catch {
+      // A concurrently removed backup is not relevant to the current write.
+    }
+  }
+  return entries.sort((a, b) => b.mtimeMs - a.mtimeMs).map((entry) => entry.fullPath)
+}
+
+async function pruneBackupFilesAsync(pathsByNewestFirst: string[], keep: number): Promise<void> {
+  await Promise.all(pathsByNewestFirst.slice(Math.max(0, keep)).map(async (filePath) => {
+    try {
+      await fsPromises.unlink(filePath)
+    } catch {
+      // Retention cleanup is best-effort and must not block the current save.
+    }
+  }))
 }
 
 export function authorizeCompositeOutputDirectory(value: unknown): boolean {
@@ -796,51 +831,45 @@ export function registerIpcHandlers(): void {
     try {
       const safeFilePath = assertAllowedPath(filePath)
       const dir = path.dirname(safeFilePath)
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      await fsPromises.mkdir(dir, { recursive: true })
       // 写入前自动备份旧文件
-      if (!skipBackup && existsSync(safeFilePath)) {
+      const fileExists = await pathExists(safeFilePath)
+      if (!skipBackup && fileExists) {
         try {
           const backupDir = path.join(dir, 'backups')
-          if (!existsSync(backupDir)) mkdirSync(backupDir, { recursive: true })
+          await fsPromises.mkdir(backupDir, { recursive: true })
           const intervalMs = (backupInterval ?? 0) * 60 * 1000
           const baseName = path.basename(safeFilePath).replace(/\.[^.]+$/, '')
           let shouldBackup = true
           if (intervalMs > 0) {
-            const backups = readdirSync(backupDir)
-              .map((name) => ({ name, fullPath: path.join(backupDir, name) }))
-              .filter((f) => f.name.startsWith(baseName + '-'))
-              .sort((a, b) => statSync(b.fullPath).mtimeMs - statSync(a.fullPath).mtimeMs)
+            const backups = await listBackupFiles(backupDir, baseName)
             if (backups.length > 0) {
-              const lastBackupTime = statSync(backups[0].fullPath).mtimeMs
+              const lastBackupTime = (await fsPromises.stat(backups[0])).mtimeMs
               shouldBackup = Date.now() - lastBackupTime >= intervalMs
             }
           }
           if (shouldBackup) {
             const ts = new Date().toISOString().replace(/[:.]/g, '-')
             const backupName = baseName + '-' + ts + '.json'
-            copyFileSync(safeFilePath, path.join(backupDir, backupName))
+            await fsPromises.copyFile(safeFilePath, path.join(backupDir, backupName))
           }
           // 只保留最近 30 个备份
-          const backups = readdirSync(backupDir)
-            .map((name) => ({ name, fullPath: path.join(backupDir, name) }))
-            .filter((f) => f.name.startsWith(baseName + '-'))
-            .sort((a, b) => statSync(b.fullPath).mtimeMs - statSync(a.fullPath).mtimeMs)
-          pruneBackupFiles(backups.map((backup) => backup.fullPath), 30)
+          await pruneBackupFilesAsync(await listBackupFiles(backupDir, baseName), 30)
         } catch (backupErr) {
           console.error('自动备份失败（不影响写入）:', backupErr)
         }
       }
       const bakPath = safeFilePath + '.bak'
-      if (existsSync(safeFilePath)) {
-        try { copyFileSync(safeFilePath, bakPath) } catch {}
+      if (fileExists) {
+        try { await fsPromises.copyFile(safeFilePath, bakPath) } catch {}
       }
       const tmpPath = safeFilePath + '.tmp'
-      writeFileSync(tmpPath, content, 'utf-8')
+      await fsPromises.writeFile(tmpPath, content, 'utf-8')
       try {
-        renameSync(tmpPath, safeFilePath)
+        await fsPromises.rename(tmpPath, safeFilePath)
       } catch {
-        try { copyFileSync(tmpPath, safeFilePath) } catch {}
-        try { unlinkSync(tmpPath) } catch {}
+        try { await fsPromises.copyFile(tmpPath, safeFilePath) } catch {}
+        try { await fsPromises.unlink(tmpPath) } catch {}
       }
       return true
     } catch (err) {

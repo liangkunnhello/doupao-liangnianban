@@ -27,6 +27,18 @@ function getPageMetrics(): PageMetrics {
   }
 }
 
+function getActiveMarker(max: number, markerCount: number) {
+  if (markerCount <= 1 || max <= 0) return 0
+  return Math.round((window.scrollY / max) * (markerCount - 1))
+}
+
+function isSamePageMetrics(current: PageMetrics, next: PageMetrics) {
+  return current.activeMarker === next.activeMarker &&
+    current.markerCount === next.markerCount &&
+    current.max === next.max &&
+    current.pageCount === next.pageCount
+}
+
 export default function AppPageRail({ enabled }: { enabled: boolean }) {
   const desktopPointer = useMediaQuery('(min-width: 1024px) and (pointer: fine)')
   const [metrics, setMetrics] = useState<PageMetrics>({ activeMarker: 0, markerCount: 0, max: 0, pageCount: 1 })
@@ -34,18 +46,33 @@ export default function AppPageRail({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled || !desktopPointer) return
 
-    const update = () => setMetrics(getPageMetrics())
-    const observer = new ResizeObserver(update)
+    let frame = 0
+    const updateLayout = () => {
+      const next = getPageMetrics()
+      setMetrics((current) => isSamePageMetrics(current, next) ? current : next)
+    }
+    const updateActiveMarker = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        setMetrics((current) => {
+          const activeMarker = getActiveMarker(current.max, current.markerCount)
+          return current.activeMarker === activeMarker ? current : { ...current, activeMarker }
+        })
+      })
+    }
+    const observer = new ResizeObserver(updateLayout)
     observer.observe(document.documentElement)
     observer.observe(document.body)
-    window.addEventListener('scroll', update, { passive: true })
-    window.addEventListener('resize', update)
-    update()
+    window.addEventListener('scroll', updateActiveMarker, { passive: true })
+    window.addEventListener('resize', updateLayout)
+    updateLayout()
 
     return () => {
       observer.disconnect()
-      window.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', updateActiveMarker)
+      window.removeEventListener('resize', updateLayout)
+      if (frame) window.cancelAnimationFrame(frame)
     }
   }, [desktopPointer, enabled])
 

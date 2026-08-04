@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 import { createPortal } from 'react-dom'
 import { ensureImageCached, useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
+import { getMaskHistoryLimit } from '../lib/maskHistory'
 import { storeImage } from '../lib/db'
 import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -384,7 +385,8 @@ export default function MaskEditorModal() {
     if (!canvas || !ctx) return
 
     undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height))
-    if (undoStackRef.current.length > 40) undoStackRef.current.shift()
+    const historyLimit = getMaskHistoryLimit(canvas.width, canvas.height)
+    if (undoStackRef.current.length > historyLimit) undoStackRef.current.shift()
     redoStackRef.current = []
     syncHistoryState()
   }
@@ -845,9 +847,9 @@ export default function MaskEditorModal() {
 
   return (
     <>
-      <div ref={modalRef} data-no-drag-select role="dialog" aria-modal="true" aria-labelledby="mask-editor-title" className="ds-modal-layer fixed inset-0 flex flex-col bg-gray-50 dark:bg-gray-900 animate-modal-in motion-reduce:animate-none">
+      <div ref={modalRef} data-no-drag-select role="dialog" aria-modal="true" aria-labelledby="mask-editor-title" className="ds-modal-layer fixed inset-0 flex flex-col bg-[hsl(var(--ds-color-surface))] animate-modal-in motion-reduce:animate-none">
       {/* Header */}
-      <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950 z-20">
+      <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] z-20">
         <div className="flex items-center gap-3">
           <button onClick={close} disabled={isSaving} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-lg dark:text-gray-400 dark:hover:bg-gray-800 transition" title="取消">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
@@ -934,7 +936,7 @@ export default function MaskEditorModal() {
 
         {/* Footer Toolbar */}
         <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 flex items-center justify-center z-20 pointer-events-none w-full px-2 sm:px-4">
-          <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 bg-white/95 dark:bg-[#0f0f0f]/95 backdrop-blur-md border border-gray-200/80 dark:border-white/5 rounded-2xl sm:rounded-[1.25rem] shadow-2xl pointer-events-auto">
+          <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 bg-[hsl(var(--ds-color-surface-raised)/0.95)] dark:bg-[hsl(var(--ds-color-surface-raised)/0.95)] backdrop-blur-md border border-[hsl(var(--ds-color-border)/0.8)] rounded-2xl sm:rounded-[1.25rem] shadow-[var(--ds-shadow-lg)] pointer-events-auto">
             <div className="flex items-center gap-1.5 sm:gap-3">
               <div className="flex items-center bg-gray-100/80 dark:bg-[#232325]/80 p-1 rounded-xl sm:rounded-[14px]">
                 <button

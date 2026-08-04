@@ -1,5 +1,7 @@
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware'
+import { createCoalescedJsonStorage } from './lib/coalescedJsonStorage'
+import { useRuntimeStore } from './stores/runtimeStore'
 import type {
   AgentConversation,
   AgentMessage,
@@ -38,6 +40,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { createDefaultScheduleRows, formatDateKey, getScheduleRunKey, getWeekStartDate, parseDateKey, resolveScheduleOutputTarget } from './lib/schedule'
 import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentProfileValidationError, getAgentTextApiProfile, getApiMaxN, getCustomProviderDefinition, mergeImportedSettings, normalizeMaxConcurrent, normalizeMaxRetries, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
+import { loadGalleryViewMode, saveGalleryViewMode, type GalleryViewMode } from './lib/galleryPreferences'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import { appendAdNegativeRule, createAdNegativeRuleSnapshot, getAdNegativeRule } from './lib/adNegativeRules'
 import {
@@ -54,7 +57,7 @@ import {
   putWordLibraryState,
   getImage,
   getImageThumbnail,
-  getStoredFreshImageThumbnail,
+  getStoredImageThumbnail,
   getAllImageIds,
   getAllImages,
   getLegacyImageBatch,
@@ -141,6 +144,7 @@ export const DEFAULT_FAVORITE_COLLECTION_NAME = '默认'
 
 const imageCache = new ByteLruCache<string, string>(128 * 1024 * 1024)
 const thumbnailCache = new ByteLruCache<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>(64 * 1024 * 1024)
+let latestBackupInterval = DEFAULT_SETTINGS.backupInterval
 const thumbnailBackfillIds = new Map<string, 'visible' | 'background'>()
 const thumbnailBackfillRunningIds = new Set<string>()
 const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
@@ -502,7 +506,7 @@ export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl:
   const cached = getCachedThumbnail(id)
   if (cached) return cached
 
-  const rec = await getStoredFreshImageThumbnail(id)
+  const rec = await getStoredImageThumbnail(id)
   if (!rec?.thumbnailDataUrl) {
     scheduleThumbnailBackfill([id], 'visible')
     return undefined
@@ -514,6 +518,11 @@ export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl:
     height: rec.height,
     thumbnailVersion: rec.thumbnailVersion,
   }
+  if (thumbnail.thumbnailVersion !== CURRENT_THUMBNAIL_VERSION) {
+    scheduleThumbnailBackfill([id], 'background')
+    return thumbnail
+  }
+
   cacheThumbnail(id, thumbnail)
   return thumbnail
 }
@@ -1454,10 +1463,6 @@ interface AppState {
   updateTaskFavoriteOutputPath: (taskId: string, outputPath: string) => void
   updateTaskFavoriteOutputDateVariable: (taskId: string, enabled: boolean) => void
   runScheduleItem: (id: string, now?: Date, countOverride?: number, appendToLastTaskIds?: boolean) => Promise<string | null>
-  streamPreviews: Record<string, string>
-  streamPreviewSlots: Record<string, Record<string, string>>
-  setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
-
   // 搜索和筛选
   searchQuery: string
   setSearchQuery: (q: string) => void
@@ -1477,9 +1482,16 @@ interface AppState {
   clearFavoriteCollectionSelection: () => void
 
   // UI
+  galleryViewMode: GalleryViewMode
+  setGalleryViewMode: (mode: GalleryViewMode) => void
+  galleryNavigateTaskId: string | null
+  setGalleryNavigateTaskId: (taskId: string | null) => void
+  galleryActiveTaskId: string | null
+  setGalleryActiveTaskId: (taskId: string | null) => void
   detailTaskId: string | null
+  detailImageId: string | null
   detailReturnToSchedule: boolean
-  setDetailTaskId: (id: string | null, options?: { returnToSchedule?: boolean }) => void
+  setDetailTaskId: (id: string | null, options?: { returnToSchedule?: boolean; imageId?: string }) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
   setLightboxImageId: (id: string | null, list?: string[]) => void
@@ -1624,9 +1636,6 @@ interface AppState {
   setBackupReminderCount: (v: number) => void
 
   // Agent 流式文本缓冲（不参与持久化，避免频繁更新 agentConversations）
-  agentStreamingTexts: Record<string, string>
-  setAgentStreamingText: (conversationId: string, messageId: string, text: string) => void
-  clearAgentStreamingText: (conversationId: string, messageId?: string) => void
 }
 
 function isImageReferencedByState(state: AppState, imageId: string) {
@@ -2765,30 +2774,6 @@ export const useStore = create<AppState>()(
           return null
         }
       },
-      streamPreviews: {},
-      streamPreviewSlots: {},
-      setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
-        if (image) {
-          const slotKey = String(requestIndex)
-          const currentSlots = s.streamPreviewSlots[taskId] ?? {}
-          if (s.streamPreviews[taskId] === image && currentSlots[slotKey] === image) return s
-          return {
-            streamPreviews: { ...s.streamPreviews, [taskId]: image },
-            streamPreviewSlots: {
-              ...s.streamPreviewSlots,
-              [taskId]: { ...currentSlots, [slotKey]: image },
-            },
-          }
-        }
-
-        if (!(taskId in s.streamPreviews) && !(taskId in s.streamPreviewSlots)) return s
-        const next = { ...s.streamPreviews }
-        const nextSlots = { ...s.streamPreviewSlots }
-        delete next[taskId]
-        delete nextSlots[taskId]
-        return { streamPreviews: next, streamPreviewSlots: nextSlots }
-      }),
-
       // Search & Filter
       searchQuery: '',
       setSearchQuery: (searchQuery) => set({ searchQuery }),
@@ -2830,7 +2815,17 @@ export const useStore = create<AppState>()(
       clearFavoriteCollectionSelection: () => set({ selectedFavoriteCollectionIds: [] }),
 
       // UI
+      galleryViewMode: loadGalleryViewMode(),
+      setGalleryViewMode: (galleryViewMode) => {
+        saveGalleryViewMode(galleryViewMode)
+        set({ galleryViewMode })
+      },
+      galleryNavigateTaskId: null,
+      setGalleryNavigateTaskId: (galleryNavigateTaskId) => set({ galleryNavigateTaskId }),
+      galleryActiveTaskId: null,
+      setGalleryActiveTaskId: (galleryActiveTaskId) => set({ galleryActiveTaskId }),
       detailTaskId: null,
+      detailImageId: null,
       detailReturnToSchedule: false,
       setDetailTaskId: (detailTaskId, options) => {
         if (detailTaskId) dismissAllTooltips()
@@ -2838,11 +2833,13 @@ export const useStore = create<AppState>()(
           if (detailTaskId) {
             return {
               detailTaskId,
+              detailImageId: options?.imageId ?? null,
               detailReturnToSchedule: Boolean(options?.returnToSchedule),
             }
           }
           return {
             detailTaskId: null,
+            detailImageId: null,
             detailReturnToSchedule: false,
             schedule: state.detailReturnToSchedule
               ? { ...state.schedule, modalOpen: true }
@@ -3370,25 +3367,6 @@ export const useStore = create<AppState>()(
       setBackupReminderCount: (v) => set({ backupReminderCount: v }),
 
       // Agent 流式文本缓冲（不参与持久化）
-      agentStreamingTexts: {},
-      setAgentStreamingText: (conversationId, messageId, text) => set((s) => ({
-        agentStreamingTexts: {
-          ...s.agentStreamingTexts,
-          [`${conversationId}:${messageId}`]: text,
-        },
-      })),
-      clearAgentStreamingText: (conversationId, messageId) => set((s) => {
-        const keyPrefix = messageId ? `${conversationId}:${messageId}` : `${conversationId}:`
-        const next = { ...s.agentStreamingTexts }
-        if (messageId) {
-          delete next[`${conversationId}:${messageId}`]
-        } else {
-          for (const key of Object.keys(next)) {
-            if (key.startsWith(keyPrefix)) delete next[key]
-          }
-        }
-        return { agentStreamingTexts: next }
-      }),
     }),
     {
       name: 'gpt-image-playground',
@@ -3396,7 +3374,7 @@ export const useStore = create<AppState>()(
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
       merge: mergePersistedState,
-      storage: createJSONStorage(() => {
+      storage: createJSONStorage((): StateStorage => {
         const w = window as unknown as { electronAPI?: {
           getDefaultPath: () => Promise<string>
           readJsonText: (filePath: string) => Promise<string | null>
@@ -3407,29 +3385,31 @@ export const useStore = create<AppState>()(
         if (!isElectronEnv) return localStorage
         const api = w.electronAPI!
         const fileName = 'gpt-image-playground.json'
-        return {
-          getItem: async (_name: string) => {
-            const defaultPath = await api.getDefaultPath()
-            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
-            const result = await api.readJsonText(filePath)
-            return result
-          },
-          setItem: async (_name: string, value: string) => {
-            const defaultPath = await api.getDefaultPath()
-            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
-            const interval = useStore.getState().settings.backupInterval
-            await api.writeJsonText(filePath, value, interval)
-          },
-          removeItem: async (_name: string) => {
-            const defaultPath = await api.getDefaultPath()
-            const filePath = defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName
-            try { await api.writeJsonText(filePath, '', true) } catch {}
-          },
+        let filePathPromise: Promise<string> | null = null
+        const getFilePath = () => {
+          filePathPromise ??= api.getDefaultPath().then((defaultPath) =>
+            defaultPath.replace(/[\\/]local-saves$/, '') + '/' + fileName,
+          )
+          return filePathPromise
         }
+        return createCoalescedJsonStorage({
+          read: async () => api.readJsonText(await getFilePath()),
+          write: async (content, { skipBackup }) => api.writeJsonText(
+            await getFilePath(),
+            content,
+            skipBackup ? true : latestBackupInterval,
+          ),
+        })
       }),
     },
   ),
 )
+
+useStore.subscribe((state, previousState) => {
+  if (state.settings.backupInterval !== previousState.settings.backupInterval) {
+    latestBackupInterval = state.settings.backupInterval
+  }
+})
 
 let lastStoredAgentConversations = useStore.getState().agentConversations
 let agentConversationPersistRunning = false
@@ -4692,7 +4672,7 @@ function markAgentRoundStopped(conversationId: string, roundId: string) {
     : undefined
   if (assistantMessage) {
     flushAgentAssistantMessageContent(conversationId, assistantMessage.id)
-    useStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
+    useRuntimeStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
   }
   updateAgentConversation(conversationId, (current) => {
     const round = current.rounds.find((item) => item.id === roundId)
@@ -4767,7 +4747,7 @@ function appendAgentAssistantMessageContent(conversationId: string, messageId: s
   const existing = agentTextBuffers.get(key) ?? ''
   agentTextBuffers.set(key, existing + delta)
   // Update lightweight streaming text state immediately for UI responsiveness
-  useStore.getState().setAgentStreamingText(conversationId, messageId, existing + delta)
+  useRuntimeStore.getState().setAgentStreamingText(conversationId, messageId, existing + delta)
   // Debounce heavy agentConversations update
   const existingTimer = agentTextFlushTimers.get(key)
   if (existingTimer) clearTimeout(existingTimer)
@@ -4837,7 +4817,7 @@ export function stopAgentResponse(conversationId = useStore.getState().activeAge
     : conversation.messages.find((message) => message.roundId === runningRound.id && message.role === 'assistant')
   if (assistantMessage) {
     clearAgentTextFlushTimer(conversationId, assistantMessage.id)
-    useStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
+    useRuntimeStore.getState().clearAgentStreamingText(conversationId, assistantMessage.id)
   }
 
   const controller = agentRoundControllers.get(getAgentRoundControllerKey(conversationId, runningRound.id))
@@ -6044,7 +6024,7 @@ async function executeAgentRound(
         elapsed: Date.now() - (latestTask?.createdAt ?? startedAt),
         agentToolAction: image.action,
       })
-      useStore.getState().setTaskStreamPreview(taskId)
+      useRuntimeStore.getState().setTaskStreamPreview(taskId)
       void saveTaskToLocalFS(taskId).then(() => scheduleAgentRoundSummaryToLocalFS(conversationId, roundId))
       return taskId
     }
@@ -6055,7 +6035,7 @@ async function executeAgentRound(
       const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
       if (!latestTask || latestTask.status !== 'running') return
 
-      useStore.getState().setTaskStreamPreview(taskId)
+      useRuntimeStore.getState().setTaskStreamPreview(taskId)
       updateTaskInStore(taskId, {
         status: 'error',
         error,
@@ -6075,7 +6055,7 @@ async function executeAgentRound(
       if (!latestTask || latestTask.status !== 'running') return false
 
       if (latestTask.apiProvider === 'fal' && latestTask.falRequestId && latestTask.falEndpoint) {
-        useStore.getState().setTaskStreamPreview(taskId)
+        useRuntimeStore.getState().setTaskStreamPreview(taskId)
         updateTaskInStore(taskId, {
           status: 'error',
           error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
@@ -6088,7 +6068,7 @@ async function executeAgentRound(
       }
 
       if (latestTask.customTaskId) {
-        useStore.getState().setTaskStreamPreview(taskId)
+        useRuntimeStore.getState().setTaskStreamPreview(taskId)
         updateTaskInStore(taskId, {
           status: 'error',
           error: '与自定义异步任务的连接已断开，之后会继续查询任务结果。',
@@ -6276,7 +6256,7 @@ async function executeAgentRound(
           signal: controller.signal,
           onPartialImage: ({ image, partialImageIndex }) => {
             const taskId = taskIdByToolCallId.get(toolCallId)
-            if (taskId) useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+            if (taskId) useRuntimeStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
           },
         })
         if (controller.signal.aborted) throw createAgentAbortError()
@@ -6359,7 +6339,7 @@ async function executeAgentRound(
                   signal: controller.signal,
                   onPartialImage: ({ image, partialImageIndex }) => {
                     const taskId = taskIdByToolCallId.get(batchToolCallId)
-                    if (taskId) useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+                    if (taskId) useRuntimeStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
                   },
                 })),
               }
@@ -6382,7 +6362,7 @@ async function executeAgentRound(
                   if (controller.signal.aborted) return
                   const taskId = taskIdByToolCallId.get(batchToolCallId)
                   if (taskId) {
-                    useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+                    useRuntimeStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
                     if (partialImageIndex === 0 || partialImageIndex == null) {
                       void persistTaskStreamPartialImage(taskId, image)
                     }
@@ -6444,7 +6424,7 @@ async function executeAgentRound(
               finishedAt: Date.now(),
               elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
             })
-            useStore.getState().setTaskStreamPreview(taskId)
+            useRuntimeStore.getState().setTaskStreamPreview(taskId)
             void saveTaskToLocalFS(taskId).then(() => scheduleAgentRoundSummaryToLocalFS(conversationId, roundId))
           }
         }
@@ -6547,7 +6527,7 @@ async function executeAgentRound(
               agentAttemptProgressed = true
               const taskId = await ensureStreamingAgentTask(toolCallId)
               if (controller.signal.aborted) return
-              useStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
+              useRuntimeStore.getState().setTaskStreamPreview(taskId, image, partialImageIndex)
               if (partialImageIndex === 0 || partialImageIndex == null) {
                 void persistTaskStreamPartialImage(taskId, image)
               }
@@ -6687,7 +6667,7 @@ async function executeAgentRound(
             finishedAt: Date.now(),
             elapsed: Date.now() - (latestTask.createdAt ?? startedAt),
           })
-          useStore.getState().setTaskStreamPreview(taskId)
+          useRuntimeStore.getState().setTaskStreamPreview(taskId)
           void saveTaskToLocalFS(taskId).then(() => scheduleAgentRoundSummaryToLocalFS(conversationId, roundId))
         }
       }
@@ -7452,7 +7432,7 @@ async function executeTask(taskId: string) {
               onPartialImage: (partial) => {
                 updateTaskProgress(taskId, 'previewing')
                 const baseIndex = planned.slotIndexes[0] + (partial.requestIndex ?? 0)
-                useStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
+                useRuntimeStore.getState().setTaskStreamPreview(taskId, partial.image, baseIndex)
                 void persistTaskStreamPartialImage(taskId, partial.image)
                 scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
               },
@@ -7647,7 +7627,7 @@ async function executeTask(taskId: string) {
         onPartialImage: (partial) => {
           singleRequestProgressed = true
           updateTaskProgress(taskId, 'previewing')
-          useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
+          useRuntimeStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
           void persistTaskStreamPartialImage(taskId, partial.image)
           scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
         },
@@ -7659,7 +7639,7 @@ async function executeTask(taskId: string) {
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') {
-      useStore.getState().setTaskStreamPreview(taskId)
+      useRuntimeStore.getState().setTaskStreamPreview(taskId)
       return
     }
 
@@ -7712,12 +7692,12 @@ async function executeTask(taskId: string) {
     // 更新任务
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') {
-      useStore.getState().setTaskStreamPreview(taskId)
+      useRuntimeStore.getState().setTaskStreamPreview(taskId)
       return
     }
     const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
     clearOpenAIWatchdogTimer(taskId)
-    useStore.getState().setTaskStreamPreview(taskId)
+    useRuntimeStore.getState().setTaskStreamPreview(taskId)
     const hasPartialFailure = (result as any).batchItemStatuses && (result as any).batchItemErrors && (result as any).batchItemErrors.length > 0
     // 编排批处理可能返回明确的失败/部分完成状态，避免伪装成成功。
     const finalTaskStatus: TaskStatus =
@@ -7768,7 +7748,7 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
     if (latestTask.status !== 'running') return
-    useStore.getState().setTaskStreamPreview(taskId)
+    useRuntimeStore.getState().setTaskStreamPreview(taskId)
     const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
       ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
       : null)
@@ -7884,20 +7864,31 @@ function normalizeFavoritePatch(task: TaskRecord, patch: Partial<TaskRecord>, de
 }
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>): Promise<void> {
-  const { tasks, setTasks, defaultFavoriteCollectionId, workspaceTabs } = useStore.getState()
+  const { tasks, defaultFavoriteCollectionId, workspaceTabs } = useStore.getState()
   const updated = tasks.map((t) =>
     t.id === taskId ? { ...t, ...normalizeFavoritePatch(t, patch, defaultFavoriteCollectionId) } : t,
   )
   const task = updated.find((t) => t.id === taskId)
-  setTasks(updated)
-  // Sync updated task to all workspace tabs that contain it
-  const updatedTabs = workspaceTabs.map((tab) => ({
-    ...tab,
-    tasks: tab.tasks.map((t) =>
-      t.id === taskId ? { ...t, ...normalizeFavoritePatch(t, patch, defaultFavoriteCollectionId) } : t,
-    ),
-  }))
-  useStore.setState({ workspaceTabs: updatedTabs })
+  const updatedTabs = workspaceTabs.map((tab) => {
+    const taskIndex = tab.tasks.findIndex((tabTask) => tabTask.id === taskId)
+    if (taskIndex < 0) return tab
+
+    const nextTasks = [...tab.tasks]
+    const tabTask = nextTasks[taskIndex]
+    nextTasks[taskIndex] = {
+      ...tabTask,
+      ...normalizeFavoritePatch(tabTask, patch, defaultFavoriteCollectionId),
+    }
+    return { ...tab, tasks: nextTasks }
+  })
+
+  useStore.setState({
+    tasks: updated,
+    workspaceTabs: updatedTabs,
+    ...(countSuccessfulOutputImages(updated) <= SUPPORT_PROMPT_IMAGE_THRESHOLD
+      ? { supportPromptSkippedForImportedData: false }
+      : {}),
+  })
   maybeOpenSupportPrompt(tasks, updated, taskId)
   return task ? putTask(task).then(() => undefined) : Promise.resolve()
 }

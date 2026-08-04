@@ -5,6 +5,7 @@ import {
   CloseIcon,
   IconButton,
   LibraryIcon,
+  ListChecksIcon,
   StarIcon,
 } from '../design-system'
 import {
@@ -14,12 +15,14 @@ import {
   VAR_MENTION_RE,
 } from '../lib/promptImageMentions'
 import { useMediaQuery } from '../hooks/useMediaQuery'
+import { filterGalleryTasks } from '../lib/galleryTaskFilter'
 import {
   filterWordLibraryEntries,
   WordLibraryQuickPanel,
   type WordLibraryQuickView,
 } from './WordLibraryQuickPanel'
 import type { WordLibraryEntry } from '../types'
+import GalleryTaskNavigator from './GalleryTaskNavigator'
 
 const MIN_W = 300
 const MIN_H = 520
@@ -110,6 +113,17 @@ function readPromptEditor(editor: HTMLElement) {
 
 export default function WordLibrarySidebar() {
   const compactViewport = useMediaQuery('(max-width: 1023px)')
+  const appMode = useStore((state) => state.appMode)
+  const galleryViewMode = useStore((state) => state.galleryViewMode)
+  const galleryActiveTaskId = useStore((state) => state.galleryActiveTaskId)
+  const setGalleryNavigateTaskId = useStore((state) => state.setGalleryNavigateTaskId)
+  const activeWorkspaceTabId = useStore((state) => state.activeWorkspaceTabId)
+  const workspaceTabs = useStore((state) => state.workspaceTabs)
+  const allTasks = useStore((state) => state.tasks)
+  const searchQuery = useStore((state) => state.searchQuery)
+  const filterStatus = useStore((state) => state.filterStatus)
+  const filterFavorite = useStore((state) => state.filterFavorite)
+  const activeFavoriteCollectionId = useStore((state) => state.activeFavoriteCollectionId)
   const groups = useStore((state) => state.wordLibraryGroups)
   const entries = useStore((state) => state.wordLibraryEntries)
   const managerOpen = useStore((state) => state.wordLibraryManagerOpen)
@@ -125,6 +139,7 @@ export default function WordLibrarySidebar() {
   const setPromptSelectedVarName = useStore((state) => state.setWordLibraryPromptSelectedVarName)
 
   const [compactOpen, setCompactOpen] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<'tasks' | 'words'>('words')
   const [query, setQuery] = useState('')
   const [view, setView] = useState<WordLibraryQuickView>('recent')
   const [groupId, setGroupId] = useState('__all__')
@@ -154,6 +169,31 @@ export default function WordLibrarySidebar() {
     () => groups.filter((group) => !group.archivedAt),
     [groups],
   )
+  const tabTasks = useMemo(
+    () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId)?.tasks ?? [],
+    [activeWorkspaceTabId, workspaceTabs],
+  )
+  const taskSource = filterFavorite ? allTasks : activeWorkspaceTabId ? tabTasks : allTasks
+  const navigatorTasks = useMemo(() => filterGalleryTasks({
+    tasks: taskSource,
+    query: searchQuery,
+    filterStatus,
+    filterFavorite,
+    activeFavoriteCollectionId,
+  }), [activeFavoriteCollectionId, filterFavorite, filterStatus, searchQuery, taskSource])
+  const navigatorTasksWithImages = useMemo(
+    () => navigatorTasks.filter((task) => task.outputImages.length > 0),
+    [navigatorTasks],
+  )
+  const navigatorImageCount = useMemo(
+    () => navigatorTasksWithImages.reduce((count, task) => count + task.outputImages.length, 0),
+    [navigatorTasksWithImages],
+  )
+  const showGalleryTaskTab = appMode === 'gallery' && galleryViewMode === 'images'
+
+  useEffect(() => {
+    setSidebarTab(showGalleryTaskTab ? 'tasks' : 'words')
+  }, [showGalleryTaskTab])
 
   useEffect(() => {
     if (visibleEntries.some((entry) => entry.id === activeEntryId)) return
@@ -328,8 +368,8 @@ export default function WordLibrarySidebar() {
   if (compactViewport && !compactOpen) {
     return (
       <IconButton
-        aria-label="打开词条库"
-        icon={<StarIcon className="h-4 w-4" />}
+        aria-label={showGalleryTaskTab ? '打开任务导航' : '打开词条库'}
+        icon={showGalleryTaskTab ? <ListChecksIcon className="h-4 w-4" /> : <StarIcon className="h-4 w-4" />}
         onClick={() => setCompactOpen(true)}
         className="fixed right-2 top-[calc(var(--app-header-offset)+var(--ds-space-2))] z-[var(--ds-z-overlay)] border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-raised))] shadow-[var(--ds-shadow-md)]"
       />
@@ -337,6 +377,7 @@ export default function WordLibrarySidebar() {
   }
 
   const isDocked = Boolean(docked)
+  const taskTabActive = showGalleryTaskTab && sidebarTab === 'tasks'
   const panelStyle: CSSProperties = compactViewport
     ? {
         right: 'var(--ds-space-2)',
@@ -374,16 +415,20 @@ export default function WordLibrarySidebar() {
       <header className="doupao-side-panel__header shrink-0 select-none" onMouseDown={beginDrag}>
         <div className="flex items-center gap-3">
           <div className="doupao-side-panel__icon">
-            <LibraryIcon className="h-4 w-4" />
+            {taskTabActive ? <ListChecksIcon className="h-4 w-4" /> : <LibraryIcon className="h-4 w-4" />}
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="doupao-side-panel__title">词条库</h3>
-            <p className="doupao-side-panel__meta">{activeEntries.length} 个词条 · {activeGroups.length} 个分组</p>
+            <h3 className="doupao-side-panel__title">{taskTabActive ? '任务导航' : '词条库'}</h3>
+            <p className="doupao-side-panel__meta">
+              {taskTabActive
+                ? `${navigatorTasksWithImages.length} 个任务 · ${navigatorImageCount} 张图片`
+                : `${activeEntries.length} 个词条 · ${activeGroups.length} 个分组`}
+            </p>
           </div>
-          <Button size="sm" variant="secondary" onClick={() => openManager()}>管理</Button>
+          {!taskTabActive && <Button size="sm" variant="secondary" onClick={() => openManager()}>管理</Button>}
           {compactViewport && (
             <IconButton
-              aria-label="关闭词条库"
+              aria-label="关闭右侧边栏"
               icon={<CloseIcon className="h-4 w-4" />}
               size="sm"
               onClick={() => setCompactOpen(false)}
@@ -392,26 +437,62 @@ export default function WordLibrarySidebar() {
         </div>
       </header>
 
-      <WordLibraryQuickPanel
-        entries={entries}
-        groups={groups}
-        query={query}
-        view={view}
-        groupId={groupId}
-        activeEntryId={activeEntryId}
-        hasPromptSelection={hasPromptSelection}
-        onQueryChange={setQuery}
-        onViewChange={setView}
-        onGroupChange={setGroupId}
-        onSelect={setActiveEntryId}
-        onInvoke={invokeEntry}
-        onSaveEntries={(entryId, nextEntries) => {
-          updateEntry(entryId, { entries: [...new Set(nextEntries)] })
-          toast('词条候选值已保存', 'success')
-        }}
-        onToggleFavorite={toggleFavorite}
-        onManage={openManager}
-      />
+      {showGalleryTaskTab && (
+        <div
+          role="tablist"
+          aria-label="右侧边栏内容"
+          className="relative grid h-10 shrink-0 grid-cols-2 border-b border-ds-border px-2"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'tasks'}
+            className="relative z-10 text-xs font-medium text-ds-muted transition-colors aria-selected:text-ds-text"
+            onClick={() => setSidebarTab('tasks')}
+          >任务</button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'words'}
+            className="relative z-10 text-xs font-medium text-ds-muted transition-colors aria-selected:text-ds-text"
+            onClick={() => setSidebarTab('words')}
+          >词条</button>
+          <span
+            aria-hidden="true"
+            className="absolute bottom-0 left-2 h-0.5 w-[calc(50%-0.5rem)] bg-ds-primary transition-transform duration-150 ease-out motion-reduce:transition-none"
+            style={{ transform: sidebarTab === 'tasks' ? 'translateX(0)' : 'translateX(100%)' }}
+          />
+        </div>
+      )}
+
+      {taskTabActive ? (
+        <GalleryTaskNavigator
+          tasks={navigatorTasks}
+          activeTaskId={galleryActiveTaskId}
+          onNavigate={setGalleryNavigateTaskId}
+        />
+      ) : (
+        <WordLibraryQuickPanel
+          entries={entries}
+          groups={groups}
+          query={query}
+          view={view}
+          groupId={groupId}
+          activeEntryId={activeEntryId}
+          hasPromptSelection={hasPromptSelection}
+          onQueryChange={setQuery}
+          onViewChange={setView}
+          onGroupChange={setGroupId}
+          onSelect={setActiveEntryId}
+          onInvoke={invokeEntry}
+          onSaveEntries={(entryId, nextEntries) => {
+            updateEntry(entryId, { entries: [...new Set(nextEntries)] })
+            toast('词条候选值已保存', 'success')
+          }}
+          onToggleFavorite={toggleFavorite}
+          onManage={openManager}
+        />
+      )}
 
       {!isDocked && !compactViewport && (
         <div

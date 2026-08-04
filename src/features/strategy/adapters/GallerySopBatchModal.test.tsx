@@ -3,11 +3,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import { act, create } from 'react-test-renderer'
-import { DEFAULT_PARAMS, type SopBatchSnapshot } from '../../../types'
+import { DEFAULT_PARAMS, type SopBatchSnapshot, type TaskRecord } from '../../../types'
 import GallerySopBatchModal, { getGallerySopPromptRunStorageKey } from './GallerySopBatchModal'
 
 const generateMocks = vi.hoisted(() => ({ generatePromptsFromSopStore: vi.fn() }))
-const storeMocks = vi.hoisted(() => ({ ensureImageCached: vi.fn(), submitTaskWithData: vi.fn() }))
+const storeMocks = vi.hoisted(() => ({
+  ensureImageCached: vi.fn(),
+  ensureImageThumbnailCached: vi.fn(),
+  submitTaskWithData: vi.fn(),
+  subscribeImageThumbnail: vi.fn(() => () => {}),
+}))
 const dbMocks = vi.hoisted(() => ({
   deleteSopBatchSnapshot: vi.fn(),
   getAllSopBatchSnapshots: vi.fn(),
@@ -21,10 +26,18 @@ const requirementState = vi.hoisted(() => ({
   ],
 }))
 const storeState = vi.hoisted(() => ({
-  params: { model: 'gpt-image-1', size: '1024x1024', quality: 'auto', output_format: 'png', n: 1 },
+  params: { model: 'gpt-image-1', size: '1024x1024', quality: 'auto', output_format: 'png', n: 1, adNegativeRuleId: 'general-strict' },
+  settings: {
+    adNegativeRuleProfiles: [
+      { id: 'general-strict', name: '通用严格' },
+      { id: 'ocean-engine', name: '今日头条' },
+      { id: 'tencent-ads', name: '广点通' },
+    ],
+  },
   inputImages: [] as Array<{ id: string; dataUrl: string }>,
   inputImageFolder: null,
   customOutputPath: '',
+  tasks: [] as TaskRecord[],
   activeWorkspaceTabId: 'tab-a',
   workspaceTabs: [{ id: 'tab-a', name: '标签 A' }],
   showToast: vi.fn(),
@@ -36,7 +49,9 @@ const storeState = vi.hoisted(() => ({
 
 vi.mock('../../../store', () => ({
   ensureImageCached: storeMocks.ensureImageCached,
+  ensureImageThumbnailCached: storeMocks.ensureImageThumbnailCached,
   submitTaskWithData: storeMocks.submitTaskWithData,
+  subscribeImageThumbnail: storeMocks.subscribeImageThumbnail,
   useStore: (selector: (state: typeof storeState) => unknown) => selector(storeState),
 }))
 vi.mock('../../../lib/db', () => ({
@@ -54,21 +69,68 @@ vi.mock('./storeSopGeneration', () => generateMocks)
 
 const mountedRenderers: Array<ReturnType<typeof create>> = []
 
+function createPromptRun(
+  id: string,
+  title: string,
+  promptGroup?: SopBatchSnapshot['promptGroup'],
+): SopBatchSnapshot {
+  return {
+    id,
+    title,
+    promptGroup,
+    batchId: '',
+    workspaceTabId: 'tab-a',
+    createdAt: 10,
+    updatedAt: 20,
+    status: 'ready',
+    sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+    brief: '',
+    referenceImageIds: [],
+    promptCount: 1,
+    imagesPerPrompt: 1,
+    prompts: [{ id: `${id}-prompt`, text: `${title}内容`, origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+    params: { ...DEFAULT_PARAMS },
+  }
+}
+
 beforeEach(() => {
   dbMocks.getAllSopBatchSnapshots.mockResolvedValue([])
   dbMocks.getSopBatchSnapshot.mockResolvedValue(undefined)
   dbMocks.putSopBatchSnapshot.mockResolvedValue('run-1')
   dbMocks.deleteSopBatchSnapshot.mockResolvedValue(undefined)
+  storeMocks.ensureImageThumbnailCached.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
   while (mountedRenderers.length) mountedRenderers.pop()?.unmount()
   window.localStorage.clear()
   storeState.inputImages = []
+  storeState.tasks = []
   vi.clearAllMocks()
 })
 
 describe('GallerySopBatchModal background generation', () => {
+  it('lets the user choose the information-flow review rule from batch settings', async () => {
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const reviewRuleSelect = renderer!.root.findByProps({ 'aria-label': '选择信息流审核规则' })
+    act(() => reviewRuleSelect.props.onChange({ target: { value: 'ocean-engine' } }))
+
+    expect(storeState.setParams).toHaveBeenCalledWith({ adNegativeRuleId: 'ocean-engine' })
+  })
+
   it('starts generating before consuming the one-shot auto-start request', async () => {
     generateMocks.generatePromptsFromSopStore.mockResolvedValue(['自动生成的提示词'])
 
@@ -321,7 +383,61 @@ describe('GallerySopBatchModal background generation', () => {
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
   })
 
-  it('shows saved prompt collections in the repository without starting a new generation', async () => {
+  it('asks the host for attention instead of silently skipping auto-start when prompts remain', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'sop-run-leftover',
+      batchId: '',
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      updatedAt: 20,
+      status: 'ready',
+      pinned: true,
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+      brief: '上一批要求',
+      referenceImageIds: [],
+      promptCount: 2,
+      imagesPerPrompt: 1,
+      prompts: [{ id: 'prompt-1', text: '上一批残留提示词', origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+      params: { ...DEFAULT_PARAMS },
+    }
+    window.localStorage.setItem(getGallerySopPromptRunStorageKey('tab-a'), JSON.stringify({
+      version: 3,
+      activeRunId: storedRun.id,
+      selectedSopId: 'sop-1',
+      promptCount: 2,
+      imagesPerPrompt: 1,
+      availablePrompts: 1,
+      brief: storedRun.brief,
+    }))
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+    dbMocks.getSopBatchSnapshot.mockResolvedValue(storedRun)
+    const onNeedsAttention = vi.fn()
+    const onAutoStartConsumed = vi.fn()
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          autoStart
+          onAutoStartConsumed={onAutoStartConsumed}
+          onNeedsAttention={onNeedsAttention}
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    // 静默运行时若在此处无声 return，用户按下发送将毫无反馈
+    expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+    expect(onNeedsAttention).toHaveBeenCalledWith('existing-prompts')
+    expect(onAutoStartConsumed).toHaveBeenCalledOnce()
+  })
+
+  it('shows saved prompt collections in one directory without starting a new generation', async () => {
     const storedRun: SopBatchSnapshot = {
       id: 'sop-run-history',
       batchId: 'sop-batch-history',
@@ -347,10 +463,192 @@ describe('GallerySopBatchModal background generation', () => {
     })
     mountedRenderers.push(renderer!)
 
-    expect(renderer!.root.findAllByType('h3').some((node) => node.children.join('') === '提示词仓库')).toBe(true)
-    expect(renderer!.root.findByProps({ 'aria-label': '提示词仓库列表' })).toBeTruthy()
+    expect(renderer!.root.findAllByType('h3').some((node) => node.children.join('') === '提示词集')).toBe(true)
+    expect(renderer!.root.findByProps({ 'aria-label': '提示词集目录' })).toBeTruthy()
     expect(renderer!.root.findByProps({ 'aria-label': '查看提示词集 历史要求' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看全部提示词集' })).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看未归档提示词集' })).toHaveLength(0)
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('nests prompt collections under folders and can move the active collection', async () => {
+    const groupedRun = createPromptRun('run-grouped', '电商提示词', { id: 'group-commerce', name: '电商' })
+    const ungroupedRun = createPromptRun('run-ungrouped', '未分组提示词')
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([groupedRun, ungroupedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const folderButton = renderer!.root.findByProps({ 'aria-label': '查看文件夹 电商' })
+    expect(folderButton.parent?.parent?.findByProps({ 'aria-label': '提示词集 电商提示词' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '查看提示词集 未分组提示词' })).toBeTruthy()
+    act(() => folderButton.props.onClick())
+
+    const groupSelect = renderer!.root.findByProps({ 'aria-label': '提示词集所属文件夹' })
+    await act(async () => {
+      groupSelect.props.onChange({ target: { value: '' } })
+      await Promise.resolve()
+    })
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'run-grouped',
+      promptGroup: undefined,
+    }))
+  })
+
+  it('creates, renames, and deletes prompt collection groups without deleting collections', async () => {
+    const storedRun = createPromptRun('run-active', '活动提示词')
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    act(() => renderer!.root.findByProps({ 'aria-label': '新建提示词文件夹' }).props.onClick())
+    act(() => renderer!.root.findByProps({ 'aria-label': '新文件夹名称' }).props.onChange({ target: { value: '营销' } }))
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '提示词文件夹编辑' }).props.onSubmit({ preventDefault: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const storedGroups = JSON.parse(window.localStorage.getItem('doupao.prompt-library-folders.v2') ?? '[]')
+    expect(storedGroups).toEqual([expect.objectContaining({ name: '营销', parentId: null, order: 0 })])
+    act(() => renderer!.root.findByProps({ 'aria-label': '返回根目录' }).props.onClick())
+    const groupSelect = renderer!.root.findByProps({ 'aria-label': '提示词集所属文件夹' })
+    await act(async () => {
+      groupSelect.props.onChange({ target: { value: storedGroups[0].id } })
+      await Promise.resolve()
+    })
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      id: storedRun.id,
+      promptGroup: expect.objectContaining({ name: '营销' }),
+    }))
+
+    act(() => renderer!.root.findByProps({ 'aria-label': '更多文件夹操作 营销' }).props.onClick({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      clientX: 20,
+      clientY: 20,
+    }))
+    act(() => renderer!.root.findByProps({ 'aria-label': '重命名文件夹 营销' }).props.onClick())
+    act(() => renderer!.root.findByProps({ 'aria-label': '重命名文件夹' }).props.onChange({ target: { value: '品牌营销' } }))
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '提示词文件夹编辑' }).props.onSubmit({ preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+    expect(JSON.parse(window.localStorage.getItem('doupao.prompt-library-folders.v2') ?? '[]')).toEqual([
+      expect.objectContaining({ name: '品牌营销' }),
+    ])
+
+    act(() => renderer!.root.findByProps({ 'aria-label': '更多文件夹操作 品牌营销' }).props.onClick({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      clientX: 20,
+      clientY: 20,
+    }))
+    act(() => renderer!.root.findByProps({ 'aria-label': '删除文件夹 品牌营销' }).props.onClick())
+    expect(storeState.setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: '删除提示词文件夹？',
+      message: expect.stringContaining('移至上一级'),
+    }))
+    const confirmation = storeState.setConfirmDialog.mock.calls.at(-1)?.[0]
+    await act(async () => {
+      confirmation.action()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(JSON.parse(window.localStorage.getItem('doupao.prompt-library-folders.v2') ?? '[]')).toEqual([])
+    expect(dbMocks.deleteSopBatchSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('copies and pastes a prompt collection into another nested folder', async () => {
+    const sourceFolder = { id: 'folder-source', name: '来源', parentId: null, order: 0, createdAt: 1, updatedAt: 1 }
+    const targetFolder = { id: 'folder-target', name: '目标', parentId: 'folder-source', order: 0, createdAt: 1, updatedAt: 1 }
+    window.localStorage.setItem('doupao.prompt-library-folders.v2', JSON.stringify([sourceFolder, targetFolder]))
+    const storedRun = {
+      ...createPromptRun('run-copy-source', '待复制提示词', { id: sourceFolder.id, name: sourceFolder.name }),
+      promptOrder: 0,
+    }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+      await Promise.resolve()
+    })
+    act(() => renderer!.root.findByProps({ 'aria-label': '查看文件夹 目标' }).props.onClick())
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '粘贴到当前文件夹' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const copiedSnapshot = dbMocks.putSopBatchSnapshot.mock.calls
+      .map(([snapshot]) => snapshot as SopBatchSnapshot)
+      .find((snapshot) => snapshot.id !== storedRun.id && snapshot.title === '待复制提示词 副本')
+    expect(copiedSnapshot).toMatchObject({
+      promptGroup: { id: targetFolder.id, name: targetFolder.name },
+      batchId: '',
+      taskIds: [],
+      pinned: false,
+    })
+  })
+
+  it('reorders prompt collections by dragging within the current folder', async () => {
+    const folder = { id: 'folder-order', name: '排序', parentId: null, order: 0, createdAt: 1, updatedAt: 1 }
+    window.localStorage.setItem('doupao.prompt-library-folders.v2', JSON.stringify([folder]))
+    const first = { ...createPromptRun('run-first', '第一项', { id: folder.id, name: folder.name }), promptOrder: 0 }
+    const second = { ...createPromptRun('run-second', '第二项', { id: folder.id, name: folder.name }), promptOrder: 1 }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([first, second])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+    act(() => renderer!.root.findByProps({ 'aria-label': '查看文件夹 排序' }).props.onClick())
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn() }
+    act(() => renderer!.root.findByProps({ 'aria-label': '提示词集 第一项' }).props.onDragStart({
+      dataTransfer,
+      preventDefault: vi.fn(),
+    }))
+    act(() => renderer!.root.findByProps({ 'aria-label': '提示词集 第二项' }).props.onDragOver({
+      dataTransfer,
+      preventDefault: vi.fn(),
+      clientY: 90,
+      currentTarget: { getBoundingClientRect: () => ({ top: 0, height: 100 }) },
+    }))
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '提示词集 第二项' }).props.onDrop({
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const persisted = dbMocks.putSopBatchSnapshot.mock.calls.map(([snapshot]) => snapshot as SopBatchSnapshot)
+    expect([...persisted].reverse().find((snapshot) => snapshot.id === second.id)?.promptOrder).toBe(0)
+    expect([...persisted].reverse().find((snapshot) => snapshot.id === first.id)?.promptOrder).toBe(1)
   })
 
   it('opens previous prompts without an active SOP and keeps generation settings unchanged', async () => {
@@ -392,6 +690,61 @@ describe('GallerySopBatchModal background generation', () => {
     expect(JSON.stringify(renderer!.toJSON())).not.toContain('completed')
     expect(storeState.setParams).not.toHaveBeenCalled()
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('shows generated images and their image-specific prompt beside the source prompt', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'run-with-images',
+      title: '有图片的提示词集',
+      batchId: 'batch-with-images',
+      taskIds: ['task-with-images'],
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      status: 'submitted',
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '' },
+      brief: '',
+      referenceImageIds: [],
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      prompts: [{ id: 'prompt-with-images', text: '原始提交提示词', origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+      params: { ...DEFAULT_PARAMS },
+    }
+    storeState.tasks = [{
+      id: 'task-with-images',
+      prompt: '原始提交提示词',
+      params: { ...DEFAULT_PARAMS },
+      inputImageIds: [],
+      outputImages: ['output-image-1'],
+      revisedPromptByImage: { 'output-image-1': '图片反推后的提示词' },
+      sopBatch: {
+        batchId: 'batch-with-images',
+        snapshotId: 'run-with-images',
+        sopId: 'sop-1',
+        sopName: '商品图 SOP',
+        promptId: 'prompt-with-images',
+        promptIndex: 1,
+        promptCount: 1,
+      },
+      status: 'done',
+      error: null,
+      createdAt: 10,
+      finishedAt: null,
+      elapsed: null,
+    } as TaskRecord]
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词的生成结果' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '复制第 1 条提示词的图片 1 提示词' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ children: '图片反推 / 改写提示词' })).toHaveLength(1)
+    expect(renderer!.root.findAllByProps({ 'aria-label': '定位第 1 条提示词' })).toHaveLength(0)
   })
 
   it('creates and persists an independent prompt collection without an SOP', async () => {
@@ -593,7 +946,7 @@ describe('GallerySopBatchModal background generation', () => {
     expect(storeMocks.submitTaskWithData.mock.calls[0][0].sopBatch.batchId)
       .toBe(storeMocks.submitTaskWithData.mock.calls[1][0].sopBatch.batchId)
     expect(renderer!.root.findAllByProps({ 'aria-label': '第 1 条提示词' })).toHaveLength(0)
-    expect(renderer!.root.findByProps({ 'aria-label': '生成 0 张图片' }).props.disabled).toBe(true)
+    expect(renderer!.root.findByProps({ 'aria-label': '生成 2 条 SOP 提示词' }).props.disabled).toBe(false)
     expect(renderer!.root.findAllByType('p').some((node) => String(node.children.join('')).includes('当前 SOP：商品图 SOP'))).toBe(true)
     expect(storeState.inputImages).toEqual([{ id: 'image-1', dataUrl: 'data:image/png;base64,one' }])
     expect(JSON.parse(window.localStorage.getItem(getGallerySopPromptRunStorageKey('tab-a')) ?? '{}')).toMatchObject({
