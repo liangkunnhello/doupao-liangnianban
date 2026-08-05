@@ -681,7 +681,7 @@ describe('GallerySopBatchModal background generation', () => {
     expect(renderer!.root.findByProps({ 'aria-label': '查看提示词集 夏日海报提示词' })).toBeTruthy()
     const promptEditor = renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' })
     expect(promptEditor.props.value).toBe('无需 SOP 也能查看的历史提示词')
-    expect(promptEditor.props.className).toContain('min-h-32')
+    expect(promptEditor.props.className).toContain('min-h-20')
     expect(renderer!.root.findByProps({ 'aria-label': '提示词集名称' }).props.value).toBe('夏日海报提示词')
     expect(renderer!.root.findAllByProps({ 'aria-label': '重新生成第 1 条提示词' })).toHaveLength(0)
     expect(renderer!.root.findAllByProps({ 'aria-label': '每生成一条提示词立即发送生图' })).toHaveLength(0)
@@ -692,7 +692,7 @@ describe('GallerySopBatchModal background generation', () => {
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
   })
 
-  it('shows generated images and their image-specific prompt beside the source prompt', async () => {
+  it('shows generated thumbnails left of one editable prompt and groups its actions', async () => {
     const storedRun: SopBatchSnapshot = {
       id: 'run-with-images',
       title: '有图片的提示词集',
@@ -741,9 +741,26 @@ describe('GallerySopBatchModal background generation', () => {
     })
     mountedRenderers.push(renderer!)
 
+    const promptRow = renderer!.root.findByProps({ id: 'prompt-output-prompt-with-images' })
+    const mediaBlock = renderer!.root.findByProps({ 'data-slot': 'item-media' })
+    const promptBlock = renderer!.root.findByProps({ 'data-slot': 'input-group' })
+    expect(promptRow.props.className).toContain('grid-cols-[6.5rem_minmax(0,1fr)]')
+    expect(promptRow.props.className).toContain('items-stretch')
+    expect(promptRow.props['data-slot']).toBe('item')
+    expect(mediaBlock.props.className).toContain('min-h-36')
+    expect(renderer!.root.findByProps({ 'data-slot': 'item-content' })).toBeTruthy()
+    expect(promptBlock.props.className).toContain('h-full')
+    expect(promptBlock.props.className).toContain('min-h-36')
+    expect(promptBlock.findByProps({ 'data-slot': 'input-group-header' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ 'data-slot': 'item-header' })).toHaveLength(0)
+    expect(renderer!.root.findByProps({ 'data-slot': 'button-group' })).toBeTruthy()
     expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词的生成结果' })).toBeTruthy()
-    expect(renderer!.root.findByProps({ 'aria-label': '复制第 1 条提示词的图片 1 提示词' })).toBeTruthy()
-    expect(renderer!.root.findAllByProps({ children: '图片反推 / 改写提示词' })).toHaveLength(1)
+    expect(renderer!.root.findByProps({ 'aria-label': '查看第 1 条提示词的生成图片 1' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词的功能与状态' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词操作' })).toBeTruthy()
+    expect(renderer!.root.findByProps({ 'aria-label': '复制第 1 条提示词' })).toBeTruthy()
+    expect(renderer!.root.findAllByProps({ children: '图片反推 / 改写提示词' })).toHaveLength(0)
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain('图片反推后的提示词')
     expect(renderer!.root.findAllByProps({ 'aria-label': '定位第 1 条提示词' })).toHaveLength(0)
   })
 

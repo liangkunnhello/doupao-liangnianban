@@ -1,5 +1,5 @@
 import { memo, useEffect, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
-import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../store'
+import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail } from '../store'
 import type { TaskRecord } from '../types'
 import { CheckIcon, ImageIcon } from '../design-system/icons'
 
@@ -30,12 +30,14 @@ interface GalleryImageTileProps {
 
 function GalleryImageTile({ item, onAspectRatioChange, onOpenDetail, onSelect, selected, style }: GalleryImageTileProps) {
   const [thumbnailSrc, setThumbnailSrc] = useState('')
+  const [fullImageSrc, setFullImageSrc] = useState('')
 
   useEffect(() => {
     let cancelled = false
     let unsubscribe: (() => void) | undefined
 
     setThumbnailSrc('')
+    setFullImageSrc('')
     const applyThumbnail = (thumbnail: { dataUrl: string; width?: number; height?: number }) => {
       if (cancelled) return
       setThumbnailSrc(thumbnail.dataUrl)
@@ -48,6 +50,13 @@ function GalleryImageTile({ item, onAspectRatioChange, onOpenDetail, onSelect, s
       })
       .catch(() => {
         if (!cancelled) setThumbnailSrc('')
+      })
+    ensureImageCached(item.imageId)
+      .then((dataUrl) => {
+        if (!cancelled && dataUrl) setFullImageSrc(dataUrl)
+      })
+      .catch(() => {
+        // Keep the thumbnail visible when the original image cannot be loaded.
       })
 
     return () => {
@@ -73,6 +82,7 @@ function GalleryImageTile({ item, onAspectRatioChange, onOpenDetail, onSelect, s
   }
 
   const imageCount = item.task.outputImages.length
+  const imageSrc = fullImageSrc || thumbnailSrc
 
   return (
     <article
@@ -88,23 +98,24 @@ function GalleryImageTile({ item, onAspectRatioChange, onOpenDetail, onSelect, s
         onOpenDetail()
       }}
       onKeyDown={handleKeyDown}
-      draggable={Boolean(thumbnailSrc)}
+      draggable={Boolean(imageSrc)}
       onDragStart={(event) => {
-        if (!thumbnailSrc) return
+        if (!imageSrc) return
         event.dataTransfer.setData('text/plain', `agent-images:${item.imageId}`)
         event.dataTransfer.effectAllowed = 'copy'
       }}
       style={{ contentVisibility: 'auto', containIntrinsicSize: '160px 160px', ...style }}
     >
-      {thumbnailSrc ? (
+      {imageSrc ? (
         <img
-          src={thumbnailSrc}
+          src={imageSrc}
           alt=""
           loading="eager"
           decoding="async"
           fetchPriority="low"
           draggable={false}
           data-image-id={item.imageId}
+          data-image-quality={fullImageSrc ? 'full' : 'thumbnail'}
           data-output-image-ids={item.task.outputImages.join(',')}
           className="saveable-image h-full w-full object-cover"
         />

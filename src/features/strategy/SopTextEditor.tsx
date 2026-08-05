@@ -78,6 +78,20 @@ function wrapSelection(
   }
 }
 
+export function findSopTextMatches(value: string, query: string): number[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  if (!normalizedQuery) return []
+
+  const source = value.toLocaleLowerCase()
+  const matches: number[] = []
+  let matchIndex = source.indexOf(normalizedQuery)
+  while (matchIndex !== -1) {
+    matches.push(matchIndex)
+    matchIndex = source.indexOf(normalizedQuery, matchIndex + normalizedQuery.length)
+  }
+  return matches
+}
+
 export default function SopTextEditor({
   documentId,
   value,
@@ -92,6 +106,7 @@ export default function SopTextEditor({
   const showToast = useStore((state) => state.showToast)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMessage, setSearchMessage] = useState('')
+  const [activeSearchMatchStart, setActiveSearchMatchStart] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
   const [wrap, setWrap] = useState(true)
   const [expanded, setExpanded] = useState(false)
@@ -104,6 +119,17 @@ export default function SopTextEditor({
     characters: value.length,
     lines: value.length === 0 ? 1 : value.split('\n').length,
   }), [value])
+  const searchMatches = useMemo(() => findSopTextMatches(value, searchQuery), [searchQuery, value])
+  const activeSearchMatchIndex = activeSearchMatchStart === null
+    ? -1
+    : searchMatches.indexOf(activeSearchMatchStart)
+  const searchFeedback = !searchQuery.trim()
+    ? ''
+    : searchMatches.length === 0
+      ? '无匹配'
+      : activeSearchMatchIndex === -1
+        ? `${searchMatches.length} 处`
+        : `${activeSearchMatchIndex + 1}/${searchMatches.length}`
   const agentProfile = useMemo(() => getAgentTextApiProfile(settings), [settings])
 
   useEffect(() => {
@@ -112,6 +138,7 @@ export default function SopTextEditor({
     historyIndexRef.current = 0
     setHistoryState({ canUndo: false, canRedo: false })
     setSearchMessage('')
+    setActiveSearchMatchStart(null)
     setCopied(false)
     setAiLoading(null)
     setAiError('')
@@ -190,18 +217,19 @@ export default function SopTextEditor({
       setSearchMessage('请输入查找内容')
       return
     }
-    const source = value.toLocaleLowerCase()
-    const normalizedQuery = query.toLocaleLowerCase()
-    const start = textareaRef.current?.selectionEnd ?? 0
-    let matchIndex = source.indexOf(normalizedQuery, start)
-    if (matchIndex === -1 && start > 0) matchIndex = source.indexOf(normalizedQuery)
-    if (matchIndex === -1) {
-      setSearchMessage('未找到')
+    if (searchMatches.length === 0) {
+      setActiveSearchMatchStart(null)
+      setSearchMessage(`未找到“${query}”`)
       return
     }
+    const start = textareaRef.current?.selectionEnd ?? 0
+    const nextMatchIndex = searchMatches.findIndex((match) => match >= start)
+    const activeMatchIndex = nextMatchIndex === -1 ? 0 : nextMatchIndex
+    const matchIndex = searchMatches[activeMatchIndex]
     textareaRef.current?.focus()
     textareaRef.current?.setSelectionRange(matchIndex, matchIndex + query.length)
-    setSearchMessage(`第 ${matchIndex + 1} 个字符`)
+    setActiveSearchMatchStart(matchIndex)
+    setSearchMessage(`已定位第 ${activeMatchIndex + 1} 处，共 ${searchMatches.length} 处`)
   }
 
   async function copyContent() {
@@ -337,12 +365,22 @@ export default function SopTextEditor({
             onChange={(event) => {
               setSearchQuery(event.target.value)
               setSearchMessage('')
+              setActiveSearchMatchStart(null)
             }}
             onKeyDown={(event) => event.key === 'Enter' && findNext()}
             placeholder="查找正文"
             aria-label="查找正文"
           />
-          <button type="button" onClick={findNext}>下一个</button>
+          <span
+            className="sop-center-editor-search__result"
+            data-empty={Boolean(searchQuery.trim()) && searchMatches.length === 0 ? true : undefined}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {searchFeedback}
+          </span>
+          <button type="button" onClick={findNext} aria-label="查找下一处">下一个</button>
         </div>
         <div className="sop-center-editor-tool-group sop-center-editor-tool-group--end">
           <button type="button" onClick={() => setWrap((current) => !current)} className="sop-center-editor-tool sop-center-editor-tool--label" data-active={wrap || undefined} aria-pressed={wrap} title="自动换行">换行</button>

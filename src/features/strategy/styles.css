@@ -722,7 +722,7 @@
   color: hsl(var(--ds-color-text-subtle));
   display: flex;
   flex: 1 1 12rem;
-  max-width: 16rem;
+  max-width: 20rem;
   min-height: 2rem;
   padding-left: 0.625rem;
 }
@@ -740,6 +740,23 @@
 
 .sop-center-editor-search input::placeholder {
   color: hsl(var(--ds-color-text-subtle));
+}
+
+.sop-center-editor-search__result {
+  color: hsl(var(--ds-color-text-muted));
+  flex: none;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.sop-center-editor-search__result:empty {
+  min-width: 0;
+}
+
+.sop-center-editor-search__result[data-empty="true"] {
+  color: hsl(var(--ds-color-danger));
 }
 
 .sop-center-editor-search button {
