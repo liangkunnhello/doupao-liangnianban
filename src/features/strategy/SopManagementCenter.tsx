@@ -112,6 +112,7 @@ export default function SopManagementCenter({
   onDuplicateMetaInstruction,
   onDeleteMetaInstruction,
   onGenerateSop,
+  onTestSopRevision,
   selectedSopId,
   onApply,
   onClear,
@@ -132,6 +133,7 @@ export default function SopManagementCenter({
   onDuplicateMetaInstruction: (itemId: string) => string | null
   onDeleteMetaInstruction: (itemId: string) => void
   onGenerateSop: GenerateSop
+  onTestSopRevision?: (item: SopLibraryItem) => Promise<void>
   selectedSopId?: string
   onApply?: (item: SopLibraryItem) => void
   onClear?: () => void
@@ -806,6 +808,9 @@ export default function SopManagementCenter({
                   documentId={itemDraft.id}
                   value={itemDraft.content}
                   onChange={(content) => setItemDraft({ ...itemDraft, content })}
+                  onTestRevision={onTestSopRevision
+                    ? (content) => onTestSopRevision({ ...itemDraft, content })
+                    : undefined}
                 />
               </div> : <div className="flex h-full items-center justify-center text-sm text-[hsl(var(--ds-color-text-muted))]">选择或新建一个 SOP</div>}
             </section>

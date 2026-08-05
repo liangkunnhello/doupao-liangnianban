@@ -21,7 +21,7 @@ import StrategyGrid from '../StrategyGrid'
 import StrategyTree, { type StrategyTreeSelection } from '../StrategyTree'
 import SopManagementCenter from '../SopManagementCenter'
 import StoreStrategyImage from './StoreStrategyImage'
-import { generateSopFromStore } from './storeSopGeneration'
+import { generateSopFromStore, testSopRevisionFromStore } from './storeSopGeneration'
 import { isModalBackdropEvent } from '../../../lib/modalBackdrop'
 
 function PresetManager({
@@ -371,6 +371,7 @@ export default function StrategyWorkspace() {
         onDuplicateMetaInstruction={duplicateSopMetaInstruction}
         onDeleteMetaInstruction={deleteSopMetaInstruction}
         onGenerateSop={generateSopFromStore}
+        onTestSopRevision={testSopRevisionFromStore}
         onClose={() => setShowSopCenter(false)}
       />}
     </div>

@@ -7,6 +7,7 @@ import {
   CopyIcon as Copy,
   ExpandIcon as Expand,
   LoaderCircleIcon as Loader,
+  PlayIcon as Play,
   RotateCcwIcon as Undo,
   SearchIcon as Search,
   SparklesIcon as Sparkles,
@@ -20,6 +21,7 @@ import {
   cleanPastedSopText,
   formatSopDocument,
 } from './sopTextFormatting'
+import SopAiRevisionPanel from './SopAiRevisionPanel'
 
 type Selection = {
   start: number
@@ -30,6 +32,7 @@ type SopTextEditorProps = {
   documentId: string
   value: string
   onChange: (value: string) => void
+  onTestRevision?: (value: string) => Promise<void>
 }
 
 const AI_ACTION_LABELS: Record<SopAiOperation, string> = {
@@ -96,6 +99,7 @@ export default function SopTextEditor({
   documentId,
   value,
   onChange,
+  onTestRevision,
 }: SopTextEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -110,10 +114,12 @@ export default function SopTextEditor({
   const [copied, setCopied] = useState(false)
   const [wrap, setWrap] = useState(true)
   const [expanded, setExpanded] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false })
   const [aiLoading, setAiLoading] = useState<SopAiOperation | null>(null)
   const [aiError, setAiError] = useState('')
   const [aiResult, setAiResult] = useState<{ operation: SopAiOperation; content: string } | null>(null)
+  const [testingAiResult, setTestingAiResult] = useState(false)
 
   const stats = useMemo(() => ({
     characters: value.length,
@@ -143,6 +149,7 @@ export default function SopTextEditor({
     setAiLoading(null)
     setAiError('')
     setAiResult(null)
+    setTestingAiResult(false)
   }, [documentId])
 
   useEffect(() => () => aiAbortRef.current?.abort(), [])
@@ -298,6 +305,18 @@ export default function SopTextEditor({
     showToast(aiResult.operation === 'audit' ? '检查报告已复制' : 'AI 结果已复制', 'success')
   }
 
+  async function testAiResult() {
+    if (!aiResult || aiResult.operation === 'audit' || !onTestRevision || testingAiResult) return
+    setTestingAiResult(true)
+    try {
+      await onTestRevision(aiResult.content)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '测试生图提交失败', 'error')
+    } finally {
+      setTestingAiResult(false)
+    }
+  }
+
   return (
     <section
       className="sop-center-text-editor"
@@ -340,6 +359,14 @@ export default function SopTextEditor({
               {AI_ACTION_LABELS[operation]}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => setChatOpen((current) => !current)}
+            data-active={chatOpen || undefined}
+            aria-pressed={chatOpen}
+          >
+            <Sparkles size={13} />AI 对话
+          </button>
           <span className="sop-center-editor-model" title={`当前 Agent 模型：${agentProfile.model}`}>
             {agentProfile.model || '未配置模型'}
           </span>
@@ -388,65 +415,86 @@ export default function SopTextEditor({
         </div>
       </div>
 
-      {(aiError || aiResult) && (
-        <aside
-          className="sop-center-ai-result"
-          data-kind={aiError ? 'error' : aiResult?.operation === 'audit' ? 'audit' : 'replacement'}
-          aria-live="polite"
-        >
-          <div className="sop-center-ai-result__header">
-            <div className="min-w-0">
-              <strong>{aiError ? 'AI 处理失败' : `${AI_ACTION_LABELS[aiResult!.operation]}预览`}</strong>
-              <span>{aiError ? '原文未发生变化' : aiResult!.operation === 'audit' ? '检查报告不会改写正文' : '确认后才会替换正文'}</span>
-            </div>
-            <button type="button" onClick={() => { setAiError(''); setAiResult(null) }} aria-label="关闭 AI 结果"><Close size={14} /></button>
-          </div>
-          {aiError ? (
-            <p className="sop-center-ai-result__error">{aiError}</p>
-          ) : (
-            <>
-              <pre>{aiResult!.content}</pre>
-              <div className="sop-center-ai-result__actions">
-                <button type="button" onClick={() => void copyAiResult()}><Copy size={13} />复制结果</button>
-                {aiResult!.operation !== 'audit' && (
-                  <button
-                    type="button"
-                    className="sop-center-ai-result__apply"
-                    onClick={() => {
-                      commit(aiResult!.content)
-                      setAiResult(null)
-                      setSearchMessage(`${AI_ACTION_LABELS[aiResult!.operation]}已应用，可撤销`)
-                    }}
-                  >
-                    <CheckCircle size={13} />替换正文
-                  </button>
-                )}
+      <div className="sop-center-text-editor__workspace" data-chat-open={chatOpen || undefined}>
+        <div className="sop-center-text-editor__document-pane">
+          {(aiError || aiResult) && (
+            <aside
+              className="sop-center-ai-result"
+              data-kind={aiError ? 'error' : aiResult?.operation === 'audit' ? 'audit' : 'replacement'}
+              aria-live="polite"
+            >
+              <div className="sop-center-ai-result__header">
+                <div className="min-w-0">
+                  <strong>{aiError ? 'AI 处理失败' : `${AI_ACTION_LABELS[aiResult!.operation]}预览`}</strong>
+                  <span>{aiError ? '原文未发生变化' : aiResult!.operation === 'audit' ? '检查报告不会改写正文' : '确认后才会替换正文'}</span>
+                </div>
+                <button type="button" onClick={() => { setAiError(''); setAiResult(null) }} aria-label="关闭 AI 结果"><Close size={14} /></button>
               </div>
-            </>
+              {aiError ? (
+                <p className="sop-center-ai-result__error">{aiError}</p>
+              ) : (
+                <>
+                  <pre>{aiResult!.content}</pre>
+                  <div className="sop-center-ai-result__actions">
+                    {aiResult!.operation !== 'audit' && onTestRevision && (
+                      <button type="button" onClick={() => void testAiResult()} disabled={testingAiResult}>
+                        {testingAiResult ? <Loader size={13} className="animate-spin" /> : <Play size={13} />}
+                        {testingAiResult ? '正在提交' : '测试生图'}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => void copyAiResult()}><Copy size={13} />复制结果</button>
+                    {aiResult!.operation !== 'audit' && (
+                      <button
+                        type="button"
+                        className="sop-center-ai-result__apply"
+                        onClick={() => {
+                          commit(aiResult!.content)
+                          setAiResult(null)
+                          setSearchMessage(`${AI_ACTION_LABELS[aiResult!.operation]}已应用，可撤销`)
+                        }}
+                      >
+                        <CheckCircle size={13} />替换正文
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </aside>
           )}
-        </aside>
-      )}
 
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(event) => commit(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'f') {
-            event.preventDefault()
-            searchInputRef.current?.focus()
-          }
-        }}
-        className="sop-center-text-editor__input"
-        wrap={wrap ? 'soft' : 'off'}
-        spellCheck="false"
-        aria-label="SOP 正文"
-      />
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(event) => commit(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'f') {
+                event.preventDefault()
+                searchInputRef.current?.focus()
+              }
+            }}
+            className="sop-center-text-editor__input"
+            wrap={wrap ? 'soft' : 'off'}
+            spellCheck="false"
+            aria-label="SOP 正文"
+          />
 
-      <footer className="sop-center-text-editor__footer" aria-live="polite">
-        <span>{stats.lines} 行 · {stats.characters} 字符</span>
-        <span>{searchMessage || (copied ? '已复制到剪贴板' : wrap ? '自动换行已开启' : '自动换行已关闭')}</span>
-      </footer>
+          <footer className="sop-center-text-editor__footer" aria-live="polite">
+            <span>{stats.lines} 行 · {stats.characters} 字符</span>
+            <span>{searchMessage || (copied ? '已复制到剪贴板' : wrap ? '自动换行已开启' : '自动换行已关闭')}</span>
+          </footer>
+        </div>
+        {chatOpen && (
+          <SopAiRevisionPanel
+            documentId={documentId}
+            value={value}
+            onApply={(content) => {
+              commit(content)
+              setSearchMessage('AI 对话提案已应用，可撤销')
+            }}
+            onTestRevision={onTestRevision}
+          />
+        )}
+      </div>
     </section>
   )
 }

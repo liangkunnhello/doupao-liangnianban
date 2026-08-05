@@ -1,6 +1,6 @@
 import { getAgentTextApiProfile } from '../../../lib/apiProfiles'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../../../lib/devProxy'
-import { useStore } from '../../../store'
+import { submitTaskWithData, useStore } from '../../../store'
 import {
   buildSopRequestContent,
   extractResponseText,
@@ -223,4 +223,27 @@ export async function generatePromptsFromSopStore(
     beforeBatch: options.beforeBatch,
     signal: options.signal,
   })
+}
+
+export async function testSopRevisionFromStore(sop: SopLibraryItem) {
+  const [prompt] = await generatePromptsFromSopStore(sop, 1, '', {
+    exact: true,
+    maxBatchSize: 1,
+  })
+  if (!prompt?.trim()) throw new Error('AI 未能从该 SOP 生成可测试的生图提示词')
+
+  const state = useStore.getState()
+  const activeTab = state.workspaceTabs.find((tab) => tab.id === state.activeWorkspaceTabId)
+  const taskId = await submitTaskWithData({
+    prompt: prompt.trim(),
+    inputImages: state.inputImages,
+    inputImageFolder: state.inputImageFolder,
+    params: { ...state.params, n: 1 },
+    maskDraft: null,
+    targetTabId: state.activeWorkspaceTabId,
+    scheduledOutputPath: state.customOutputPath.trim() || undefined,
+    scheduledOutputSubFolder: activeTab?.name,
+  }, { silentSuccess: true })
+  if (!taskId) throw new Error('测试生图任务未能提交，请检查图片 API 配置')
+  state.showToast('测试任务已提交，可在当前画廊查看生成结果', 'success')
 }

@@ -1,7 +1,7 @@
 import { useRequirementPrototype } from '../../requirementPrototype/store'
 import { useStore } from '../../../store'
 import SopManagementCenter from '../SopManagementCenter'
-import { generateSopFromStore } from './storeSopGeneration'
+import { generateSopFromStore, testSopRevisionFromStore } from './storeSopGeneration'
 import type { SopLibraryItem } from '../types'
 
 export default function GallerySopManagementCenter({
@@ -46,6 +46,7 @@ export default function GallerySopManagementCenter({
     onDuplicateMetaInstruction={duplicateMetaInstruction}
     onDeleteMetaInstruction={deleteMetaInstruction}
     onGenerateSop={generateSopFromStore}
+    onTestSopRevision={testSopRevisionFromStore}
     selectedSopId={selectedSopId}
     onApply={onApply}
     onClear={onClear}
