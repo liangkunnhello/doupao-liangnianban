@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
-import { callAgentApi, callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments, transformSopDocument } from './agentApi'
+import { callAgentApi, callAgentConversationTitleApi, callAgentResponsesApi, generateDerivedWordEntries, parseBatchImageCallArguments, reviseSopDocument, transformSopDocument } from './agentApi'
 
 describe('callAgentResponsesApi', () => {
   afterEach(() => {
@@ -392,6 +392,75 @@ describe('callAgentResponsesApi', () => {
     expect(body.messages[0].content).toContain('meticulous SOP document editor')
     expect(body.messages[1].content).toContain('Do not rewrite it')
     expect(result).toContain('缺少验收标准')
+  })
+
+  it('creates a structured multi-turn SOP revision with the current document and prior proposal', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: JSON.stringify({
+          assistant_reply: '已保留约束并补充验收标准。',
+          change_summary: ['补充验收标准', '压缩重复说明'],
+          revised_sop: '# SOP\n\n1. 执行\n2. 验收',
+        }) }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      model: 'agent-sop-chat-model',
+    })
+
+    const result = await reviseSopDocument({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      content: '# 原 SOP\n\n执行导出。',
+      conversation: [
+        { role: 'user', text: '先精简' },
+        { role: 'assistant', text: '已精简。', revisionContent: '# 精简版\n\n执行导出。' },
+        { role: 'user', text: '再补验收标准' },
+      ],
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.text.format.name).toBe('sop_revision')
+    expect(body.input[0].content).toContain('<current_sop>')
+    expect(body.input[2].content).toContain('<proposed_sop>')
+    expect(body.input.at(-1).content).toBe('再补验收标准')
+    expect(result).toEqual({
+      reply: '已保留约束并补充验收标准。',
+      content: '# SOP\n\n1. 执行\n2. 验收',
+      changeSummary: ['补充验收标准', '压缩重复说明'],
+    })
+  })
+
+  it('falls back when a compatible provider rejects structured SOP revision output', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('unsupported response format', { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          assistant_reply: '已调整。',
+          change_summary: ['调整结构'],
+          revised_sop: '# 调整后 SOP',
+        }) } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const profile = createDefaultOpenAIProfile({ apiKey: 'test-key', model: 'agent-chat-model' })
+
+    const result = await reviseSopDocument({
+      settings: { ...DEFAULT_SETTINGS, agentTextProtocol: 'chat-completions' },
+      profile,
+      content: '# SOP',
+      conversation: [{ role: 'user', text: '调整结构' }],
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const secondBody = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))
+    expect(secondBody.response_format).toBeUndefined()
+    expect(result.content).toBe('# 调整后 SOP')
   })
 
   it('requests web search and applies citations', async () => {

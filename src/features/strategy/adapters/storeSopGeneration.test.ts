@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateSopFromStore } from './storeSopGeneration'
+import { generateSopFromStore, testSopRevisionFromStore } from './storeSopGeneration'
+
+const storeMocks = vi.hoisted(() => ({
+  submitTaskWithData: vi.fn(),
+  showToast: vi.fn(),
+}))
 
 vi.mock('../../../lib/apiProfiles', () => ({
   getAgentTextApiProfile: () => ({
@@ -19,8 +24,18 @@ vi.mock('../../../lib/devProxy', () => ({
 }))
 
 vi.mock('../../../store', () => ({
+  submitTaskWithData: storeMocks.submitTaskWithData,
   useStore: {
-    getState: () => ({ settings: { model: 'gpt-test' } }),
+    getState: () => ({
+      settings: { model: 'gpt-test' },
+      workspaceTabs: [{ id: 'tab-1', name: '测试画廊' }],
+      activeWorkspaceTabId: 'tab-1',
+      inputImages: [{ id: 'reference-1', dataUrl: 'data:image/png;base64,AAA' }],
+      inputImageFolder: null,
+      params: { n: 4, size: '1024x1024' },
+      customOutputPath: '',
+      showToast: storeMocks.showToast,
+    }),
   },
 }))
 
@@ -41,6 +56,7 @@ function mockResponse(text: string) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
 })
 
 describe('store SOP generation', () => {
@@ -82,5 +98,32 @@ describe('store SOP generation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(progress).toContain('repair')
     expect(progress.at(-1)).toBe('parse')
+  })
+
+  it('turns a revision proposal into one prompt and submits one image with current gallery context', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse('{"prompts":["测试商品图提示词"]}'))
+    vi.stubGlobal('fetch', fetchMock)
+    storeMocks.submitTaskWithData.mockResolvedValue('task-test-1')
+
+    await testSopRevisionFromStore({
+      id: 'sop-1',
+      name: '商品图 SOP',
+      description: '',
+      content: '# 修订 SOP',
+      source: 'manual',
+      createdBy: 'user-1',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: '测试商品图提示词',
+      inputImages: [{ id: 'reference-1', dataUrl: 'data:image/png;base64,AAA' }],
+      params: expect.objectContaining({ n: 1 }),
+      maskDraft: null,
+      targetTabId: 'tab-1',
+      scheduledOutputSubFolder: '测试画廊',
+    }), { silentSuccess: true })
+    expect(storeMocks.showToast).toHaveBeenCalledWith('测试任务已提交，可在当前画廊查看生成结果', 'success')
   })
 })

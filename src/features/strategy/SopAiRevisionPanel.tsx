@@ -194,7 +194,7 @@ export default function SopAiRevisionPanel({
       <header className="sop-ai-chat__header">
         <div className="min-w-0">
           <strong><Sparkles size={14} />AI 对话优化</strong>
-          <span title={`当前模型：${profile.model || '未配置'}`}>{profile.model || '未配置模型'} · 记录仅保存在本机</span>
+          <span title={`当前模型：${profile.model || '未配置'}`}>{profile.model || '未配置模型'} · 本机保留最近 30 条</span>
         </div>
         <button type="button" onClick={clearHistory} disabled={messages.length === 0 || loading} aria-label="清空 AI 对话记录" title="清空记录"><Trash size={14} /></button>
       </header>

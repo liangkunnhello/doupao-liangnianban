@@ -29,6 +29,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 }))
 const agentApiMocks = vi.hoisted(() => ({
   transformSopDocument: vi.fn(),
+  reviseSopDocument: vi.fn(),
 }))
 
 vi.mock('../../store', () => imageStoreMocks)
@@ -94,6 +95,7 @@ function renderCenter(options: {
   items?: SopLibraryItem[]
   metaInstructions?: SopMetaInstruction[]
   onGenerateSop?: GenerateSop
+  onTestSopRevision?: (item: SopLibraryItem) => Promise<void>
 } = {}) {
   const onSaveItem = vi.fn()
   const onApply = vi.fn()
@@ -114,6 +116,7 @@ function renderCenter(options: {
       onDuplicateMetaInstruction={vi.fn(() => null)}
       onDeleteMetaInstruction={vi.fn()}
       onGenerateSop={options.onGenerateSop ?? vi.fn()}
+      onTestSopRevision={options.onTestSopRevision}
       selectedSopId={options.selectedSopId}
       onApply={onApply}
       onClear={vi.fn()}
@@ -379,6 +382,50 @@ describe('SopManagementCenter apply and save actions', () => {
 
     act(() => findButton(result.renderer.root, '替换正文')!.props.onClick())
     expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe('# 目标\n\n保持输出一致。')
+    result.renderer.unmount()
+  })
+
+  it('keeps a persistent SOP revision conversation with apply and test-image actions', async () => {
+    const onTestSopRevision = vi.fn().mockResolvedValue(undefined)
+    agentApiMocks.reviseSopDocument.mockResolvedValueOnce({
+      reply: '已补充验收标准并压缩重复说明。',
+      content: '# 修订 SOP\n\n1. 执行\n2. 验收',
+      changeSummary: ['补充验收标准', '压缩重复说明'],
+    })
+    let result!: ReturnType<typeof renderCenter>
+    await act(async () => {
+      result = renderCenter({ onTestSopRevision })
+    })
+
+    act(() => findButton(result.renderer.root, 'AI 对话')!.props.onClick())
+    const chatInput = result.renderer.root.findByProps({ 'aria-label': '向 AI 描述 SOP 修改要求' })
+    act(() => chatInput.props.onChange({ target: { value: '补充可验证的验收标准' } }))
+    await act(async () => {
+      result.renderer.root.findByProps({ 'aria-label': '发送 SOP 修改要求' }).props.onClick()
+    })
+
+    expect(agentApiMocks.reviseSopDocument).toHaveBeenCalledWith(expect.objectContaining({
+      content: item.content,
+      conversation: [expect.objectContaining({ role: 'user', text: '补充可验证的验收标准' })],
+    }))
+    expect(textContent(result.renderer.root)).toContain('已补充验收标准并压缩重复说明。')
+    expect(textContent(result.renderer.root)).toContain('补充验收标准')
+
+    await act(async () => findButton(result.renderer.root, '测试生图')!.props.onClick())
+    expect(onTestSopRevision).toHaveBeenCalledWith(expect.objectContaining({
+      id: item.id,
+      content: '# 修订 SOP\n\n1. 执行\n2. 验收',
+    }))
+
+    act(() => findButton(result.renderer.root, '应用到正文')!.props.onClick())
+    expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文' }).props.value).toBe('# 修订 SOP\n\n1. 执行\n2. 验收')
+
+    act(() => result.renderer.unmount())
+    act(() => {
+      result = renderCenter({ onTestSopRevision })
+    })
+    act(() => findButton(result.renderer.root, 'AI 对话')!.props.onClick())
+    expect(textContent(result.renderer.root)).toContain('已补充验收标准并压缩重复说明。')
     result.renderer.unmount()
   })
 

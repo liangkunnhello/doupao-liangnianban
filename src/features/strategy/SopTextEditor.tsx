@@ -104,6 +104,7 @@ export default function SopTextEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const aiAbortRef = useRef<AbortController | null>(null)
+  const chatExpandedEditorRef = useRef(false)
   const historyRef = useRef<string[]>([value])
   const historyIndexRef = useRef(0)
   const settings = useStore((state) => state.settings)
@@ -317,6 +318,18 @@ export default function SopTextEditor({
     }
   }
 
+  function toggleChat() {
+    if (chatOpen) {
+      setChatOpen(false)
+      if (chatExpandedEditorRef.current) setExpanded(false)
+      chatExpandedEditorRef.current = false
+      return
+    }
+    chatExpandedEditorRef.current = !expanded
+    setChatOpen(true)
+    if (!expanded) setExpanded(true)
+  }
+
   return (
     <section
       className="sop-center-text-editor"
@@ -361,7 +374,7 @@ export default function SopTextEditor({
           ))}
           <button
             type="button"
-            onClick={() => setChatOpen((current) => !current)}
+            onClick={toggleChat}
             data-active={chatOpen || undefined}
             aria-pressed={chatOpen}
           >
