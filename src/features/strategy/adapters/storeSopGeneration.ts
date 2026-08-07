@@ -34,6 +34,12 @@ const SOP_GENERATION_TEXT_FORMAT = {
   },
 } as const
 
+export function getSopPromptGenerationModelFromStore() {
+  const settings = useStore.getState().settings
+  const profile = getAgentTextApiProfile(settings)
+  return (profile.model || settings.model).trim()
+}
+
 function buildSopPromptTextFormat(quantity: number) {
   const count = Math.max(1, Math.trunc(quantity))
   return {

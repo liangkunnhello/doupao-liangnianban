@@ -520,6 +520,118 @@ describe('workspace tab defaults', () => {
     expect(state.workspaceTabs[0].tasks.map((item) => item.id)).toEqual(['orphan-gallery-task'])
   })
 
+  it('preserves hydrated task ownership during writes before IndexedDB tasks are restored', () => {
+    const newlyCreatedTask = task({ id: 'task-new' })
+    useStore.setState({
+      workspaceTabs: [
+        { ...workspaceTab({ id: 'tab-a', tasks: [newlyCreatedTask] }), _taskIds: ['task-a'] },
+        { ...workspaceTab({ id: 'tab-b', tasks: [], order: 1 }), _taskIds: ['task-b'] },
+      ],
+      activeWorkspaceTabId: 'tab-a',
+    })
+
+    const persisted = getPersistedState(useStore.getState())
+
+    expect(persisted.workspaceTabs?.map((tab) => tab._taskIds)).toEqual([
+      ['task-a', 'task-new'],
+      ['task-b'],
+    ])
+  })
+
+  it('restores multiple hydrated tabs without merging their tasks into recovery history', async () => {
+    const firstTask = task({ id: 'task-a' })
+    const secondTask = task({ id: 'task-b' })
+    await putDbTask(firstTask)
+    await putDbTask(secondTask)
+    useStore.setState({
+      workspaceTabs: [
+        { ...workspaceTab({ id: 'tab-a', tasks: [] }), _taskIds: [firstTask.id] },
+        { ...workspaceTab({ id: 'tab-b', tasks: [], order: 1 }), _taskIds: [secondTask.id] },
+      ],
+      activeWorkspaceTabId: 'tab-a',
+    })
+
+    await initStore()
+
+    expect(useStore.getState().workspaceTabs.map((tab) => ({
+      id: tab.id,
+      taskIds: tab.tasks.map((item) => item.id),
+    }))).toEqual([
+      { id: 'tab-a', taskIds: ['task-a'] },
+      { id: 'tab-b', taskIds: ['task-b'] },
+    ])
+    expect(useStore.getState().workspaceTabs.some((tab) => tab.name === '恢复的历史任务')).toBe(false)
+  })
+
+  it('detects previously merged tasks and restores them after confirmation', async () => {
+    const firstTask = task({ id: 'task-a', scheduledOutputSubFolder: '小卡' })
+    const secondTask = task({ id: 'task-b', scheduledOutputSubFolder: '短剧' })
+    const unknownTask = task({ id: 'task-unknown' })
+    const setConfirmDialog = vi.fn()
+    await putDbTask(firstTask)
+    await putDbTask(secondTask)
+    await putDbTask(unknownTask)
+    useStore.setState({
+      workspaceTabs: [
+        { ...workspaceTab({ id: 'tab-a', name: '小卡', tasks: [] }), _taskIds: [] },
+        { ...workspaceTab({ id: 'tab-b', name: '短剧', tasks: [], order: 1 }), _taskIds: [] },
+        {
+          ...workspaceTab({ id: 'tab-recovery', name: '恢复的历史任务', tasks: [], order: 2 }),
+          _taskIds: [firstTask.id, secondTask.id, unknownTask.id],
+        },
+      ],
+      activeWorkspaceTabId: 'tab-recovery',
+      setConfirmDialog,
+    })
+
+    await initStore()
+
+    expect(useStore.getState().workspaceTabs.find((tab) => tab.id === 'tab-recovery')?.tasks.map((item) => item.id))
+      .toEqual(['task-a', 'task-b', 'task-unknown'])
+    expect(setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: '检测到任务归属异常',
+      message: expect.stringContaining('检测到 2 个任务'),
+      confirmText: '恢复任务',
+      cancelText: '暂不恢复',
+    }))
+
+    const dialog = setConfirmDialog.mock.calls[0]?.[0]
+    dialog.action()
+
+    const state = useStore.getState()
+    expect(state.workspaceTabs.find((tab) => tab.id === 'tab-a')?.tasks.map((item) => item.id)).toEqual(['task-a'])
+    expect(state.workspaceTabs.find((tab) => tab.id === 'tab-b')?.tasks.map((item) => item.id)).toEqual(['task-b'])
+    expect(state.workspaceTabs.find((tab) => tab.id === 'tab-recovery')?.tasks.map((item) => item.id)).toEqual(['task-unknown'])
+  })
+
+  it('warns without offering automatic recovery when tab names are duplicated', async () => {
+    const ambiguousTask = task({ id: 'task-ambiguous', scheduledOutputSubFolder: '图标' })
+    const setConfirmDialog = vi.fn()
+    await putDbTask(ambiguousTask)
+    useStore.setState({
+      workspaceTabs: [
+        { ...workspaceTab({ id: 'tab-a', name: '图标', tasks: [] }), _taskIds: [] },
+        { ...workspaceTab({ id: 'tab-b', name: '图标', tasks: [], order: 1 }), _taskIds: [] },
+        {
+          ...workspaceTab({ id: 'tab-recovery', name: '恢复的历史任务', tasks: [], order: 2 }),
+          _taskIds: [ambiguousTask.id],
+        },
+      ],
+      setConfirmDialog,
+    })
+
+    await initStore()
+
+    expect(useStore.getState().workspaceTabs.find((tab) => tab.id === 'tab-recovery')?.tasks.map((item) => item.id))
+      .toEqual(['task-ambiguous'])
+    expect(setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: '检测到任务归属异常',
+      message: expect.stringContaining('缺少唯一、可靠的原标签信息'),
+      confirmText: '知道了',
+      showCancel: false,
+    }))
+  })
+
   it('backfills generated image batches and persists them during initialization', async () => {
     const older = task({
       id: 'batch-older',

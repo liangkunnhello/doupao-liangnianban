@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateSopFromStore, testSopRevisionFromStore } from './storeSopGeneration'
+import { generateSopFromStore, getSopPromptGenerationModelFromStore, testSopRevisionFromStore } from './storeSopGeneration'
 
 const storeMocks = vi.hoisted(() => ({
   submitTaskWithData: vi.fn(),
@@ -60,6 +60,10 @@ afterEach(() => {
 })
 
 describe('store SOP generation', () => {
+  it('reports the actual text model used for prompt generation', () => {
+    expect(getSopPromptGenerationModelFromStore()).toBe('gpt-test')
+  })
+
   it('sends all reference images with strict structured output and reports real phases', async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockResponse('{"name":"多图 SOP","description":"说明","sop":"# 正文"}'))
     vi.stubGlobal('fetch', fetchMock)

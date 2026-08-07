@@ -39,7 +39,7 @@ import {
   selectSopPromptSources,
   SOP_HIGH_VOLUME_WARNING_THRESHOLD,
 } from '../sopPromptBatch'
-import { generatePromptsFromSopStore } from './storeSopGeneration'
+import { generatePromptsFromSopStore, getSopPromptGenerationModelFromStore } from './storeSopGeneration'
 import { useCloseOnEscape } from '../../../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../../../hooks/usePreventBackgroundScroll'
 import { Switch, useDialogFocusTrap } from '../../../design-system'
@@ -62,6 +62,7 @@ import {
   type PromptLibraryFolder,
 } from './promptLibraryTree'
 import { getPromptRunImageLinks, type PromptRunImageLink } from './promptRunImageLinks'
+import { groupPromptRunsBySop, sortPromptRunsNewestFirst } from './promptRunPresentation'
 
 type BatchStatus = 'idle' | 'generating' | 'paused' | 'ready' | 'submitting' | 'success' | 'error'
 type SourceStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
@@ -69,6 +70,7 @@ const PROMPT_MANAGEMENT_MODAL_MODE_STORAGE_KEY = 'doupao.prompt-management-modal
 const ALL_PROMPT_GROUPS = 'all'
 const UNGROUPED_PROMPT_GROUP = 'ungrouped'
 const PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY = 'doupao.prompt-library-collapsed-folders.v1'
+const PROMPT_LIBRARY_COLLAPSED_SOP_GROUPS_STORAGE_KEY = 'doupao.prompt-library-collapsed-sop-groups.v1'
 
 type PromptGroupFilter = string
 type PromptLibraryItemRef = { type: 'folder' | 'run'; id: string }
@@ -338,6 +340,14 @@ export default function GallerySopBatchModal({
       return new Set()
     }
   })
+  const [collapsedSopGroupIds, setCollapsedSopGroupIds] = useState<Set<string>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PROMPT_LIBRARY_COLLAPSED_SOP_GROUPS_STORAGE_KEY) ?? '[]')
+      return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : [])
+    } catch {
+      return new Set()
+    }
+  })
   const [selectedLibraryItem, setSelectedLibraryItem] = useState<PromptLibraryItemRef | null>(null)
   const [libraryClipboard, setLibraryClipboard] = useState<PromptLibraryClipboard | null>(null)
   const [libraryContextMenu, setLibraryContextMenu] = useState<PromptLibraryContextMenu | null>(null)
@@ -358,6 +368,7 @@ export default function GallerySopBatchModal({
   const secondReferenceRef = useRef(initialSecondReference)
   const activeRunIdRef = useRef(activeRunId)
   const activeRunSubmittedRef = useRef(false)
+  const activePromptGenerationModelRef = useRef('')
   const pendingSnapshotRef = useRef<SopBatchSnapshot | null>(null)
   const snapshotTimerRef = useRef<number | null>(null)
   const generationAbortRef = useRef<AbortController | null>(null)
@@ -441,9 +452,7 @@ export default function GallerySopBatchModal({
         ...run.prompts.map((prompt) => prompt.text),
       ].some((value) => value.toLocaleLowerCase().includes(keyword))
     })
-    return runs.sort((left, right) =>
-      (left.promptOrder ?? Number.MAX_SAFE_INTEGER) - (right.promptOrder ?? Number.MAX_SAFE_INTEGER)
-      || getRunUpdatedAt(right) - getRunUpdatedAt(left))
+    return sortPromptRunsNewestFirst(runs)
   }, [favoritesOnly, librarySearch, recentRuns])
   const getPromptReferenceSources = (item: PromptDraft) => {
     const source = allSources.find((candidate) => candidate.id === item.sourceId)
@@ -505,6 +514,7 @@ export default function GallerySopBatchModal({
   const resetCompletedRun = () => {
     const nextRunId = promptRunId()
     setCurrentRunId(nextRunId)
+    activePromptGenerationModelRef.current = ''
     setRunTitle('')
     setSources([])
     setPrompts([])
@@ -523,8 +533,10 @@ export default function GallerySopBatchModal({
   }
 
   const updateRecentRun = (snapshot: SopBatchSnapshot) => {
-    setRecentRuns((current) => [snapshot, ...current.filter((item) => item.id !== snapshot.id)]
-      .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || getRunUpdatedAt(b) - getRunUpdatedAt(a)))
+    setRecentRuns((current) => sortPromptRunsNewestFirst([
+      snapshot,
+      ...current.filter((item) => item.id !== snapshot.id),
+    ]))
   }
 
   const writeRunPointer = (
@@ -563,6 +575,10 @@ export default function GallerySopBatchModal({
       .filter((source) => source.kind === 'image' && source.imageId)
       .map((source) => source.imageId!)
     const now = Date.now()
+    const promptGenerationModel = patch.promptGenerationModel?.trim()
+      || activePromptGenerationModelRef.current.trim()
+      || previous?.promptGenerationModel?.trim()
+      || undefined
     return {
       id: runId,
       batchId: patch.batchId ?? previous?.batchId ?? '',
@@ -580,6 +596,7 @@ export default function GallerySopBatchModal({
       promptOrder: patch.promptOrder ?? previous?.promptOrder ?? getNextPromptOrder(
         previous?.promptGroup?.id ?? selectedPromptGroup?.id ?? null,
       ),
+      promptGenerationModel,
       sop: {
         id: snapshotSop.id,
         name: snapshotSop.name,
@@ -691,6 +708,7 @@ export default function GallerySopBatchModal({
       : []
 
     setCurrentRunId(run.id, run.status === 'submitted' || Boolean(run.batchId))
+    activePromptGenerationModelRef.current = run.promptGenerationModel ?? ''
     setRunTitle(getPromptRunTitle(run))
     setPromptCount(run.promptCount || restoredPrompts.filter((item) => !item.deleted && item.promptText.trim()).length || initialPromptCount)
     setImagesPerPrompt(run.imagesPerPrompt || initialImagesPerPrompt)
@@ -726,8 +744,7 @@ export default function GallerySopBatchModal({
     void (async () => {
       const allRuns = await getAllSopBatchSnapshots()
       if (!active) return
-      const sortedRuns = allRuns
-        .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || getRunUpdatedAt(b) - getRunUpdatedAt(a))
+      const sortedRuns = sortPromptRunsNewestFirst(allRuns)
       setRecentRuns(sortedRuns)
       const restoredGroups = readPromptCollectionGroups(sortedRuns)
       setPromptGroups(restoredGroups)
@@ -1093,6 +1110,16 @@ export default function GallerySopBatchModal({
       if (next.has(groupId)) next.delete(groupId)
       else next.add(groupId)
       window.localStorage.setItem(PROMPT_LIBRARY_COLLAPSED_STORAGE_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
+
+  const toggleSopGroupCollapsed = (groupId: string) => {
+    setCollapsedSopGroupIds((current) => {
+      const next = new Set(current)
+      if (next.has(groupId)) next.delete(groupId)
+      else next.add(groupId)
+      window.localStorage.setItem(PROMPT_LIBRARY_COLLAPSED_SOP_GROUPS_STORAGE_KEY, JSON.stringify([...next]))
       return next
     })
   }
@@ -1778,6 +1805,7 @@ export default function GallerySopBatchModal({
       setError('请先选择一个 SOP')
       return
     }
+    activePromptGenerationModelRef.current = getSopPromptGenerationModelFromStore()
     const currentSources = freshRun ? [] : sources
     const currentPrompts = freshRun ? [] : prompts
     generationAbortRef.current?.abort(new DOMException('已开始新的提示词生成', 'AbortError'))
@@ -2154,6 +2182,7 @@ export default function GallerySopBatchModal({
         signal: generationController.signal,
       })
       if (generationController.signal.aborted) return
+      activePromptGenerationModelRef.current = getSopPromptGenerationModelFromStore()
       updatePrompts((current) => current.map((entry) => entry.id === item.id
         ? { ...entry, referenceImageIds, promptText: generated[0] ?? entry.promptText, origin: 'ai', edited: false }
         : entry))
@@ -2280,6 +2309,7 @@ export default function GallerySopBatchModal({
     const dropPosition = libraryDropTarget?.type === 'run' && libraryDropTarget.id === run.id
       ? libraryDropTarget.position
       : null
+    const modelLabel = run.promptGenerationModel?.trim() || '模型未知'
     return (
       <div
         role="treeitem"
@@ -2348,7 +2378,15 @@ export default function GallerySopBatchModal({
         >
           <BookOpenCheck size={14} className={`shrink-0 ${selected ? 'text-ds-primary' : 'text-ds-muted'}`} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-medium">{getPromptRunTitle(run)}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-xs font-medium">{getPromptRunTitle(run)}</span>
+              <span
+                title={`生成提示词的文本模型：${modelLabel}`}
+                className="max-w-24 shrink-0 truncate rounded bg-ds-subtle px-1.5 py-0.5 text-[9px] font-medium text-ds-muted"
+              >
+                {modelLabel}
+              </span>
+            </span>
             <span className="mt-0.5 block truncate text-[10px] text-ds-muted">{available} 条 · {imageCount} 图 · {getRunStatusLabel(run)}</span>
           </span>
         </button>
@@ -2356,6 +2394,41 @@ export default function GallerySopBatchModal({
       </div>
     )
   }
+
+  const renderPromptRunEntries = (runs: SopBatchSnapshot[], depth: number): ReactNode =>
+    groupPromptRunsBySop(runs).map((entry) => {
+      if (entry.type === 'run') return renderPromptRunTreeItem(entry.run, depth)
+      const filterActive = Boolean(librarySearch.trim() || favoritesOnly)
+      const collapsed = !filterActive && collapsedSopGroupIds.has(entry.id)
+      const promptTotal = entry.runs.reduce((total, run) =>
+        total + run.prompts.filter((prompt) => !prompt.deleted && prompt.text.trim()).length, 0)
+      return (
+        <div key={entry.id} role="none">
+          <button
+            type="button"
+            role="treeitem"
+            aria-level={depth + 1}
+            aria-expanded={!collapsed}
+            aria-label={`SOP 分组 ${entry.sopName}，${entry.runs.length} 个提示词集`}
+            onClick={() => toggleSopGroupCollapsed(entry.id)}
+            className="flex min-h-9 w-full items-center gap-1.5 rounded-lg pr-2 text-left text-ds-muted transition-colors hover:bg-ds-surface hover:text-ds-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary"
+            style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 6}px` }}
+          >
+            <span className="flex h-7 w-6 shrink-0 items-center justify-center">
+              {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            </span>
+            <Sparkles size={13} className="shrink-0 text-ds-primary" />
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ds-text">{entry.sopName}</span>
+            <span className="shrink-0 text-[10px]">{entry.runs.length} 组 · {promptTotal} 条</span>
+          </button>
+          {!collapsed && (
+            <div role="group">
+              {entry.runs.map((run) => renderPromptRunTreeItem(run, depth + 1))}
+            </div>
+          )}
+        </div>
+      )
+    })
 
   const renderPromptFolderTree = (parentId: string | null, depth = 0): ReactNode =>
     getSortedFolderChildren(promptGroups, parentId).map((folder) => {
@@ -2442,7 +2515,7 @@ export default function GallerySopBatchModal({
           {!collapsed && (children.length > 0 || directRuns.length > 0) && (
             <div role="group">
               {renderPromptFolderTree(folder.id, depth + 1)}
-              {directRuns.map((run) => renderPromptRunTreeItem(run, depth + 1))}
+              {renderPromptRunEntries(directRuns, depth + 1)}
             </div>
           )}
         </div>
@@ -2690,9 +2763,7 @@ export default function GallerySopBatchModal({
                 }}
               >
                 {renderPromptFolderTree(null)}
-                {filteredRuns
-                  .filter((run) => !run.promptGroup?.id)
-                  .map((run) => renderPromptRunTreeItem(run, 0))}
+                {renderPromptRunEntries(filteredRuns.filter((run) => !run.promptGroup?.id), 0)}
                 {filteredRuns.length === 0 && (
                   <div className="flex min-h-40 flex-col items-center justify-center px-4 text-center text-ds-muted">
                     <BookOpenCheck size={22} />
@@ -2726,6 +2797,7 @@ export default function GallerySopBatchModal({
                         <input value={runTitle} onChange={(event) => updateActiveRunMetadata({ title: event.target.value })} disabled={running} aria-label="提示词集名称" placeholder="未命名提示词集" className="w-full border-0 bg-transparent p-0 text-base font-semibold outline-none placeholder:text-ds-muted focus:ring-0 disabled:opacity-60" />
                         <p className="mt-1 text-xs text-ds-muted">
                           {activeRun?.sop.name ?? selectedSop?.name ?? '独立提示词集'} · {visiblePrompts.length} 条提示词 · {activeRun ? getRunStatusLabel(activeRun) : '编辑中'}
+                          {activeRun?.promptGenerationModel ? ` · 文本模型 ${activeRun.promptGenerationModel}` : ''}
                           {activeRun ? ` · ${new Date(getRunUpdatedAt(activeRun)).toLocaleString()}` : ''}
                         </p>
                       </div>

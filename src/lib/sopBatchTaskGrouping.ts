@@ -13,7 +13,7 @@ export type TaskGridItem =
       kind: 'sop-batch'
       id: string
       createdAt: number
-      batchId: string
+      groupId: string
       sopName: string
       tasks: TaskRecord[]
       summary: SopBatchSummary
@@ -69,22 +69,22 @@ export function groupSopBatchTasks(tasks: TaskRecord[]): TaskGridItem[] {
   const items: TaskGridItem[] = []
 
   for (const task of tasks) {
-    const batchId = task.sopBatch?.batchId
-    if (!batchId) {
+    const groupId = task.sopBatch?.snapshotId || task.sopBatch?.batchId
+    if (!groupId) {
       items.push({ kind: 'task', id: task.id, createdAt: task.createdAt, task })
       continue
     }
-    batches.set(batchId, [...(batches.get(batchId) ?? []), task])
+    batches.set(groupId, [...(batches.get(groupId) ?? []), task])
   }
 
-  for (const [batchId, batchTasks] of batches) {
+  for (const [groupId, batchTasks] of batches) {
     const sortedTasks = sortBatchTasks(keepLatestPromptAttempts(batchTasks))
     const firstTask = sortedTasks[0]
     if (!firstTask) continue
     items.push({
       kind: 'sop-batch',
-      id: `sop-batch:${batchId}`,
-      batchId,
+      id: `sop-batch:${groupId}`,
+      groupId,
       sopName: firstTask.sopBatch?.sopName || 'SOP 批量任务',
       createdAt: Math.max(...sortedTasks.map((task) => task.createdAt)),
       tasks: sortedTasks,

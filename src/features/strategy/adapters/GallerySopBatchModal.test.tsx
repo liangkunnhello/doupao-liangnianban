@@ -6,7 +6,10 @@ import { act, create } from 'react-test-renderer'
 import { DEFAULT_PARAMS, type SopBatchSnapshot, type TaskRecord } from '../../../types'
 import GallerySopBatchModal, { getGallerySopPromptRunStorageKey } from './GallerySopBatchModal'
 
-const generateMocks = vi.hoisted(() => ({ generatePromptsFromSopStore: vi.fn() }))
+const generateMocks = vi.hoisted(() => ({
+  generatePromptsFromSopStore: vi.fn(),
+  getSopPromptGenerationModelFromStore: vi.fn(() => 'gpt-test'),
+}))
 const storeMocks = vi.hoisted(() => ({
   ensureImageCached: vi.fn(),
   ensureImageThumbnailCached: vi.fn(),
@@ -469,6 +472,42 @@ describe('GallerySopBatchModal background generation', () => {
     expect(renderer!.root.findAllByProps({ 'aria-label': '查看全部提示词集' })).toHaveLength(0)
     expect(renderer!.root.findAllByProps({ 'aria-label': '查看未归档提示词集' })).toHaveLength(0)
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
+  })
+
+  it('groups runs from the same SOP newest first and labels their text model', async () => {
+    const older = {
+      ...createPromptRun('run-older', '旧版提示词'),
+      createdAt: 10,
+      updatedAt: 100,
+      promptGenerationModel: 'gpt-old',
+    }
+    const newer = {
+      ...createPromptRun('run-newer', '新版提示词'),
+      createdAt: 20,
+      updatedAt: 20,
+      promptGenerationModel: 'gpt-new',
+    }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([older, newer])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" initialSopId="sop-1" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const sopGroup = renderer!.root.findByProps({ 'aria-label': 'SOP 分组 商品图 SOP，2 个提示词集' })
+    const runButtons = renderer!.root.findAll((node) =>
+      typeof node.props['aria-label'] === 'string' && node.props['aria-label'].startsWith('查看提示词集 '))
+    expect(runButtons.map((node) => node.props['aria-label'])).toEqual([
+      '查看提示词集 新版提示词',
+      '查看提示词集 旧版提示词',
+    ])
+    expect(renderer!.root.findByProps({ title: '生成提示词的文本模型：gpt-new' }).children).toEqual(['gpt-new'])
+
+    act(() => sopGroup.props.onClick())
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看提示词集 新版提示词' })).toHaveLength(0)
   })
 
   it('nests prompt collections under folders and can move the active collection', async () => {

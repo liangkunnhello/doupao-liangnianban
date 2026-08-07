@@ -2,14 +2,21 @@ import { describe, expect, it } from 'vitest'
 import type { TaskRecord } from '../types'
 import { formatSopBatchElapsed, getSopBatchElapsedMs, groupSopBatchTasks } from './sopBatchTaskGrouping'
 
-function task(id: string, createdAt: number, status: TaskRecord['status'], batchId?: string, promptIndex?: number): TaskRecord {
+function task(
+  id: string,
+  createdAt: number,
+  status: TaskRecord['status'],
+  batchId?: string,
+  promptIndex?: number,
+  snapshotId?: string,
+): TaskRecord {
   return {
     id,
     createdAt,
     status,
     prompt: id,
     outputImages: [],
-    sopBatch: batchId ? { batchId, sopId: 'sop-1', sopName: '商品 SOP', promptIndex: promptIndex ?? 1, promptCount: 3 } : undefined,
+    sopBatch: batchId ? { batchId, snapshotId, sopId: 'sop-1', sopName: '商品 SOP', promptIndex: promptIndex ?? 1, promptCount: 3 } : undefined,
   } as unknown as TaskRecord
 }
 
@@ -47,6 +54,30 @@ describe('groupSopBatchTasks', () => {
     const batch = result.find((item) => item.kind === 'sop-batch')
     expect(batch).toMatchObject({ kind: 'sop-batch', summary: { total: 1, completed: 1, failed: 0 } })
     if (batch?.kind === 'sop-batch') expect(batch.tasks.map((item) => item.id)).toEqual(['retry-attempt'])
+  })
+
+  it('groups all request batches from the same SOP run into one card', () => {
+    const result = groupSopBatchTasks([
+      task('first-request', 10, 'done', 'request-batch-1', 1, 'snapshot-1'),
+      task('second-request', 20, 'running', 'request-batch-2', 2, 'snapshot-1'),
+      task('other-run', 30, 'done', 'request-batch-3', 1, 'snapshot-2'),
+    ])
+
+    const batches = result.filter((item) => item.kind === 'sop-batch')
+    expect(batches).toHaveLength(2)
+    const firstRun = batches.find((item) => item.groupId === 'snapshot-1')
+    expect(firstRun?.id).toBe('sop-batch:snapshot-1')
+    expect(firstRun?.tasks.map((item) => item.id)).toEqual(['first-request', 'second-request'])
+  })
+
+  it('falls back to request batch ids for legacy tasks without snapshots', () => {
+    const result = groupSopBatchTasks([
+      task('legacy-1', 10, 'done', 'legacy-batch', 1),
+      task('legacy-2', 20, 'done', 'legacy-batch', 2),
+    ])
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ kind: 'sop-batch', groupId: 'legacy-batch' })
   })
 
   it('continues counting elapsed time while any batch task is running', () => {

@@ -1,6 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import './styles.css'
-import { Button, Dialog, IconButton, Inline, ScrollArea } from '../../design-system'
+import {
+  Badge,
+  Button,
+  Dialog,
+  DialogPane,
+  DialogWorkspace,
+  EmptyState,
+  IconButton,
+  Inline,
+  ListRow,
+  ScrollArea,
+  SearchField,
+  SelectField,
+  Tabs,
+  TextArea,
+  TextField,
+  Tooltip,
+} from '../../design-system'
 import {
   CheckCircleIcon as CheckCircle2,
   CheckIcon as Check,
@@ -77,10 +94,6 @@ function readImage(file: File) {
     reader.onerror = () => reject(new Error(`无法读取图片「${file.name}」`))
     reader.readAsDataURL(file)
   })
-}
-
-function inputClassName() {
-  return 'sop-center-input'
 }
 
 function generationStepsBefore(step: GenerationStepId) {
@@ -659,24 +672,38 @@ export default function SopManagementCenter({
           </div>
           <div className="flex items-center gap-2">
             <LargeModalToggle largeView={largeView} dialogName="SOP 管理中心" onToggle={toggleLargeView} />
-            <button type="button" onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" className="sop-center-icon-button sop-center-icon-button--secondary"><X size={18} /></button>
+            <IconButton onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" icon={<X size={18} />} />
           </div>
         </header>
 
-        <nav className="sop-center-tabs" aria-label="SOP 管理中心功能">
-          {([
-            ['library', Library, 'SOP 库'],
-            ['meta', Settings2, '生成元指令'],
-            ['generate', Sparkles, '智能生成'],
-          ] as const).map(([value, Icon, label]) => (
-            <button key={value} type="button" onClick={() => value === 'library' ? setTab(value) : runAfterDraftConfirmation(() => setTab(value))} className="sop-center-tab" data-selected={tab === value || undefined}><Icon size={16} />{label}</button>
-          ))}
-        </nav>
+        <Tabs
+          aria-label="SOP 管理中心功能"
+          value={tab}
+          onValueChange={(value) => value === 'library' ? setTab(value) : runAfterDraftConfirmation(() => setTab(value))}
+          className="sop-center-tabs"
+          items={[
+            { value: 'library', label: 'SOP 库', icon: <Library size={16} /> },
+            { value: 'meta', label: '生成元指令', icon: <Settings2 size={16} /> },
+            { value: 'generate', label: '智能生成', icon: <Sparkles size={16} /> },
+          ]}
+        />
 
         {tab === 'library' && (
-          <div className="sop-center-library-grid grid min-h-0 flex-1">
-            <aside className="sop-center-sidebar min-h-0 overflow-y-auto border-r p-4">
-              <div className="flex items-center gap-2"><input value={groupName} onChange={(event) => setGroupName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addGroup()} placeholder="新分组名称" className={`${inputClassName()} h-10 min-w-0`} /><button type="button" onClick={addGroup} aria-label="新增 SOP 分组" className="sop-center-icon-button sop-center-icon-button--primary"><FolderPlus size={16} /></button></div>
+          <DialogWorkspace layout="triple" className="sop-center-library-grid min-h-0 flex-1">
+            <DialogPane as="aside" tone="sidebar" className="sop-center-sidebar">
+              <div className="flex items-end gap-2">
+                <TextField
+                  label="创建分组"
+                  value={groupName}
+                  onChange={(event) => setGroupName(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && addGroup()}
+                  placeholder="输入分组名称"
+                  containerClassName="sop-center-new-group-field min-w-0 flex-1"
+                />
+                <Tooltip content="新增分组" side="bottom">
+                  <IconButton onClick={addGroup} aria-label="新增 SOP 分组" icon={<FolderPlus size={16} />} />
+                </Tooltip>
+              </div>
               <div className="mt-4 space-y-1">
                 {[{ id: 'all', name: '全部 SOP', count: items.length }, { id: 'favorites', name: '收藏', count: items.filter((item) => item.favorite).length }, { id: 'recent', name: '最近使用', count: items.filter((item) => item.lastUsedAt).length }, { id: 'ungrouped', name: '未分组', count: items.filter((item) => !item.groupId).length }].map((group) => <button key={group.id} type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="sop-center-nav-item" data-selected={selectedGroupId === group.id || undefined}><span>{group.name}</span><span className="text-xs opacity-70">{group.count}</span></button>)}
                 {groups.map((group) => {
@@ -694,35 +721,35 @@ export default function SopManagementCenter({
                           }}
                           onBlur={commitRenameGroup}
                           placeholder="分组名称"
-                          className="sop-center-input h-10 min-w-0 flex-1 px-3 text-sm"
+                          className="ds-input h-10 min-w-0 flex-1 px-3 text-sm"
                           aria-label="重命名分组"
                         />
-                        <button type="button" onClick={commitRenameGroup} aria-label="保存分组名称" className="sop-center-icon-button sop-center-icon-button--primary"><Check size={14} /></button>
-                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={cancelRenameGroup} aria-label="取消重命名" className="sop-center-icon-button sop-center-icon-button--secondary"><X size={14} /></button>
+                        <IconButton size="sm" onClick={commitRenameGroup} aria-label="保存分组名称" icon={<Check size={14} />} />
+                        <IconButton size="sm" onMouseDown={(event) => event.preventDefault()} onClick={cancelRenameGroup} aria-label="取消重命名" icon={<X size={14} />} />
                       </div>
                     )
                   }
                   return (
                     <div key={group.id} className="sop-center-group-row group flex items-center" data-selected={selectedGroupId === group.id || undefined}>
                       <button type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="min-h-10 min-w-0 flex-1 truncate px-3 text-left text-sm">{group.name}</button>
-                      <button type="button" onClick={() => startRenameGroup(group)} aria-label={`重命名${group.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] opacity-0 group-hover:opacity-100"><Pencil size={13} /></button>
-                      <button type="button" onClick={() => onDuplicateGroup(group.id)} aria-label={`复制${group.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] opacity-0 group-hover:opacity-100"><Copy size={13} /></button>
-                      <button type="button" onClick={() => openConfirmDialog({
+                      <IconButton size="sm" onClick={() => startRenameGroup(group)} aria-label={`重命名${group.name}`} title="重命名分组" icon={<Pencil size={13} />} className="sop-center-group-action" />
+                      <IconButton size="sm" onClick={() => onDuplicateGroup(group.id)} aria-label={`复制${group.name}`} title="复制分组" icon={<Copy size={13} />} className="sop-center-group-action" />
+                      <IconButton size="sm" onClick={() => openConfirmDialog({
                         title: '删除 SOP 分组？',
                         message: `将删除分组「${group.name}」，组内 SOP 会转为未分组。`,
                         confirmText: '确认删除',
                         tone: 'danger',
                         action: () => onDeleteGroup(group.id),
-                      })} aria-label={`删除${group.name}`} className="p-2 text-[hsl(var(--ds-color-danger))] opacity-0 group-hover:opacity-100"><Trash2 size={13} /></button>
+                      })} aria-label={`删除${group.name}`} title="删除分组" icon={<Trash2 size={13} />} className="sop-center-group-action sop-center-action--danger" />
                     </div>
                   )
                 })}
               </div>
-            </aside>
+            </DialogPane>
 
-            <section className="sop-center-list-panel min-h-0 overflow-y-auto border-r p-4">
-              <div className="flex items-center justify-between"><div><h3 className="font-semibold">SOP 列表</h3><p className="sop-center-quiet-text mt-1 text-xs">{filteredItems.length} 个 SOP</p></div><button type="button" onClick={addItem} className="sop-center-button sop-center-button--primary"><Plus size={15} />新建</button></div>
-              <label className="mt-3 block"><span className="sr-only">搜索 SOP</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索名称或正文" className={`${inputClassName()} h-10`} /></label>
+            <DialogPane className="sop-center-list-panel">
+              <div className="flex items-center justify-between"><div><h3 className="font-semibold">SOP 列表</h3><p className="sop-center-quiet-text mt-1 text-xs">{filteredItems.length} 个 SOP</p></div><Button size="sm" variant="secondary" onClick={addItem} leadingIcon={<Plus size={15} />}>新建</Button></div>
+              <SearchField className="mt-3" label="搜索 SOP" value={search} onChange={setSearch} onClear={() => setSearch('')} placeholder="搜索名称或正文" />
               <div className="sop-center-sop-list mt-3" role="list">
                 {filteredItems.map((item) => {
                   const groupName = groups.find((group) => group.id === item.groupId)?.name ?? '未分组'
@@ -745,29 +772,29 @@ export default function SopManagementCenter({
                         <span className="block min-w-0 w-full truncate text-sm font-semibold">{item.name}</span>
                         <span className="sop-center-sop-params" aria-label="SOP 参数">
                           <span>{groupName}</span>
-                          {selectedSopId === item.id && <span className="sop-center-sop-applied">使用中</span>}
+                          {selectedSopId === item.id && <Badge tone="success">使用中</Badge>}
                         </span>
                       </button>
                       <div className="sop-center-sop-actions" aria-label={`${item.name} 操作`}>
-                        <button type="button" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} className={`sop-center-row-action ${item.favorite ? 'text-amber-500' : 'text-[hsl(var(--ds-color-text-subtle))] hover:text-amber-500'}`}><Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /></button>
-                        {onApply && <button type="button" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" className={`sop-center-row-action ${selectedSopId === item.id ? 'bg-[hsl(var(--ds-color-success-subtle))] text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-text-subtle))] hover:bg-[hsl(var(--ds-color-surface-subtle))] hover:text-[hsl(var(--ds-color-text))]'}`}><MousePointerClick size={14} /></button>}
-                        <button type="button" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} title="复制 SOP" className="sop-center-row-action text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button>
-                        <button type="button" onClick={() => openConfirmDialog({
+                        <IconButton size="sm" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} icon={<Star size={14} fill={item.favorite ? 'currentColor' : 'none'} />} className={`sop-center-row-action ${item.favorite ? 'sop-center-action--favorite' : ''}`} />
+                        {onApply && <IconButton size="sm" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" icon={<MousePointerClick size={14} />} className={`sop-center-row-action ${selectedSopId === item.id ? 'sop-center-action--applied' : ''}`} />}
+                        <IconButton size="sm" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} title="复制 SOP" icon={<Copy size={14} />} className="sop-center-row-action" />
+                        <IconButton size="sm" onClick={() => openConfirmDialog({
                           title: '删除 SOP？',
                           message: `将永久删除「${item.name}」。`,
                           confirmText: '确认删除',
                           tone: 'danger',
                           action: () => onDeleteItem(item.id),
-                        })} aria-label={`删除${item.name}`} title="删除 SOP" className="sop-center-row-action text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button>
+                        })} aria-label={`删除${item.name}`} title="删除 SOP" icon={<Trash2 size={14} />} className="sop-center-row-action sop-center-action--danger" />
                       </div>
                   </article>
                   )
                 })}
-                {filteredItems.length === 0 && <div className="rounded-xl border border-dashed border-[hsl(var(--ds-color-border))] p-8 text-center text-sm text-[hsl(var(--ds-color-text-muted))]">当前分组暂无 SOP</div>}
+                {filteredItems.length === 0 && <EmptyState title="当前分组暂无 SOP" description="新建 SOP，或切换到其他分组查看。" />}
               </div>
-            </section>
+            </DialogPane>
 
-            <section className="sop-center-editor-panel flex min-h-0 flex-col overflow-y-auto p-5">
+            <DialogPane tone="canvas" className="sop-center-editor-panel flex min-h-0 flex-col">
               {itemDraft ? <div className="sop-center-editor-card flex min-h-0 flex-1 flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-[1_1_18rem]">
@@ -778,7 +805,7 @@ export default function SopManagementCenter({
                     {onApply && <Button
                       disabled={!persistedItem || itemDirty || itemApplied}
                       onClick={() => persistedItem && applyItem(persistedItem)}
-                      variant={itemApplied ? 'secondary' : 'primary'}
+                      variant={itemApplied || itemDirty ? 'secondary' : 'primary'}
                       leadingIcon={<MousePointerClick size={15} />}
                       className={itemApplied ? 'text-[hsl(var(--ds-color-success))]' : undefined}
                     >
@@ -803,7 +830,10 @@ export default function SopManagementCenter({
                     {onClear && selectedSopId && <Button onClick={onClear} variant="secondary">取消应用</Button>}
                   </Inline>
                 </div>
-                <div className="sop-center-editor-fields"><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">名称<input value={itemDraft.name} onChange={(event) => setItemDraft({ ...itemDraft, name: event.target.value })} className={`${inputClassName()} mt-1 h-11`} /></label><label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">所属分组<select value={itemDraft.groupId ?? ''} onChange={(event) => setItemDraft({ ...itemDraft, groupId: event.target.value || undefined })} className={`${inputClassName()} mt-1 h-11`}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div>
+                <div className="sop-center-editor-fields">
+                  <TextField label="名称" value={itemDraft.name} onChange={(event) => setItemDraft({ ...itemDraft, name: event.target.value })} />
+                  <SelectField label="所属分组" value={itemDraft.groupId ?? ''} onChange={(event) => setItemDraft({ ...itemDraft, groupId: event.target.value || undefined })} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
+                </div>
                 <SopTextEditor
                   documentId={itemDraft.id}
                   value={itemDraft.content}
@@ -812,43 +842,47 @@ export default function SopManagementCenter({
                     ? (content) => onTestSopRevision({ ...itemDraft, content })
                     : undefined}
                 />
-              </div> : <div className="flex h-full items-center justify-center text-sm text-[hsl(var(--ds-color-text-muted))]">选择或新建一个 SOP</div>}
-            </section>
-          </div>
+              </div> : <EmptyState className="h-full" title="选择或新建一个 SOP" description="从左侧列表选择内容后即可编辑。" />}
+            </DialogPane>
+          </DialogWorkspace>
         )}
 
         {tab === 'meta' && (
-          <div className="sop-center-meta-grid grid min-h-0 flex-1">
-            <aside className="sop-center-list-panel min-h-0 overflow-y-auto border-r p-4">
+          <DialogWorkspace layout="split" className="sop-center-meta-grid min-h-0 flex-1">
+            <DialogPane as="aside" className="sop-center-list-panel">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold">生成元指令</h3>
                   <p className="sop-center-quiet-text mt-1 text-xs">控制 AI 如何编译 SOP。</p>
                 </div>
-                <button type="button" onClick={addMeta} className="sop-center-button sop-center-button--primary"><Plus size={15} />新建</button>
+                <Button size="sm" variant="secondary" onClick={addMeta} leadingIcon={<Plus size={15} />}>新建</Button>
               </div>
               <div className="mt-4 space-y-2">
                 {metaInstructions.map((item) => (
-                  <div key={item.id} className="sop-center-card group" data-selected={selectedMetaId === item.id || undefined}>
-                    <button type="button" onClick={() => selectMeta(item)} className="w-full text-left">
-                      <h4 className="truncate text-sm font-semibold">{item.name}</h4>
-                      <p className="sop-center-quiet-text mt-1 line-clamp-2 text-xs leading-5">{item.description || '暂无说明'}</p>
-                    </button>
-                    <div className="mt-2 flex justify-end gap-1">
-                      <button type="button" onClick={() => { const id = onDuplicateMetaInstruction(item.id); if (id) setSelectedMetaId(id) }} aria-label={`复制${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-primary))]"><Copy size={14} /></button>
-                      <button type="button" onClick={() => openConfirmDialog({
+                  <ListRow
+                    key={item.id}
+                    className="sop-center-meta-row"
+                    selected={selectedMetaId === item.id}
+                    title={item.name}
+                    description={item.description || '暂无说明'}
+                    interactive={{ onClick: () => selectMeta(item), 'aria-label': `编辑${item.name}` }}
+                    actions={(
+                      <div className="flex gap-1">
+                      <IconButton size="sm" onClick={() => { const id = onDuplicateMetaInstruction(item.id); if (id) setSelectedMetaId(id) }} aria-label={`复制${item.name}`} title="复制元指令" icon={<Copy size={14} />} />
+                      <IconButton size="sm" onClick={() => openConfirmDialog({
                         title: '删除生成元指令？',
                         message: `将永久删除「${item.name}」。`,
                         confirmText: '确认删除',
                         tone: 'danger',
                         action: () => onDeleteMetaInstruction(item.id),
-                      })} aria-label={`删除${item.name}`} className="p-2 text-[hsl(var(--ds-color-text-subtle))] hover:text-[hsl(var(--ds-color-danger))]"><Trash2 size={14} /></button>
-                    </div>
-                  </div>
+                      })} aria-label={`删除${item.name}`} title="删除元指令" icon={<Trash2 size={14} />} className="sop-center-action--danger" />
+                      </div>
+                    )}
+                  />
                 ))}
               </div>
-            </aside>
-            <section className="sop-center-editor-panel min-h-0 overflow-y-auto p-5">
+            </DialogPane>
+            <DialogPane tone="canvas" className="sop-center-editor-panel">
               {metaDraft ? (
                 <div className="sop-center-editor-card space-y-4">
                   <div className="flex items-center justify-between gap-3">
@@ -856,31 +890,31 @@ export default function SopManagementCenter({
                       <h3 className="font-semibold">编辑生成元指令</h3>
                       <p className="sop-center-quiet-text mt-1 text-xs">重命名或修改后，新生成任务立即使用最新内容。</p>
                     </div>
-                    <button type="button" disabled={!metaDraft.name.trim() || !metaDraft.instruction.trim()} onClick={() => onSaveMetaInstruction({ ...metaDraft, updatedAt: Date.now() })} className="sop-center-button sop-center-button--primary"><Save size={15} />保存</button>
+                    <Button disabled={!metaDraft.name.trim() || !metaDraft.instruction.trim()} onClick={() => onSaveMetaInstruction({ ...metaDraft, updatedAt: Date.now() })} leadingIcon={<Save size={15} />}>保存</Button>
                   </div>
-                  <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">名称<input value={metaDraft.name} onChange={(event) => setMetaDraft({ ...metaDraft, name: event.target.value })} className={`${inputClassName()} mt-1 h-11`} /></label>
-                  <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">类型<select value={metaDraft.kind} onChange={(event) => setMetaDraft({ ...metaDraft, kind: event.target.value as SopMetaInstruction['kind'] })} className={`${inputClassName()} mt-1 h-11`}><option value="general">通用 SOP</option><option value="image-prompt">图片提示词 SOP</option><option value="custom">自定义</option></select></label>
-                  <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">说明<textarea value={metaDraft.description} onChange={(event) => setMetaDraft({ ...metaDraft, description: event.target.value })} className={`${inputClassName()} mt-1 min-h-24 py-3 leading-6`} /></label>
-                  <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">元指令正文<textarea value={metaDraft.instruction} onChange={(event) => setMetaDraft({ ...metaDraft, instruction: event.target.value })} className={`${inputClassName()} mt-1 min-h-[420px] py-3 font-mono text-xs leading-6`} /></label>
+                  <TextField label="名称" value={metaDraft.name} onChange={(event) => setMetaDraft({ ...metaDraft, name: event.target.value })} />
+                  <SelectField label="类型" value={metaDraft.kind} onChange={(event) => setMetaDraft({ ...metaDraft, kind: event.target.value as SopMetaInstruction['kind'] })} options={[{ value: 'general', label: '通用 SOP' }, { value: 'image-prompt', label: '图片提示词 SOP' }, { value: 'custom', label: '自定义' }]} />
+                  <TextArea label="说明" value={metaDraft.description} onChange={(event) => setMetaDraft({ ...metaDraft, description: event.target.value })} className="min-h-24 leading-6" />
+                  <TextArea label="元指令正文" value={metaDraft.instruction} onChange={(event) => setMetaDraft({ ...metaDraft, instruction: event.target.value })} className="min-h-[420px] font-mono text-xs leading-6" />
                 </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-[hsl(var(--ds-color-text-muted))]">选择或新建一个生成元指令</div>
+                <EmptyState className="h-full" title="选择或新建一个生成元指令" description="从左侧列表选择内容后即可编辑。" />
               )}
-            </section>
-          </div>
+            </DialogPane>
+          </DialogWorkspace>
         )}
 
         {tab === 'generate' && (
-          <div className="sop-center-generate-grid grid min-h-0 flex-1">
-            <section className="sop-center-editor-panel min-h-0 overflow-y-auto border-r p-5">
+          <DialogWorkspace layout="split" className="sop-center-generate-grid min-h-0 flex-1">
+            <DialogPane tone="canvas" className="sop-center-editor-panel">
               <div className="sop-center-editor-card space-y-4">
                 <div>
                   <h3 className="font-semibold">生成新 SOP</h3>
                   <p className="sop-center-quiet-text mt-1 text-xs">选择元指令、目标分组并提供文字或图片输入。</p>
                 </div>
-                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">生成元指令<select value={generatorMetaId} onChange={(event) => setGeneratorMetaId(event.target.value)} className={`${inputClassName()} mt-1 h-11`}><option value="">请选择</option>{metaInstructions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">保存到分组<select value={generatorGroupId} onChange={(event) => setGeneratorGroupId(event.target.value)} className={`${inputClassName()} mt-1 h-11`}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
-                <label className="block text-xs font-medium text-[hsl(var(--ds-color-text-muted))]">生成说明<textarea aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder="说明 SOP 的目标、输入、输出格式和禁止项" className={`${inputClassName()} mt-1 min-h-32 py-3 leading-6`} /></label>
+                <SelectField label="生成元指令" value={generatorMetaId} onChange={(event) => setGeneratorMetaId(event.target.value)} options={[{ value: '', label: '请选择' }, ...metaInstructions.map((item) => ({ value: item.id, label: item.name }))]} />
+                <SelectField label="保存到分组" value={generatorGroupId} onChange={(event) => setGeneratorGroupId(event.target.value)} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
+                <TextArea label="生成说明" aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder="说明 SOP 的目标、输入、输出格式和禁止项" className="min-h-32 leading-6" />
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <div>
@@ -933,10 +967,10 @@ export default function SopManagementCenter({
                     </div>
                   )}
                 </div>
-                <button type="button" onClick={() => void runGeneration()} disabled={job.status === 'running'} className="sop-center-button sop-center-button--primary h-12 w-full">{job.status === 'running' ? <LoaderCircle size={17} className="animate-spin" /> : <Sparkles size={17} />}{job.status === 'running' ? '正在生成 SOP' : '开始生成并保存'}</button>
+                <Button onClick={() => void runGeneration()} loading={job.status === 'running'} className="w-full" size="lg" leadingIcon={<Sparkles size={17} />}>{job.status === 'running' ? '正在生成 SOP' : '开始生成并保存'}</Button>
               </div>
-            </section>
-            <aside className="sop-center-editor-panel min-h-0 overflow-y-auto p-5">
+            </DialogPane>
+            <DialogPane as="aside" className="sop-center-editor-panel">
               <div className="sop-center-editor-card space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -961,8 +995,8 @@ export default function SopManagementCenter({
                   )}
                   {job.error && <p role="alert" className="mt-3 whitespace-pre-wrap text-xs leading-5 text-[hsl(var(--ds-color-danger))]">{job.error}</p>}
                   {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到 SOP 库，可立即在策略或画廊中使用。</p>}
-                  {job.status === 'error' && <button type="button" onClick={() => void runGeneration()} className="sop-center-button sop-center-button--secondary mt-4">重新生成</button>}
-                  {job.status === 'success' && <button type="button" onClick={() => setTab('library')} className="sop-center-button sop-center-button--secondary mt-4">查看生成结果</button>}
+                  {job.status === 'error' && <Button onClick={() => void runGeneration()} variant="secondary" size="sm" className="mt-4">重新生成</Button>}
+                  {job.status === 'success' && <Button onClick={() => setTab('library')} variant="secondary" size="sm" className="mt-4">查看生成结果</Button>}
                 </div>
                 <ol className="sop-center-step-list" aria-label="SOP 生成详细步骤">
                   {SOP_GENERATION_STEPS.map((step, index) => {
@@ -984,8 +1018,8 @@ export default function SopManagementCenter({
                   })}
                 </ol>
               </div>
-            </aside>
-          </div>
+            </DialogPane>
+          </DialogWorkspace>
         )}
 
         {coverPickerOpen && itemDraft && (
@@ -1006,7 +1040,7 @@ export default function SopManagementCenter({
                   <h3 id="sop-cover-picker-title" className="truncate text-base font-semibold">选择「{itemDraft.name}」的封面</h3>
                   <p className="sop-center-quiet-text mt-1 text-xs">从该 SOP 已生成的图片中选择，保存修改后生效。</p>
                 </div>
-                <button type="button" onClick={() => setCoverPickerOpen(false)} aria-label="关闭 SOP 封面选择" className="sop-center-icon-button sop-center-icon-button--secondary shrink-0"><X size={17} /></button>
+                <IconButton onClick={() => setCoverPickerOpen(false)} aria-label="关闭 SOP 封面选择" icon={<X size={17} />} className="shrink-0" />
               </header>
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
                 {coverCandidates.length > 0
@@ -1044,7 +1078,7 @@ export default function SopManagementCenter({
               </div>
               {itemDraft.coverImageId && (
                 <footer className="flex justify-end border-t border-[hsl(var(--ds-color-border))] px-5 py-3">
-                  <button type="button" onClick={() => { setItemDraft({ ...itemDraft, coverImageId: undefined }); setCoverPickerOpen(false) }} className="sop-center-button sop-center-button--secondary text-xs">移除当前封面</button>
+                  <Button onClick={() => { setItemDraft({ ...itemDraft, coverImageId: undefined }); setCoverPickerOpen(false) }} variant="secondary" size="sm">移除当前封面</Button>
                 </footer>
               )}
             </section>

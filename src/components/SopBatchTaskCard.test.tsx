@@ -53,10 +53,11 @@ describe('SopBatchTaskCard', () => {
 
     const card = renderer!.root.findAllByProps({ 'data-selected': true }).find((node) => String(node.props.className).includes('gallery-sop-card'))
     expect(card?.props.className).toContain('gallery-task-card')
+    expect(card?.props['data-status']).toBe('done')
     act(() => card!.props.onClick({}))
     expect(onClick).toHaveBeenCalledOnce()
 
-    const thumbnail = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '查看第 1 条 SOP 提示词的图片')
+    const thumbnail = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '查看 SOP 批量任务封面图片')
     act(() => thumbnail!.props.onClick({ stopPropagation: vi.fn() }))
     expect(onOpenImage).toHaveBeenCalledWith('image-1')
     expect(onOpenBatch).not.toHaveBeenCalled()
@@ -68,12 +69,10 @@ describe('SopBatchTaskCard', () => {
     const rerunButton = renderer!.root.findByProps({ 'aria-label': '再次生成 SOP 批量任务 天体图' })
     act(() => rerunButton!.props.onClick({ stopPropagation: vi.fn() }))
     expect(onRerun).toHaveBeenCalledOnce()
-    expect(rerunButton.props.className).toContain('shrink-0')
+    expect(rerunButton.props.className).toContain('gallery-task-action')
     expect(renderer!.root.findByProps({ 'aria-label': 'SOP 批量任务操作' }).props.className).toContain('overflow-x-auto')
     expect(renderer!.root.findByProps({ 'aria-label': '任务参数' })).toBeTruthy()
-    const statusBadge = renderer!.root.findAllByType('span').find((node) => node.children.includes('已完成'))
-    expect(statusBadge?.props.className).toContain('whitespace-nowrap')
-    expect(statusBadge?.props.className).toContain('shrink-0')
+    expect(renderer!.root.findByType('h3').children).toContain('已完成')
 
     const deleteButton = renderer!.root.findAllByType('button').find((button) => button.props['aria-label'] === '删除 SOP 批量任务 天体图')
     act(() => deleteButton!.props.onClick({ stopPropagation: vi.fn() }))

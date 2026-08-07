@@ -320,7 +320,7 @@ describe('SopManagementCenter apply and save actions', () => {
     expect(parameters).not.toContain('历史预设')
     expect(result.renderer.root.findByProps({ 'aria-label': `${item.name} 操作` })).toBeTruthy()
     expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 正文编辑器' })).toBeTruthy()
-    expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-editor-panel')).props.className).toContain('overflow-y-auto')
+    expect(result.renderer.root.findAllByType('section').some((node) => String(node.props.className).includes('ds-dialog-pane--scroll'))).toBe(true)
     expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-editor-card')).props.className).toContain('flex-1')
     expect(result.renderer.root.findByProps({ 'aria-label': '正文格式与编辑工具' })).toBeTruthy()
     expect(result.renderer.root.findByProps({ 'aria-label': 'SOP 文档整理工具' })).toBeTruthy()
@@ -331,6 +331,23 @@ describe('SopManagementCenter apply and save actions', () => {
     expect(result.renderer.root.findAllByType('textarea')).toHaveLength(1)
     expect(result.renderer.root.findByType('textarea').props.value).toBe(item.content)
     expect(result.renderer.root.findAll((node) => node.children.includes(item.description))).toHaveLength(0)
+    result.renderer.unmount()
+  })
+
+  it('uses shared design-system controls and workspace panes', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter()
+    })
+
+    const hostNodes = result.renderer.root.findAll((node) => typeof node.type === 'string')
+    expect(hostNodes.some((node) => String(node.props.className).includes('ds-tabs'))).toBe(true)
+    expect(hostNodes.some((node) => String(node.props.className).includes('ds-dialog-workspace--triple'))).toBe(true)
+    expect(hostNodes.filter((node) => String(node.props.className).includes('ds-dialog-pane')).length).toBeGreaterThanOrEqual(3)
+    expect(hostNodes.some((node) => String(node.props.className).includes('ds-search__input'))).toBe(true)
+    expect(hostNodes.some((node) => String(node.props.className).includes('ds-select__control'))).toBe(true)
+    expect(hostNodes.some((node) => String(node.props.className).includes('ds-input'))).toBe(true)
+
     result.renderer.unmount()
   })
 

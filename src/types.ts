@@ -356,6 +356,8 @@ export interface SopBatchSnapshot {
   }
   /** 提示词集在所属文件夹中的自定义排序位置。 */
   promptOrder?: number
+  /** 生成提示词时实际使用的文本模型；旧记录可能没有该字段。 */
+  promptGenerationModel?: string
   batchId: string
   workspaceTabId: string | null
   createdAt: number
@@ -854,6 +856,8 @@ export interface WorkspaceTab {
   maskEditorImageId: string | null
   customOutputPath: string
   tasks: TaskRecord[]
+  /** 持久化水合后、IndexedDB 任务回填前暂存的任务归属 ID。 */
+  _taskIds?: string[]
   createdAt: number
   updatedAt: number
   order: number

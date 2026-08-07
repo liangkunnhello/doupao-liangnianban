@@ -1168,7 +1168,11 @@ export function getPersistedState(state: AppState) {
             inputImages: tab.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
             inputImageFolder: tab.inputImageFolder,
             tasks: [],
-            _taskIds: tab.tasks.map((t) => t.id),
+            // Async storage hydration restores task ownership before IndexedDB
+            // has populated tab.tasks. Preserve those IDs across interim writes.
+            _taskIds: Array.isArray(tab._taskIds)
+              ? [...new Set([...tab._taskIds, ...tab.tasks.map((t) => t.id)])]
+              : tab.tasks.map((t) => t.id),
           })),
           activeWorkspaceTabId: state.activeWorkspaceTabId,
           workspaceTabGroups: state.workspaceTabGroups,
@@ -4080,6 +4084,7 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   // and sync task state (e.g. running -> error) across all workspace tabs
   const galleryTasks = tasks.filter(isGalleryTask)
   let currentTabs = useStore.getState().workspaceTabs
+  let recoveryPlan: WorkspaceTaskRecoveryPlan | null = null
   if (currentTabs.length === 0) {
     const state = useStore.getState()
     const defaultTab = createDefaultWorkspaceTab({
@@ -4110,7 +4115,7 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
     // 所以，如果在 localStorage 里的 `_taskIds` 是一个空数组，这说明用户主动清空了该标签页的任务。
     
     // 首先恢复各个标签页的任务
-    const updatedTabs = currentTabs.map((tab: any) => {
+    const updatedTabs: WorkspaceTab[] = currentTabs.map((tab) => {
       let taskIds: string[] = []
       
       // 检查持久化状态中是否有 _taskIds
@@ -4118,11 +4123,11 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
         taskIds = tab._taskIds
       } else if (Array.isArray(tab.tasks)) {
         // 如果没有 _taskIds 但有 tasks，可能是旧数据或尚未初始化的状态
-        taskIds = tab.tasks.map((t: any) => typeof t === 'string' ? t : (t?.id ?? ''))
+        taskIds = tab.tasks.map((t) => t.id)
       }
       
       // 尝试恢复任务：只有在 IndexedDB 中存在的任务才会被恢复
-      const tabTasks = taskIds.map((id: string) => taskMap.get(id)).filter((t: any): t is TaskRecord => t !== undefined)
+      const tabTasks = taskIds.map((id) => taskMap.get(id)).filter((t): t is TaskRecord => t !== undefined)
       
       // 记录已经被分配给某个标签页的任务 ID
       tabTasks.forEach((t: TaskRecord) => claimedTaskIds.add(t.id))
@@ -4140,7 +4145,7 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
     
     if (orphanTasks.length > 0) {
       // 为了不打乱用户当前的标签页，我们把这些丢失的任务放进一个专门的"恢复的历史任务"标签页
-      let recoveryTab = updatedTabs.find((t: any) => t.name === '恢复的历史任务')
+      let recoveryTab = updatedTabs.find((t) => t.name === '恢复的历史任务')
       if (recoveryTab) {
         recoveryTab.tasks = [...orphanTasks, ...recoveryTab.tasks]
       } else {
@@ -4158,8 +4163,9 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
       }
     }
     
-    useStore.setState({ workspaceTabs: updatedTabs })
     currentTabs = updatedTabs
+    recoveryPlan = detectWorkspaceTaskRecovery(updatedTabs)
+    useStore.setState({ workspaceTabs: currentTabs })
   }
 
   const batchBackfill = assignMissingGeneratedImageBatches(tasks, currentTabs)
@@ -4174,6 +4180,38 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
     tasks: tab.tasks.map((task) => taskById.get(task.id) ?? task),
   }))
   useStore.setState({ tasks, workspaceTabs: currentTabs })
+
+  if (recoveryPlan && recoveryPlan.recoverableTaskCount > 0) {
+    const plan = recoveryPlan
+    const unresolvedMessage = plan.unresolvedTaskCount > 0
+      ? `\n另有 ${plan.unresolvedTaskCount} 个任务来源不明确，将继续保留在「恢复的历史任务」。`
+      : ''
+    useStore.getState().setConfirmDialog({
+      title: '检测到任务归属异常',
+      message: `检测到 ${plan.recoverableTaskCount} 个任务可能被错误合并到「恢复的历史任务」，可按原保存目录恢复到 ${plan.targetTabCount} 个标签。${unresolvedMessage}\n\n是否立即恢复？`,
+      confirmText: '恢复任务',
+      cancelText: '暂不恢复',
+      icon: 'info',
+      action: () => {
+        const state = useStore.getState()
+        const result = applyWorkspaceTaskRecovery(state.workspaceTabs, plan)
+        if (result.recoveredTaskCount === 0) {
+          state.showToast('没有仍需恢复的任务', 'info')
+          return
+        }
+        useStore.setState({ workspaceTabs: result.tabs })
+        state.showToast(`已恢复 ${result.recoveredTaskCount} 个任务到 ${result.targetTabCount} 个标签`, 'success')
+      },
+    })
+  } else if (recoveryPlan && recoveryPlan.unresolvedTaskCount > 0) {
+    useStore.getState().setConfirmDialog({
+      title: '检测到任务归属异常',
+      message: `检测到 ${recoveryPlan.unresolvedTaskCount} 个任务位于「恢复的历史任务」，但缺少唯一、可靠的原标签信息，程序不会自动移动。\n\n请在任务列表中确认后手动整理。`,
+      confirmText: '知道了',
+      showCancel: false,
+      icon: 'info',
+    })
+  }
 
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
@@ -4377,6 +4415,98 @@ export async function initStore(options: { safeMode?: boolean } = {}) {
   if (!options.safeMode) void ensureImageStorageMigrated().catch((error) => {
     console.error('图片存储迁移失败:', error)
   })
+}
+
+type WorkspaceTaskRecoveryPlan = {
+  assignments: Array<{ targetTabId: string; taskIds: string[] }>
+  recoverableTaskCount: number
+  targetTabCount: number
+  unresolvedTaskCount: number
+}
+
+function detectWorkspaceTaskRecovery(tabs: WorkspaceTab[]): WorkspaceTaskRecoveryPlan | null {
+  const recoveryTabName = '恢复的历史任务'
+  const tabsByName = new Map<string, WorkspaceTab[]>()
+  for (const tab of tabs) {
+    if (tab.name === recoveryTabName) continue
+    const name = tab.name.trim()
+    if (!name) continue
+    tabsByName.set(name, [...(tabsByName.get(name) ?? []), tab])
+  }
+
+  const taskIdsByTargetTabId = new Map<string, string[]>()
+  let recoveryTaskCount = 0
+  for (const tab of tabs) {
+    if (tab.name !== recoveryTabName) continue
+    for (const task of tab.tasks) {
+      recoveryTaskCount++
+      const sourceName = task.scheduledOutputSubFolder?.trim()
+      const matches = sourceName ? tabsByName.get(sourceName) : undefined
+      if (matches?.length !== 1) continue
+      const targetTab = matches[0]
+      taskIdsByTargetTabId.set(targetTab.id, [...(taskIdsByTargetTabId.get(targetTab.id) ?? []), task.id])
+    }
+  }
+
+  const assignments = [...taskIdsByTargetTabId].map(([targetTabId, taskIds]) => ({ targetTabId, taskIds }))
+  const recoverableTaskCount = assignments.reduce((sum, assignment) => sum + assignment.taskIds.length, 0)
+  if (recoveryTaskCount === 0) return null
+  return {
+    assignments,
+    recoverableTaskCount,
+    targetTabCount: assignments.length,
+    unresolvedTaskCount: Math.max(0, recoveryTaskCount - recoverableTaskCount),
+  }
+}
+
+function applyWorkspaceTaskRecovery(
+  tabs: WorkspaceTab[],
+  plan: WorkspaceTaskRecoveryPlan,
+): { tabs: WorkspaceTab[]; recoveredTaskCount: number; targetTabCount: number } {
+  const recoveryTabName = '恢复的历史任务'
+  const plannedTargetByTaskId = new Map<string, string>()
+  for (const assignment of plan.assignments) {
+    if (!tabs.some((tab) => tab.id === assignment.targetTabId && tab.name !== recoveryTabName)) continue
+    for (const taskId of assignment.taskIds) plannedTargetByTaskId.set(taskId, assignment.targetTabId)
+  }
+
+  const recoveredByTabId = new Map<string, TaskRecord[]>()
+  const remainingByRecoveryTabId = new Map<string, TaskRecord[]>()
+  for (const tab of tabs) {
+    if (tab.name !== recoveryTabName) continue
+    const remaining: TaskRecord[] = []
+    for (const task of tab.tasks) {
+      const targetTabId = plannedTargetByTaskId.get(task.id)
+      if (!targetTabId) {
+        remaining.push(task)
+        continue
+      }
+      recoveredByTabId.set(targetTabId, [...(recoveredByTabId.get(targetTabId) ?? []), task])
+    }
+    remainingByRecoveryTabId.set(tab.id, remaining)
+  }
+
+  const recoveredTaskCount = [...recoveredByTabId.values()].reduce((sum, recovered) => sum + recovered.length, 0)
+  if (recoveredTaskCount === 0) return { tabs, recoveredTaskCount: 0, targetTabCount: 0 }
+  const now = Date.now()
+  const updatedTabs = tabs.map((tab) => {
+    if (tab.name === recoveryTabName) {
+      return { ...tab, tasks: remainingByRecoveryTabId.get(tab.id) ?? tab.tasks, updatedAt: now }
+    }
+    const recovered = recoveredByTabId.get(tab.id)
+    if (!recovered?.length) return tab
+    const taskById = new Map([...tab.tasks, ...recovered].map((task) => [task.id, task]))
+    return {
+      ...tab,
+      tasks: [...taskById.values()].sort((a, b) => b.createdAt - a.createdAt),
+      updatedAt: now,
+    }
+  })
+  return {
+    tabs: updatedTabs,
+    recoveredTaskCount,
+    targetTabCount: recoveredByTabId.size,
+  }
 }
 
 export async function migrateLocalSaveRoot(newRoot: string): Promise<void> {

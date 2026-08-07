@@ -1,24 +1,35 @@
 import { memo, useEffect, useState, type MouseEvent } from 'react'
 import {
   BookOpenCheckIcon as BookOpenCheck,
+  EyeIcon as Eye,
   ImageIcon,
   LoaderCircleIcon as LoaderCircle,
   RefreshIcon as RefreshCw,
   TrashIcon as Trash2,
 } from '../design-system/icons'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../store'
-import type { TaskRecord } from '../types'
+import type { TaskRecord, TaskStatus } from '../types'
 import { formatSopBatchElapsed, getSopBatchElapsedMs, type SopBatchSummary } from '../lib/sopBatchTaskGrouping'
-import { Badge, Button, Card, IconButton } from '../design-system'
+import { Card, IconButton } from '../design-system'
 import TaskParamSummary from './TaskParamSummary'
 
-function BatchThumbnail({ task, imageId, variantIndex, onClick }: { task: TaskRecord; imageId: string; variantIndex: number; onClick: (imageId: string) => void }) {
+function BatchCover({
+  imageId,
+  imageIds,
+  isRunning,
+  isFailed,
+  onOpenImage,
+}: {
+  imageId: string
+  imageIds: string[]
+  isRunning: boolean
+  isFailed: boolean
+  onOpenImage: (imageId: string) => void
+}) {
   const [src, setSrc] = useState('')
-  const accessibleLabel = Math.max(task.params?.n ?? 1, task.outputImages.length) > 1
-    ? `查看第 ${task.sopBatch?.promptIndex ?? 1} 条 SOP 提示词的第 ${variantIndex} 张图片`
-    : `查看第 ${task.sopBatch?.promptIndex ?? 1} 条 SOP 提示词的图片`
 
   useEffect(() => {
+    setSrc('')
     if (!imageId) return
     let active = true
     const apply = (next: { dataUrl: string }) => { if (active) setSrc(next.dataUrl) }
@@ -27,10 +38,35 @@ function BatchThumbnail({ task, imageId, variantIndex, onClick }: { task: TaskRe
     return () => { active = false; unsubscribe() }
   }, [imageId])
 
-  return <button type="button" data-no-drag-select disabled={!imageId} onClick={(event) => { event.stopPropagation(); onClick(imageId) }} aria-label={imageId ? accessibleLabel : `第 ${task.sopBatch?.promptIndex ?? 1} 条 SOP 提示词正在生成图片`} className="sop-batch-thumbnail relative min-h-0 overflow-hidden transition hover:brightness-90 focus-visible:outline-none disabled:cursor-default disabled:hover:brightness-100">
-    {src ? <img src={src} alt={`SOP 提示词 ${task.sopBatch?.promptIndex ?? 1} 的生成结果`} className="h-full w-full object-cover" /> : task.status === 'running' ? <LoaderCircle size={18} className="absolute inset-0 m-auto animate-spin motion-reduce:animate-none" /> : <ImageIcon size={18} className="absolute inset-0 m-auto" />}
-    <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1 py-0.5 text-[10px] font-medium text-white">{task.sopBatch?.promptIndex ?? 1}-{variantIndex}</span>
-  </button>
+  if (imageId) {
+    return (
+      <button
+        type="button"
+        data-no-drag-select
+        className="h-full w-full"
+        aria-label="查看 SOP 批量任务封面图片"
+        onClick={(event) => { event.stopPropagation(); onOpenImage(imageId) }}
+      >
+        {src ? (
+          <img
+            src={src}
+            data-image-id={imageId}
+            data-output-image-ids={imageIds.join(',')}
+            alt="SOP 批量任务生成结果"
+            className="saveable-image h-full w-full object-cover"
+          />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center"><ImageIcon size={30} className="gallery-placeholder-icon" /></span>
+        )}
+      </button>
+    )
+  }
+
+  if (isRunning) {
+    return <div className="flex flex-col items-center gap-2"><LoaderCircle size={30} className="gallery-state-icon gallery-state-icon--info animate-spin motion-reduce:animate-none" /><span className="gallery-task-meta text-xs">生成中</span></div>
+  }
+
+  return <div className="flex flex-col items-center gap-2"><ImageIcon size={30} className={isFailed ? 'gallery-state-icon--danger' : 'gallery-placeholder-icon'} /><span className={`text-xs ${isFailed ? 'gallery-state-text--danger' : 'gallery-task-meta'}`}>{isFailed ? '生成失败' : '暂无图片'}</span></div>
 }
 
 function SopBatchTaskCard({
@@ -55,15 +91,14 @@ function SopBatchTaskCard({
   onDelete: () => void
 }) {
   const [now, setNow] = useState(Date.now())
-  const previews = tasks.flatMap((task) => Array.from(
-    { length: Math.max(task.params?.n ?? 1, task.outputImages.length) },
-    (_, index) => ({ task, imageId: task.outputImages[index] ?? '', variantIndex: index + 1 }),
-  )).slice(0, 4)
-  const imageTotal = tasks.reduce((total, task) => total + Math.max(task.params?.n ?? 1, task.outputImages.length), 0)
-  const imageCompleted = tasks.reduce((total, task) => total + task.outputImages.length, 0)
-  const status = summary.running > 0 ? '生成中' : summary.failed === summary.total ? '生成失败' : summary.failed > 0 ? '部分完成' : '已完成'
-  const statusTone = summary.running > 0 ? 'info' : summary.failed === summary.total ? 'danger' : summary.failed > 0 ? 'warning' : 'success'
+  const outputImageIds = tasks.flatMap((task) => task.outputImages)
+  const imageTotal = tasks.reduce((total, task) => total + Math.max(task.sopBatch?.imagesPerPrompt ?? task.params?.n ?? 1, task.outputImages.length), 0)
+  const imageCompleted = outputImageIds.length
+  const promptTarget = Math.max(summary.total, ...tasks.map((task) => task.sopBatch?.promptCount ?? 0))
   const isRunning = tasks.some((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)
+  const isFailed = summary.total > 0 && summary.failed === summary.total
+  const cardStatus: TaskStatus = isRunning ? 'running' : isFailed ? 'error' : 'done'
+  const status = isRunning ? '生成中' : isFailed ? '生成失败' : summary.failed > 0 ? '部分完成' : '已完成'
   const representativeTask = tasks[0]
   const elapsed = formatSopBatchElapsed(getSopBatchElapsedMs(tasks, now))
 
@@ -74,23 +109,46 @@ function SopBatchTaskCard({
     return () => window.clearInterval(intervalId)
   }, [isRunning])
 
-  return <Card onClick={onClick} data-selected={isSelected || undefined} className="gallery-task-card gallery-sop-card relative flex h-44 cursor-pointer overflow-hidden">
-    {isSelected && <span aria-hidden="true" className="gallery-selection-check absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center text-xs font-bold">✓</span>}
-    <div className="gallery-task-media grid h-full w-40 min-w-[10rem] shrink-0 grid-cols-2 grid-rows-2 gap-px">
-      {previews.map((preview) => <BatchThumbnail key={`${preview.task.id}-${preview.variantIndex}`} {...preview} onClick={onOpenImage} />)}
-      {Array.from({ length: Math.max(0, 4 - previews.length) }, (_, index) => <div key={`empty-${index}`} className="sop-batch-thumbnail" />)}
+  return (
+    <div className="gallery-card-shell relative rounded-xl">
+      <Card
+        onClick={onClick}
+        data-selected={isSelected || undefined}
+        data-status={cardStatus}
+        className="gallery-task-card gallery-sop-card relative cursor-pointer overflow-hidden transition-[box-shadow,border-color,background-color,transform]"
+      >
+        {isSelected && <span aria-hidden="true" className="gallery-selection-check absolute right-2 top-2 z-10 flex h-5 w-5 items-center justify-center text-xs font-bold">✓</span>}
+        <div className="flex h-44">
+          <div className="gallery-task-media relative flex h-full w-40 min-w-[10rem] shrink-0 items-center justify-center overflow-hidden">
+            <BatchCover imageId={outputImageIds[0] ?? ''} imageIds={outputImageIds} isRunning={isRunning} isFailed={isFailed} onOpenImage={onOpenImage} />
+            <span className="absolute left-1.5 top-1.5 flex items-center rounded bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-sm sm:text-xs">{elapsed}</span>
+            {imageTotal > 0 && <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-xs text-white">{imageCompleted}/{imageTotal}</span>}
+          </div>
+
+          <div className="gallery-task-body flex min-w-0 flex-1 flex-col p-3">
+            <div className="gallery-sop-inline mb-1 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate font-medium"><BookOpenCheck size={13} className="mr-1 inline" />SOP · {sopName}</span>
+              <span className="shrink-0 tabular-nums">{summary.total}/{promptTarget}</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <h3 className="gallery-task-prompt truncate text-sm font-medium">{status}</h3>
+              <p className="gallery-task-meta mt-1 line-clamp-2 text-xs leading-relaxed">
+                整批 {promptTarget} 条提示词 · 图片 {imageCompleted}/{imageTotal} · 耗时 {elapsed}
+                {summary.running ? ` · 生成中 ${summary.running}` : ''}
+                {summary.failed ? ` · 失败 ${summary.failed}` : ''}
+              </p>
+            </div>
+            {representativeTask && <TaskParamSummary task={representativeTask} className="hide-scrollbar mask-edge-r pr-2" />}
+            <div data-no-drag-select aria-label="SOP 批量任务操作" className="gallery-task-actions ml-auto mt-0.5 flex max-w-full shrink-0 items-center gap-1 overflow-x-auto hide-scrollbar mask-edge-r pr-2" onClick={(event) => event.stopPropagation()}>
+              <IconButton type="button" onClick={onOpenBatch} aria-label={`查看 SOP 批量任务 ${sopName}`} title="查看批次" className="gallery-task-action gallery-task-action--primary" size="sm" icon={<Eye size={16} />} />
+              <IconButton type="button" onClick={onRerun} aria-label={`再次生成 SOP 批量任务 ${sopName}`} title="再次生成" disabled={isRunning} className="gallery-task-action gallery-task-action--primary" size="sm" icon={<RefreshCw size={16} />} />
+              <IconButton type="button" onClick={onDelete} aria-label={`删除 SOP 批量任务 ${sopName}`} title="删除批次" className="gallery-task-action gallery-task-action--danger" size="sm" icon={<Trash2 size={16} />} />
+            </div>
+          </div>
+        </div>
+      </Card>
     </div>
-    <div className="gallery-task-body flex min-w-0 flex-1 flex-col p-3">
-      <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="gallery-sop-card__eyebrow flex items-center gap-1.5 text-xs font-medium"><BookOpenCheck size={14} />SOP 批量任务</p><h3 className="mt-1 truncate text-sm font-semibold">{sopName}</h3></div><Badge tone={statusTone} className="shrink-0 whitespace-nowrap">{status}</Badge></div>
-      <p className="gallery-task-meta mt-2 truncate text-xs" title={`本批次耗时 ${elapsed}`}>图片 {imageCompleted}/{imageTotal} · 提示词 {summary.completed}/{summary.total} · 耗时 {elapsed}{summary.running ? ` · 生成中 ${summary.running}` : ''}{summary.failed ? ` · 失败 ${summary.failed}` : ''}</p>
-      {representativeTask && <TaskParamSummary task={representativeTask} className="mt-2 hide-scrollbar mask-edge-r pr-2" />}
-      <div aria-label="SOP 批量任务操作" className="mt-auto flex min-w-0 items-center gap-1 overflow-x-auto pt-2 hide-scrollbar">
-        <Button type="button" data-no-drag-select onClick={(event) => { event.stopPropagation(); onOpenBatch() }} aria-label={`查看 SOP 批量任务 ${sopName}`} variant="ghost" size="sm" className="shrink-0 whitespace-nowrap">查看批次</Button>
-        <Button type="button" data-no-drag-select onClick={(event) => { event.stopPropagation(); onRerun() }} aria-label={`再次生成 SOP 批量任务 ${sopName}`} disabled={isRunning} variant="ghost" size="sm" className="shrink-0 whitespace-nowrap"><span className="inline-flex items-center gap-1"><RefreshCw size={14} className="shrink-0" />再次生成</span></Button>
-        <IconButton type="button" data-no-drag-select onClick={(event) => { event.stopPropagation(); onDelete() }} aria-label={`删除 SOP 批量任务 ${sopName}`} className="ml-auto shrink-0 ds-icon-button--danger" size="sm" icon={<Trash2 size={16} />} />
-      </div>
-    </div>
-  </Card>
+  )
 }
 
 export default memo(SopBatchTaskCard, (previous, next) => (

@@ -44,6 +44,23 @@ import { useGlobalClickSuppression } from './lib/clickSuppression'
 let customProviderConfigUrlImportStarted = false
 let storeInitializationPromise: Promise<void> | null = null
 
+function waitForStoreHydration(): Promise<void> {
+  if (useStore.persist.hasHydrated()) return Promise.resolve()
+
+  return new Promise((resolve) => {
+    const unsubscribe = useStore.persist.onFinishHydration(() => {
+      unsubscribe()
+      resolve()
+    })
+
+    // Avoid missing hydration if it completed between the first check and subscription.
+    if (useStore.persist.hasHydrated()) {
+      unsubscribe()
+      resolve()
+    }
+  })
+}
+
 export default function App() {
   const appMode = useStore((s) => s.appMode)
   const filterFavorite = useStore((s) => s.filterFavorite)
@@ -73,38 +90,40 @@ export default function App() {
   }, [themeMode, skinId])
 
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search)
-    const nextSettings = buildSettingsFromUrlParams(useStore.getState().settings, searchParams)
+    const startupSettingsPromise = waitForStoreHydration().then(() => {
+      const searchParams = new URLSearchParams(window.location.search)
+      const nextSettings = buildSettingsFromUrlParams(useStore.getState().settings, searchParams)
 
-    useStore.getState().setSettings(nextSettings)
+      useStore.getState().setSettings(nextSettings)
 
-    if (hasUrlSettingParams(searchParams)) {
-      clearUrlSettingParams(searchParams)
+      if (hasUrlSettingParams(searchParams)) {
+        clearUrlSettingParams(searchParams)
 
-      const nextSearch = searchParams.toString()
-      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
-      window.history.replaceState(null, '', nextUrl)
-    }
+        const nextSearch = searchParams.toString()
+        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
+        window.history.replaceState(null, '', nextUrl)
+      }
 
-    const customProviderConfigUrl = getCustomProviderConfigUrl()
-    if (customProviderConfigUrl && !customProviderConfigUrlImportStarted) {
-      customProviderConfigUrlImportStarted = true
-      void loadCustomProviderSettingsFromUrl(customProviderConfigUrl)
-        .then((importedSettings) => {
-          if (!importedSettings) return
-          const state = useStore.getState()
-          state.setSettings(mergeImportedSettings(state.settings, importedSettings))
-        })
-        .catch((error) => {
-          console.warn('Failed to import custom provider config URL:', error)
-        })
-    }
+      const customProviderConfigUrl = getCustomProviderConfigUrl()
+      if (customProviderConfigUrl && !customProviderConfigUrlImportStarted) {
+        customProviderConfigUrlImportStarted = true
+        void loadCustomProviderSettingsFromUrl(customProviderConfigUrl)
+          .then((importedSettings) => {
+            if (!importedSettings) return
+            const state = useStore.getState()
+            state.setSettings(mergeImportedSettings(state.settings, importedSettings))
+          })
+          .catch((error) => {
+            console.warn('Failed to import custom provider config URL:', error)
+          })
+      }
+    })
 
     // Guard against double invocation in StrictMode or hot reload
     if (!(window as unknown as Record<string, unknown>).__storeInitialized) {
       (window as unknown as Record<string, unknown>).__storeInitialized = true
       const startupModePromise = window.electronAPI?.getStartupMode?.() ?? Promise.resolve({ safeMode: false })
-      storeInitializationPromise = startupModePromise.then(({ safeMode }) => {
+      storeInitializationPromise = Promise.all([startupModePromise, startupSettingsPromise]).then(([{ safeMode }]) => {
         setStartupSafeMode(safeMode)
         return initStore({ safeMode })
       }).catch((error) => {

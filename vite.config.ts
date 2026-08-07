@@ -69,8 +69,10 @@ export default defineConfig(({ command }) => {
       __DEV_PROXY_CONFIG__: JSON.stringify(devProxyConfig),
     },
     server: {
-      host: true,
-      port: 5173,
+      // Keep one exact development origin so Electron localStorage/IndexedDB
+      // cannot drift to another project bound on a different loopback address.
+      host: '127.0.0.1',
+      port: 41731,
       strictPort: true,
       proxy:
         devProxyConfig?.enabled

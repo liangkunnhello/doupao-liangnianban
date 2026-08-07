@@ -964,7 +964,6 @@ export default function InputBar() {
   const [varConvertHover, setVarConvertHover] = useState(false)
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
-  const [imageThumbsExpanded, setImageThumbsExpanded] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
   const [showCustomAdRuleDialog, setShowCustomAdRuleDialog] = useState(false)
@@ -2572,80 +2571,8 @@ export default function InputBar() {
   )
 
   const renderImageThumbs = () => {
-    if (inputImages.length > 4 && !imageThumbsExpanded) {
-      const stackImages = inputImages.slice(0, 3)
-      return (
-        <div ref={imagesRef} className="mb-3 flex h-[60px] items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setImageThumbsExpanded(true)}
-            className="group flex min-w-0 items-center gap-3 rounded-xl px-1 py-1 text-left transition-colors hover:bg-gray-100/70 dark:hover:bg-white/[0.05]"
-            title={`展开管理全部 ${inputImages.length} 张参考图`}
-          >
-            <span className="relative block h-[54px] w-[82px] shrink-0">
-              {stackImages.map((image, index) => {
-                const src = maskDraft?.targetImageId === image.id && maskPreviewUrl ? maskPreviewUrl : image.dataUrl
-                const className = "absolute top-1 h-[48px] w-[48px] rounded-lg border-2 border-white bg-gray-100 object-cover shadow-md dark:border-gray-800 dark:bg-gray-700"
-                const style = { left: `${index * 13}px`, transform: `rotate(${(index - 1) * 5}deg)`, zIndex: index + 1 }
-                return src
-                  ? <img key={image.id} src={src} className={className} style={style} alt="" />
-                  : <span key={image.id} className={className} style={style} />
-              })}
-              <span className="absolute bottom-0 right-0 z-10 flex h-7 min-w-7 items-center justify-center rounded-full bg-gray-800 px-1.5 text-[10px] font-semibold text-white shadow-md dark:bg-gray-600">
-                {inputImages.length}
-              </span>
-            </span>
-            <span className="hidden min-w-0 sm:block">
-              <span className="block truncate text-xs font-medium text-gray-700 dark:text-gray-200">{inputImages.length} 张参考图</span>
-              <span className="block text-[10px] text-gray-400 dark:text-gray-500">点击展开管理</span>
-            </span>
-          </button>
-          <div className="ml-auto flex shrink-0 rounded-lg bg-gray-100 p-0.5 dark:bg-white/[0.06]">
-            <button
-              type="button"
-              onClick={() => setParams({ reference_mode: 'cycle' })}
-              aria-pressed={params.reference_mode !== 'all'}
-              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode !== 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
-            >
-              逐张参考
-            </button>
-            <button
-              type="button"
-              onClick={() => setParams({ reference_mode: 'all' })}
-              aria-pressed={params.reference_mode === 'all'}
-              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${params.reference_mode === 'all' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
-              title="每个生成请求同时携带全部参考图"
-            >
-              同时参考全部
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={atImageLimit}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xl leading-none text-white shadow-md transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-gray-600 dark:hover:bg-gray-500"
-            title={atImageLimit ? `参考图数量已达上限（${MAX_DIRECT_INPUT_IMAGES} 张）` : '继续添加参考图'}
-            aria-label="继续添加参考图"
-          >
-            +
-          </button>
-        </div>
-      )
-    }
-
     return (
       <div ref={imagesRef}>
-        {inputImages.length > 4 && (
-          <div className="mb-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => setImageThumbsExpanded(false)}
-              className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-            >
-              收起参考图
-            </button>
-          </div>
-        )}
         <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
@@ -3442,7 +3369,7 @@ export default function InputBar() {
             )
           )}
 
-          {isMobile && !(inputImages.length > 4 && !imageThumbsExpanded) && renderReferenceModeControl()}
+          {renderReferenceModeControl()}
 
           {/* 输入框 */}
           <div className="relative grid rounded-2xl border border-gray-200/70 bg-white/55 shadow-sm transition-[border-color,box-shadow] duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100/70 dark:border-white/[0.08] dark:bg-white/[0.03] dark:focus-within:border-blue-500/40 dark:focus-within:ring-blue-500/10">

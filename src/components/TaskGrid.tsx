@@ -519,7 +519,7 @@ export default function TaskGrid() {
         />
 
         <span className="text-xs tabular-nums text-ds-muted">
-          {galleryViewMode === 'tasks' ? `${filteredTasks.length} 个任务` : `${galleryImageItems.length} 张图片`}
+          {galleryViewMode === 'tasks' ? `${gridItems.length} 个任务` : `${galleryImageItems.length} 张图片`}
         </span>
 
         <SegmentedControl
