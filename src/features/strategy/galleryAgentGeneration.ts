@@ -167,11 +167,13 @@ export function normalizeGalleryAgentPlan(value: unknown, similarity: GalleryAge
   return { productType, hasIntentionalCopy, skillKind, skillReason, strategyDirections }
 }
 
-function buildPlanInstruction(similarity: GalleryAgentSimilarity, brief: string) {
+function buildPlanInstruction(similarity: GalleryAgentSimilarity, brief: string, excludeText: boolean) {
   const level = GALLERY_AGENT_SIMILARITY_LEVELS[similarity]
   return [
     '你是画廊智能体的策略路由器。先识别参考图是什么产品或内容，再判断应使用哪一种策略提取技能。',
-    '当图片包含标题、卖点、价格、配料、参数、标签、步骤或其他有意设计的信息层，并且用户没有明确要求排除文字时，选择 app-copy；否则选择 visual。',
+    excludeText
+      ? '本次已开启“排除文字”：无论参考图是否有文字，都只提取主体、结构、材质、光线和构图策略，不把文案或文案排版作为变量。'
+      : '当图片包含标题、卖点、价格、配料、参数、标签、步骤或其他有意设计的信息层，并且用户没有明确要求排除文字时，选择 app-copy；否则选择 visual。',
     'visual 表示纯视觉策略提取，默认忽略参考图中的文字与文案排版；app-copy 表示带文案策略提取，必须保持主体与对应文案、价格、参数或配料绑定。',
     `当前相似度为 ${similarity}/5（${level.label}）。${level.guidance}`,
     `最多输出 ${level.maxStrategies} 个真正不同的策略方向。实际数量由图片中可复用的视觉机制决定，不要为了凑数拆分近义策略。`,
@@ -185,6 +187,7 @@ async function requestGalleryAgentPlan(
   brief: string,
   similarity: GalleryAgentSimilarity,
   targetImageCount: number,
+  excludeText: boolean,
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted()
@@ -198,7 +201,7 @@ async function requestGalleryAgentPlan(
   const proxy = readClientDevProxyConfig()
   const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   const inputContent: Array<{ type: 'input_text'; text: string } | { type: 'input_image'; image_url: string }> = [
-    { type: 'input_text', text: `${buildPlanInstruction(similarity, brief)}\n\n最终计划生成 ${targetImageCount} 张图片，策略方向数量不得超过 ${targetImageCount}。` },
+    { type: 'input_text', text: `${buildPlanInstruction(similarity, brief, excludeText)}\n\n最终计划生成 ${targetImageCount} 张图片，策略方向数量不得超过 ${targetImageCount}。` },
   ]
   images.forEach((image, index) => {
     inputContent.push({ type: 'input_text', text: `参考图 ${index + 1}/${images.length}` })
@@ -262,17 +265,26 @@ export async function generateGalleryAgentVariablePrompts(options: {
   brief?: string
   similarity: GalleryAgentSimilarity
   targetImageCount?: number
+  /** 开启后强制纯视觉策略，排除文字和文案排版；关闭时自动在两种技能间分流。 */
+  excludeText?: boolean
   signal?: AbortSignal
   onProgress?: (progress: GalleryAgentProgress) => void
+  onPlan?: (plan: GalleryAgentPlan) => void
 }): Promise<GalleryAgentGenerationResult> {
-  const { images, brief = '', signal, onProgress } = options
+  const { images, brief = '', signal, onProgress, onPlan, excludeText = false } = options
   const similarity = normalizeSimilarity(options.similarity)
   const targetImageCount = Math.max(1, Math.trunc(options.targetImageCount ?? 1))
   if (images.length === 0) throw new Error('智能体模式至少需要一张参考图片')
   onProgress?.({ stage: 'analyze', message: '正在识别产品与素材类型' })
-  const plan = await requestGalleryAgentPlan(images, brief, similarity, targetImageCount, signal)
+  const plan = await requestGalleryAgentPlan(images, brief, similarity, targetImageCount, excludeText, signal)
+  if (excludeText) {
+    plan.hasIntentionalCopy = false
+    plan.skillKind = 'visual'
+    plan.skillReason = '已开启排除文字开关，本次只提取纯视觉策略'
+  }
   plan.strategyDirections = plan.strategyDirections.slice(0, targetImageCount)
   signal?.throwIfAborted()
+  onPlan?.(plan)
   const total = plan.strategyDirections.length
   let completed = 0
   onProgress?.({
@@ -291,7 +303,7 @@ export async function generateGalleryAgentVariablePrompts(options: {
       buildDynamicSkillInstruction(plan, direction, similarity, strategyIndex),
       {
         signal,
-        excludeText: plan.skillKind === 'visual',
+        excludeText: excludeText || plan.skillKind === 'visual',
         onProgress: (progress) => {
           if (progress.stage !== 'request' && progress.stage !== 'repair') return
           onProgress?.({

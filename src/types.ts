@@ -488,6 +488,8 @@ export interface TaskRecord {
   agentBatchCallId?: string
   /** Agent 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
+  /** Agent 策略模式直接拆解变量提示词后创建的图片任务。 */
+  agentStrategyTask?: boolean
 }
 
 export interface FavoriteCollection {
@@ -556,6 +558,8 @@ export interface AgentRound {
   maskTargetImageId?: string | null
   maskImageId?: string | null
   outputTaskIds: string[]
+  /** 该轮由策略技能反推变量提示词并直接生图，不进入普通 Agent 工具循环。 */
+  mode?: 'default' | 'strategy-generation'
   responseId?: string
   responseOutput?: ResponsesOutputItem[]
   status: AgentRoundStatus

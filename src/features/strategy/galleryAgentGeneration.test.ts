@@ -133,6 +133,35 @@ describe('gallery agent generation', () => {
     expect(strategyRequest.instructions).not.toContain('禁止出现文案、文字、标题')
   })
 
+  it('forces the visual skill when text exclusion is enabled', async () => {
+    const plan = JSON.stringify({
+      productType: '带标题的商品海报',
+      hasIntentionalCopy: true,
+      skillKind: 'app-copy',
+      skillReason: '包含标题和卖点',
+      strategyDirections: [{ name: '商品陈列', focus: '提取主体、材质、光线和构图' }],
+    })
+    const variablePrompt = '展示{{商品结构}}，不生成文字。\n\n可变项：\n{{商品结构}}：居中陈列 / 悬浮拆解'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse(plan))
+      .mockResolvedValueOnce(mockResponse(JSON.stringify({ name: '商品陈列', description: '纯视觉策略', variablePrompt })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateGalleryAgentVariablePrompts({
+      images: [{ id: 'image-1', dataUrl: 'data:image/png;base64,AAA' }],
+      similarity: 3,
+      excludeText: true,
+    })
+
+    expect(result.plan.skillKind).toBe('visual')
+    expect(result.plan.hasIntentionalCopy).toBe(false)
+    expect(result.plan.skillReason).toContain('排除文字开关')
+    const planRequest = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(JSON.stringify(planRequest)).toContain('不把文案或文案排版作为变量')
+    const strategyRequest = JSON.parse(String(fetchMock.mock.calls[1][1]?.body))
+    expect(strategyRequest.instructions).toContain('参考图生图策略提取器')
+  })
+
   it('does not extract more strategies than the requested final image count', async () => {
     const plan = JSON.stringify({
       productType: '耳机',

@@ -43,6 +43,10 @@ import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { loadGalleryViewMode, saveGalleryViewMode, type GalleryViewMode } from './lib/galleryPreferences'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import { parseVariablePrompt, renderVariablePromptBatch } from './lib/variablePrompt'
+import type {
+  GalleryAgentGenerationResult,
+  GalleryAgentSimilarity,
+} from './features/strategy/galleryAgentGeneration'
 import { calculateImageSize, normalizeImageSize, type SizeTier } from './lib/size'
 import { appendAdNegativeRule, createAdNegativeRuleSnapshot, getAdNegativeRule } from './lib/adNegativeRules'
 import {
@@ -722,6 +726,7 @@ function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound 
     maskTargetImageId: typeof round.maskTargetImageId === 'string' ? round.maskTargetImageId : null,
     maskImageId: typeof round.maskImageId === 'string' ? round.maskImageId : null,
     outputTaskIds: normalizeStringArray(round.outputTaskIds),
+    ...(round.mode === 'strategy-generation' ? { mode: round.mode } : {}),
     ...(typeof round.responseId === 'string' ? { responseId: round.responseId } : {}),
     ...(Array.isArray(round.responseOutput) ? { responseOutput: round.responseOutput } : {}),
     status,
@@ -5723,7 +5728,7 @@ async function continueRecoveredAgentRound(taskId: string) {
     const latestState = useStore.getState()
     const conversation = latestState.agentConversations.find((item) => item.id === task.agentConversationId)
     const round = conversation?.rounds.find((item) => item.id === task.agentRoundId)
-    if (!conversation || !round || round.status === 'done' || round.error === AGENT_STOPPED_MESSAGE) return
+    if (!conversation || !round || round.mode === 'strategy-generation' || round.status === 'done' || round.error === AGENT_STOPPED_MESSAGE) return
 
     const failRound = (error: string) => updateAgentConversation(conversation.id, (current) => ({
       ...current,
@@ -5784,6 +5789,431 @@ async function continueRecoveredAgentRound(taskId: string) {
   } finally {
     agentRecoveryContinuations.delete(key)
   }
+}
+
+const AGENT_STRATEGY_SKILL_LABELS = {
+  visual: '`extract-image-generation-strategies`（纯视觉策略）',
+  'app-copy': '`extract-app-copy-strategies`（带文案策略）',
+} as const
+
+function formatAgentStrategyProgressContent(progressMessage: string) {
+  return [
+    '## 策略智能体',
+    '',
+    `⏳ ${progressMessage}`,
+    '',
+    '接下来会在这里展示产品识别、技能选择、策略方向、变量提示词与图片任务。',
+  ].join('\n')
+}
+
+function formatAgentStrategyPlanContent(plan: GalleryAgentGenerationResult['plan'], progressMessage: string) {
+  return [
+    '## 产品识别',
+    '',
+    `- **产品/内容类型**：${plan.productType}`,
+    `- **素材类型**：${plan.hasIntentionalCopy ? '包含需要处理的有意设计文案' : '纯视觉素材，默认排除文字与文案排版'}`,
+    `- **使用技能**：${AGENT_STRATEGY_SKILL_LABELS[plan.skillKind]}`,
+    `- **选择依据**：${plan.skillReason}`,
+    '',
+    '## 策略方向',
+    '',
+    ...plan.strategyDirections.map((direction, index) => `${index + 1}. **${direction.name}**：${direction.focus}`),
+    '',
+    '## 提取进度',
+    '',
+    `⏳ ${progressMessage}`,
+  ].join('\n')
+}
+
+export function formatAgentStrategyResultContent(
+  generated: GalleryAgentGenerationResult,
+  finalPromptCount: number,
+  submittedCount = finalPromptCount,
+) {
+  const { plan, variablePrompts } = generated
+  const strategyLines = plan.strategyDirections.map((direction, index) =>
+    `${index + 1}. **${direction.name}**：${direction.focus}`,
+  )
+  const variablePromptSections = variablePrompts.flatMap((item, index) => [
+    `### 变量提示词 ${index + 1}：${item.name}`,
+    '',
+    item.description ? `${item.description}\n` : '',
+    '```text',
+    item.variablePrompt.trim(),
+    '```',
+    '',
+  ])
+  const pendingCount = Math.max(0, finalPromptCount - submittedCount)
+  const executionText = pendingCount > 0
+    ? `已在本地拆解出 ${finalPromptCount} 条具体提示词，正在提交图片任务 ${submittedCount}/${finalPromptCount}。`
+    : `已在本地拆解并提交 ${submittedCount} 条具体提示词，正在生成 ${submittedCount} 张图片。图片会直接显示在本轮对话下方。`
+
+  return [
+    '## 产品识别',
+    '',
+    `- **产品/内容类型**：${plan.productType}`,
+    `- **素材类型**：${plan.hasIntentionalCopy ? '包含需要处理的有意设计文案' : '纯视觉素材，默认排除文字与文案排版'}`,
+    `- **使用技能**：${AGENT_STRATEGY_SKILL_LABELS[plan.skillKind]}`,
+    `- **选择依据**：${plan.skillReason}`,
+    '',
+    '## 策略方向',
+    '',
+    ...strategyLines,
+    '',
+    '## 动态变量提示词',
+    '',
+    '变量组数和每组选项数由素材的真实可变空间决定，不使用固定数量凑数。',
+    '',
+    ...variablePromptSections,
+    '## 执行进度',
+    '',
+    executionText,
+  ].filter((line, index, lines) => line !== '' || lines[index - 1] !== '').join('\n').trim()
+}
+
+function setAgentStrategyAssistantContent(conversationId: string, roundId: string, assistantMessageId: string, content: string) {
+  updateAgentConversation(conversationId, (current) => ({
+    ...current,
+    updatedAt: Date.now(),
+    rounds: current.rounds.map((round) => round.id === roundId
+      ? { ...round, assistantMessageId }
+      : round),
+    messages: current.messages.some((message) => message.id === assistantMessageId)
+      ? current.messages.map((message) => message.id === assistantMessageId ? { ...message, content } : message)
+      : [
+          ...current.messages,
+          {
+            id: assistantMessageId,
+            role: 'assistant',
+            content,
+            roundId,
+            outputTaskIds: [],
+            createdAt: Date.now(),
+          },
+        ],
+  }))
+}
+
+function attachAgentStrategyTask(
+  conversationId: string,
+  roundId: string,
+  assistantMessageId: string,
+  taskId: string,
+) {
+  updateAgentConversation(conversationId, (current) => ({
+    ...current,
+    updatedAt: Date.now(),
+    rounds: current.rounds.map((round) => round.id === roundId
+      ? { ...round, outputTaskIds: round.outputTaskIds.includes(taskId) ? round.outputTaskIds : [...round.outputTaskIds, taskId] }
+      : round),
+    messages: current.messages.map((message) => message.id === assistantMessageId
+      ? { ...message, outputTaskIds: [...new Set([...(message.outputTaskIds ?? []), taskId])] }
+      : message),
+  }))
+}
+
+async function waitForAgentStrategyTasks(conversationId: string, roundId: string, taskIds: string[], signal: AbortSignal) {
+  while (!signal.aborted) {
+    const tasks = useStore.getState().tasks.filter((task) => taskIds.includes(task.id))
+    if (tasks.length === taskIds.length && tasks.every((task) => task.status !== 'running')) return tasks
+    await new Promise<void>((resolve) => setTimeout(resolve, 160))
+  }
+  throw createAgentAbortError()
+}
+
+async function executeAgentStrategyRound(options: {
+  conversationId: string
+  roundId: string
+  assistantMessageId: string
+  images: InputImage[]
+  brief: string
+  similarity: GalleryAgentSimilarity
+  excludeText: boolean
+  requestedCount: number
+  params: TaskParams
+  imageProfile: ApiProfile
+}) {
+  const {
+    conversationId,
+    roundId,
+    assistantMessageId,
+    images,
+    brief,
+    similarity,
+    excludeText,
+    requestedCount,
+    params,
+    imageProfile,
+  } = options
+  const controller = new AbortController()
+  const controllerKey = getAgentRoundControllerKey(conversationId, roundId)
+  agentRoundControllers.set(controllerKey, controller)
+  let generated: GalleryAgentGenerationResult | null = null
+  let analyzedPlan: GalleryAgentGenerationResult['plan'] | null = null
+  let finalPrompts: string[] = []
+  let submitted = 0
+
+  try {
+    const {
+      buildGalleryAgentPromptBatch,
+      generateGalleryAgentVariablePrompts,
+      shouldUseGalleryAgentReferenceImages,
+    } = await import('./features/strategy/galleryAgentGeneration')
+    controller.signal.throwIfAborted()
+    generated = await generateGalleryAgentVariablePrompts({
+      images,
+      brief,
+      similarity,
+      targetImageCount: requestedCount,
+      excludeText,
+      signal: controller.signal,
+      onPlan: (plan) => {
+        analyzedPlan = plan
+        setAgentStrategyAssistantContent(
+          conversationId,
+          roundId,
+          assistantMessageId,
+          formatAgentStrategyPlanContent(plan, `正在用所选技能提取 ${plan.strategyDirections.length} 个策略方向`),
+        )
+      },
+      onProgress: (progress) => {
+        if (controller.signal.aborted) return
+        setAgentStrategyAssistantContent(
+          conversationId,
+          roundId,
+          assistantMessageId,
+          analyzedPlan
+            ? formatAgentStrategyPlanContent(analyzedPlan, progress.message)
+            : formatAgentStrategyProgressContent(progress.message),
+        )
+      },
+    })
+    controller.signal.throwIfAborted()
+
+    finalPrompts = buildGalleryAgentPromptBatch(
+      generated.variablePrompts,
+      requestedCount,
+      `${conversationId}:${roundId}`,
+    )
+    if (finalPrompts.length === 0) throw new Error('策略智能体未能拆解出可用的最终提示词')
+    setAgentStrategyAssistantContent(
+      conversationId,
+      roundId,
+      assistantMessageId,
+      formatAgentStrategyResultContent(generated, finalPrompts.length, submitted),
+    )
+
+    const useReferences = shouldUseGalleryAgentReferenceImages(similarity)
+    const inputImageIds = useReferences ? images.map((image) => image.id) : []
+    for (let index = 0; index < finalPrompts.length; index++) {
+      controller.signal.throwIfAborted()
+      const createdAt = Date.now()
+      const filenameBatch = getNextTaskFilenameBatch(createdAt, null, 'image')
+      const task: TaskRecord = {
+        id: genId(),
+        prompt: finalPrompts[index],
+        params: { ...params, n: 1 },
+        adNegativeRuleSnapshot: createAdNegativeRuleSnapshot(useStore.getState().settings, params.adNegativeRuleId),
+        apiProvider: imageProfile.provider,
+        apiProfileId: imageProfile.id,
+        apiProfileName: imageProfile.name,
+        apiMode: imageProfile.apiMode,
+        apiModel: imageProfile.model,
+        inputImageIds,
+        maskTargetImageId: null,
+        maskImageId: null,
+        outputImages: [],
+        filenameBatch,
+        status: 'running',
+        error: null,
+        progressStage: 'queued',
+        progressUpdatedAt: createdAt,
+        createdAt,
+        finishedAt: null,
+        elapsed: null,
+        sourceMode: 'agent',
+        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
+        agentConversationId: conversationId,
+        agentRoundId: roundId,
+        agentMessageId: assistantMessageId,
+        agentToolCallId: `strategy-${roundId}-${index + 1}`,
+        agentToolAction: 'generate',
+        agentStrategyTask: true,
+      }
+      useStore.getState().setTasks([task, ...useStore.getState().tasks])
+      attachAgentStrategyTask(conversationId, roundId, assistantMessageId, task.id)
+      await putTask(task)
+      submitted += 1
+      setAgentStrategyAssistantContent(
+        conversationId,
+        roundId,
+        assistantMessageId,
+        formatAgentStrategyResultContent(generated, finalPrompts.length, submitted),
+      )
+      void executeTask(task.id)
+    }
+
+    const taskIds = useStore.getState().agentConversations
+      .find((conversation) => conversation.id === conversationId)?.rounds
+      .find((round) => round.id === roundId)?.outputTaskIds ?? []
+    if (taskIds.length === 0) throw new Error('图片任务未能提交，请检查图片 API 配置')
+    const completedTasks = await waitForAgentStrategyTasks(conversationId, roundId, taskIds, controller.signal)
+    controller.signal.throwIfAborted()
+    const successCount = completedTasks.filter((task) => task.status === 'done' && task.outputImages.length > 0).length
+    const failedCount = completedTasks.length - successCount
+    const completionLine = failedCount > 0
+      ? `\n\n生成完成：${successCount} 张成功，${failedCount} 张失败。失败卡片中可查看具体原因。`
+      : `\n\n生成完成：${successCount} 张图片已返回到本轮对话。`
+    const finalContent = `${formatAgentStrategyResultContent(generated, finalPrompts.length, submitted)}${completionLine}`
+    setAgentStrategyAssistantContent(conversationId, roundId, assistantMessageId, finalContent)
+    updateAgentConversation(conversationId, (current) => ({
+      ...current,
+      updatedAt: Date.now(),
+      rounds: current.rounds.map((round) => round.id === roundId
+        ? {
+            ...round,
+            status: failedCount === completedTasks.length ? 'error' : 'done',
+            error: failedCount === completedTasks.length ? '全部图片任务生成失败' : null,
+            finishedAt: Date.now(),
+          }
+        : round),
+    }))
+    useStore.getState().showToast(failedCount > 0 ? `策略智能体完成：${successCount} 张成功` : `策略智能体已生成 ${successCount} 张图片`, failedCount > 0 ? 'info' : 'success')
+    void saveAgentConversationToLocalFS(conversationId)
+  } catch (error) {
+    if (controller.signal.aborted) {
+      if (markAgentRoundStopped(conversationId, roundId)) useStore.getState().showToast('已停止策略智能体', 'info')
+      return
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    const partialContent = generated
+      ? `${formatAgentStrategyResultContent(generated, finalPrompts.length || submitted, submitted)}\n\n请求失败：${message}`
+      : `请求失败：${message}`
+    setAgentStrategyAssistantContent(conversationId, roundId, assistantMessageId, partialContent)
+    updateAgentConversation(conversationId, (current) => ({
+      ...current,
+      updatedAt: Date.now(),
+      rounds: current.rounds.map((round) => round.id === roundId
+        ? { ...round, status: 'error', error: message, finishedAt: Date.now() }
+        : round),
+    }))
+    useStore.getState().showToast(`策略智能体失败：${message}`, 'error')
+  } finally {
+    void scheduleAgentRoundSummaryToLocalFS(conversationId, roundId)
+    if (agentRoundControllers.get(controllerKey) === controller) agentRoundControllers.delete(controllerKey)
+  }
+}
+
+export async function submitAgentStrategyMessage(options: { similarity: GalleryAgentSimilarity; excludeText?: boolean }) {
+  const state = useStore.getState()
+  const { settings, prompt, inputImages, params, showToast } = state
+  const normalizedSettings = normalizeSettings(settings)
+  const agentValidationError = getAgentProfileValidationError(normalizedSettings)
+  if (agentValidationError) {
+    showToast(`请先完善 Agent API 配置：${agentValidationError.message}`, 'error')
+    state.setShowSettings(true, 'agent')
+    return
+  }
+  const imageProfile = getAgentImageApiProfile(normalizedSettings)
+  const imageProfileError = validateApiProfile(imageProfile)
+  if (imageProfileError) {
+    showToast(`请先完善图片 API 配置：${imageProfileError}`, 'error')
+    state.setShowSettings(true, 'agent')
+    return
+  }
+  const conversation = getActiveAgentConversation()
+  if (conversation.rounds.some((round) => round.status === 'running')) {
+    showToast('请等待当前回复完成，或先停止生成', 'info')
+    return
+  }
+  if (inputImages.length === 0) {
+    showToast('策略智能体至少需要一张参考图片', 'error')
+    return
+  }
+
+  for (const image of inputImages) await storeImage(image.dataUrl)
+  const now = Date.now()
+  const roundId = genId()
+  const userMessageId = genId()
+  const assistantMessageId = genId()
+  const activeRounds = getActiveAgentRounds(conversation)
+  const parentRoundId = activeRounds[activeRounds.length - 1]?.id ?? null
+  const userContent = prompt.trim() || '请根据参考图自动识别产品，选择合适的策略提取技能并生成图片。'
+  const inputImageIds = uniqueIds(inputImages.map((image) => image.id))
+  const normalizedParams = normalizeParamsForSettings(params, createSettingsForApiProfile(normalizedSettings, imageProfile), { hasInputImages: inputImageIds.length > 0 })
+  const round: AgentRound = {
+    id: roundId,
+    index: getAgentRoundPath(conversation, parentRoundId).length + 1,
+    parentRoundId,
+    userMessageId,
+    assistantMessageId,
+    prompt: userContent,
+    inputImageIds,
+    maskTargetImageId: null,
+    maskImageId: null,
+    outputTaskIds: [],
+    mode: 'strategy-generation',
+    status: 'running',
+    error: null,
+    createdAt: now,
+    finishedAt: null,
+  }
+  const userMessage: AgentMessage = {
+    id: userMessageId,
+    role: 'user',
+    content: userContent,
+    roundId,
+    inputImageIds,
+    createdAt: now,
+  }
+  const assistantMessage: AgentMessage = {
+    id: assistantMessageId,
+    role: 'assistant',
+    content: formatAgentStrategyProgressContent('正在识别产品与素材类型'),
+    roundId,
+    outputTaskIds: [],
+    createdAt: now,
+  }
+  let fallbackTitle: string | null = null
+  updateAgentConversation(conversation.id, (current) => {
+    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(userContent, current.title) : current.title
+    if (current.rounds.length === 0) fallbackTitle = nextTitle
+    return {
+      ...current,
+      title: nextTitle,
+      activeRoundId: roundId,
+      updatedAt: now,
+      rounds: [...current.rounds, round],
+      messages: [...current.messages, userMessage, assistantMessage],
+    }
+  })
+  state.setPrompt('')
+  state.clearInputImages()
+  state.clearMaskDraft()
+  state.setAgentEditingRoundId(null)
+  if (fallbackTitle) {
+    const textProfile = getAgentTextApiProfile(normalizedSettings)
+    void generateAgentConversationTitle(
+      conversation.id,
+      userContent,
+      inputImageIds,
+      createSettingsForApiProfile(normalizedSettings, textProfile),
+      textProfile,
+      fallbackTitle,
+    )
+  }
+  void executeAgentStrategyRound({
+    conversationId: conversation.id,
+    roundId,
+    assistantMessageId,
+    images: inputImages.map((image) => ({ ...image })),
+    brief: prompt.trim(),
+    similarity: options.similarity,
+    excludeText: options.excludeText === true,
+    requestedCount: Math.max(1, Math.trunc(params.n || 1)),
+    params: normalizedParams,
+    imageProfile,
+  })
 }
 
 export async function submitAgentMessage() {
