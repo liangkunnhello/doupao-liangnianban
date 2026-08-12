@@ -1327,9 +1327,9 @@ export default function AgentWorkspace() {
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>
-                            <AgentActionButton tooltip="重新生成" className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors" onClick={() => {
-                              if (conversation && round) void regenerateAgentAssistantMessage(conversation.id, round.id);
-                            }}>
+                            <AgentActionButton tooltip={round?.mode === 'strategy-generation' ? '策略智能体轮次请从原参考图重新提交' : '重新生成'} className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors disabled:cursor-not-allowed disabled:opacity-40" onClick={() => {
+                              if (conversation && round && round.mode !== 'strategy-generation') void regenerateAgentAssistantMessage(conversation.id, round.id);
+                            }} disabled={round?.mode === 'strategy-generation'}>
                               <RefreshIcon className="w-4 h-4" />
                             </AgentActionButton>
                             <AgentActionButton tooltip={allRoundTasksFavorited ? '编辑收藏夹' : '收藏所有图片'} className={`p-1.5 rounded-md transition-colors ${hasRoundFavoriteTasks ? (allRoundTasksFavorited ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10') : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!hasRoundFavoriteTasks} onClick={() => {
