@@ -1,11 +1,13 @@
 import { getAgentTextApiProfile } from '../../../lib/apiProfiles'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../../../lib/devProxy'
 import { submitTaskWithData, useStore } from '../../../store'
+import { parseVariablePrompt } from '../../../lib/variablePrompt'
 import {
   buildSopRequestContent,
   extractResponseText,
   getSopGeneratorInstruction,
   parseGeneratedSop,
+  parseGeneratedVariablePrompt,
   validateSopGenerationInput,
   type GenerateSop,
 } from '../sopGeneration'
@@ -30,6 +32,22 @@ const SOP_GENERATION_TEXT_FORMAT = {
       sop: { type: 'string', description: '完整、可独立执行的 Markdown SOP 正文' },
     },
     required: ['name', 'description', 'sop'],
+    additionalProperties: false,
+  },
+} as const
+
+const VARIABLE_PROMPT_GENERATION_TEXT_FORMAT = {
+  type: 'json_schema',
+  name: 'generated_variable_prompt',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: '简洁、清晰、可识别用途的变量提示词策略名称' },
+      description: { type: 'string', description: '一到两句话说明视觉机制和批量应用价值' },
+      variablePrompt: { type: 'string', description: '可直接解析执行的变量提示词正文，包含单独一行的可变项区块' },
+    },
+    required: ['name', 'description', 'variablePrompt'],
     additionalProperties: false,
   },
 } as const
@@ -92,6 +110,8 @@ export const generateSopFromStore: GenerateSop = async (
   const content = buildSopRequestContent(brief, context, referenceImages, kind)
   const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   const baseInstruction = getSopGeneratorInstruction(kind, metaInstruction)
+  const variablePromptMode = kind === 'variable-prompt-skill'
+  const responseFormat = variablePromptMode ? VARIABLE_PROMPT_GENERATION_TEXT_FORMAT : SOP_GENERATION_TEXT_FORMAT
   const send = (useStructuredOutput: boolean, retryIncomplete = false) => fetch(url, {
     method: 'POST',
     headers: {
@@ -104,20 +124,22 @@ export const generateSopFromStore: GenerateSop = async (
       model: profile.model || settings.model,
       instructions: [
         baseInstruction,
-        '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
+        variablePromptMode
+          ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
+          : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
         retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
       ].filter(Boolean).join('\n\n'),
       input: [{ role: 'user', content }],
       max_output_tokens: 8000,
-      ...(useStructuredOutput ? { text: { format: SOP_GENERATION_TEXT_FORMAT } } : {}),
+      ...(useStructuredOutput ? { text: { format: responseFormat } } : {}),
     }),
   })
 
   options?.onProgress?.({
     stage: 'request',
     message: referenceImages.length > 1
-      ? `AI 正在逐张分析 ${referenceImages.length} 张图片并编译 SOP`
-      : 'AI 正在分析输入并编译 SOP',
+      ? `AI 正在逐张分析 ${referenceImages.length} 张图片并${variablePromptMode ? '反推变量提示词' : '编译 SOP'}`
+      : `AI 正在分析输入并${variablePromptMode ? '反推变量提示词' : '编译 SOP'}`,
   })
   let structuredOutputEnabled = true
   let response = await send(structuredOutputEnabled)
@@ -128,21 +150,30 @@ export const generateSopFromStore: GenerateSop = async (
   }
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`SOP 生成失败（${response.status}）：${body.slice(0, 180)}`)
+    throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}生成失败（${response.status}）：${body.slice(0, 180)}`)
   }
-  options?.onProgress?.({ stage: 'parse', message: '正在校验名称、说明与 SOP 正文' })
+  options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验变量提示词语法与选项池' : '正在校验名称、说明与 SOP 正文' })
+  const parse = (text: string) => {
+    if (!variablePromptMode) return parseGeneratedSop(text)
+    const generated = parseGeneratedVariablePrompt(text)
+    const validation = parseVariablePrompt(generated.content)
+    if (!validation.enabled) {
+      throw new Error(`生成的变量提示词格式有误：${validation.errors[0] ?? '未识别到有效变量'}`)
+    }
+    return generated
+  }
   try {
-    return parseGeneratedSop(extractResponseText(await response.json()))
+    return parse(extractResponseText(await response.json()))
   } catch (error) {
     options?.onProgress?.({ stage: 'repair', message: '返回结构不完整，正在自动修复并重试' })
     const retryResponse = await send(structuredOutputEnabled, true)
     if (!retryResponse.ok) {
       const body = await retryResponse.text()
-      throw new Error(`SOP 自动修复失败（${retryResponse.status}）：${body.slice(0, 180)}`)
+      throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}自动修复失败（${retryResponse.status}）：${body.slice(0, 180)}`)
     }
-    options?.onProgress?.({ stage: 'parse', message: '正在校验修复后的 SOP 结构' })
+    options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验修复后的变量提示词' : '正在校验修复后的 SOP 结构' })
     try {
-      return parseGeneratedSop(extractResponseText(await retryResponse.json()))
+      return parse(extractResponseText(await retryResponse.json()))
     } catch {
       throw new Error('AI 连续两次返回不完整内容，请切换文本模型或简化元指令后重试')
     }

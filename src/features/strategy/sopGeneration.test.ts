@@ -4,6 +4,7 @@ import {
   getSopGeneratorInstruction,
   IMAGE_PROMPT_SOP_GENERATOR_INSTRUCTION,
   parseGeneratedSop,
+  parseGeneratedVariablePrompt,
   SOP_GENERATOR_META_PRESET,
   validateSopGenerationInput,
 } from './sopGeneration'
@@ -36,8 +37,12 @@ describe('SOP natural-language generator', () => {
 
     expect(imageSkill?.instruction).toContain('参考图生图策略提取器')
     expect(imageSkill?.instruction).toContain('可变项：')
+    expect(imageSkill?.kind).toBe('variable-prompt-skill')
+    expect(imageSkill?.instruction).toContain('variablePrompt')
+    expect(imageSkill?.instruction).toContain('产物不是 SOP')
     expect(copySkill?.instruction).toContain('subject_copy_binding')
     expect(copySkill?.instruction).toContain('{{主体文案包}}')
+    expect(copySkill?.kind).toBe('variable-prompt-skill')
   })
 
   it('requires a reference image for image prompt SOP generation', () => {
@@ -51,7 +56,8 @@ describe('SOP natural-language generator', () => {
     expect(result).toEqual({
       name: '视觉逆向 SOP',
       description: '拆解参考图并输出结构化变量池',
-      sop: '### Role & Goal\n严格执行视觉逆向分析',
+      content: '### Role & Goal\n严格执行视觉逆向分析',
+      executionMode: 'prompt-generator',
     })
   })
 
@@ -59,24 +65,41 @@ describe('SOP natural-language generator', () => {
     expect(parseGeneratedSop('{"sop":"# 商品摄影 SOP\\n\\n1. 分析主体\\n2. 固定构图"}')).toEqual({
       name: '商品摄影 SOP',
       description: '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
-      sop: '# 商品摄影 SOP\n\n1. 分析主体\n2. 固定构图',
+      content: '# 商品摄影 SOP\n\n1. 分析主体\n2. 固定构图',
+      executionMode: 'prompt-generator',
     })
   })
 
   it('accepts raw markdown and nested result envelopes from compatible models', () => {
     expect(parseGeneratedSop('# 电商主图 SOP\n\n## 执行步骤\n1. 分析参考图\n2. 输出完整提示词')).toMatchObject({
       name: '电商主图 SOP',
-      sop: expect.stringContaining('## 执行步骤'),
+      content: expect.stringContaining('## 执行步骤'),
     })
     expect(parseGeneratedSop('{"result":{"title":"嵌套 SOP","summary":"嵌套说明","content":"# 正文\\n执行要求"}}')).toEqual({
       name: '嵌套 SOP',
       description: '嵌套说明',
-      sop: '# 正文\n执行要求',
+      content: '# 正文\n执行要求',
+      executionMode: 'prompt-generator',
     })
   })
 
   it('only rejects responses that contain no SOP body', () => {
     expect(() => parseGeneratedSop('{"name":"缺少正文","description":"说明"}')).toThrow('缺少可用的 SOP 正文')
+  })
+
+  it('parses a skill result as a direct variable prompt asset', () => {
+    const variablePrompt = '图片比例为16:9。生成{{主体}}，使用{{构图}}。\n\n可变项：\n{{主体}}：猫 / 狗\n{{构图}}：中心构图 / 左右分栏'
+    expect(parseGeneratedVariablePrompt(JSON.stringify({
+      name: '宠物变量策略',
+      description: '从参考图提取结构。',
+      variablePrompt,
+    }))).toEqual({
+      name: '宠物变量策略',
+      description: '从参考图提取结构。',
+      content: variablePrompt,
+      executionMode: 'variable-prompt',
+    })
+    expect(() => parseGeneratedVariablePrompt('{"name":"错误","sop":"# SOP"}')).toThrow('缺少可用的变量提示词正文')
   })
 
   it('builds a multimodal request from one or more reference images', () => {

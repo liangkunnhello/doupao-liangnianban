@@ -79,7 +79,7 @@ AI 在组装提示词时，必须从以下预设的高质量元素池中进行�
   "sop": "严格按上述模板编译完成的独立 SOP 全文"
 }`
 
-export type SopGeneratorKind = 'general' | 'image-prompt'
+export type SopGeneratorKind = 'general' | 'image-prompt' | 'variable-prompt-skill'
 
 export function getSopGeneratorInstruction(kind: SopGeneratorKind, overrideInstruction?: string) {
   const override = overrideInstruction?.trim()
@@ -96,7 +96,8 @@ export const SOP_GENERATOR_META_PRESET = {
 export interface GeneratedSop {
   name: string
   description: string
-  sop: string
+  content: string
+  executionMode: 'prompt-generator' | 'variable-prompt'
 }
 
 export interface SopReferenceImage {
@@ -132,9 +133,11 @@ export function validateSopGenerationInput(
   referenceImages: SopReferenceImage[],
   kind: SopGeneratorKind,
 ) {
-  if (!description.trim() && referenceImages.length === 0) throw new Error('请描述希望生成的 SOP，或添加至少一张参考图片')
-  if (referenceImages.length > MAX_SOP_REFERENCE_IMAGES) throw new Error(`SOP 分析最多支持 ${MAX_SOP_REFERENCE_IMAGES} 张图片`)
-  if (kind === 'image-prompt' && referenceImages.length === 0) throw new Error('图片生成 SOP 需要至少一张画风参考图片')
+  if (!description.trim() && referenceImages.length === 0) throw new Error('请填写生成说明，或添加至少一张参考图片')
+  if (referenceImages.length > MAX_SOP_REFERENCE_IMAGES) throw new Error(`参考图分析最多支持 ${MAX_SOP_REFERENCE_IMAGES} 张图片`)
+  if ((kind === 'image-prompt' || kind === 'variable-prompt-skill') && referenceImages.length === 0) {
+    throw new Error(kind === 'variable-prompt-skill' ? '变量提示词技能至少需要一张参考图片' : '图片生成 SOP 需要至少一张画风参考图片')
+  }
 }
 
 export function buildSopRequestContent(
@@ -150,7 +153,11 @@ export function buildSopRequestContent(
       `当前产品：${context.product || '未指定'}`,
       `当前素材类型：${context.materialType || '未指定'}`,
       `当前生成方式：${context.generationMode || '未指定'}`,
-      `SOP 生成类型：${kind === 'image-prompt' ? '图片生成 SOP（参考图画风反推、多变体中文提示词直出）' : '通用执行 SOP'}`,
+      `生成类型：${kind === 'variable-prompt-skill'
+        ? '变量提示词技能（反推参考图并直接产出可解析的变量提示词模板，不生成 SOP）'
+        : kind === 'image-prompt'
+          ? '图片生成 SOP（参考图画风反推、多变体中文提示词直出）'
+          : '通用执行 SOP'}`,
       referenceImages.length > 0 ? `已附带 ${referenceImages.length} 张参考图片：${referenceImages.map((image) => image.name).join('、')}` : '未附带参考图片',
       referenceImages.length > 1 ? '请先逐张分析每张图片，再归纳共同视觉常量、可变元素和离群差异；不得只分析第一张图片。' : '',
       '请综合全部输入完整编译，不要省略用户要求的严格输出模板。',
@@ -193,7 +200,8 @@ export function parseGeneratedSop(text: string): GeneratedSop {
     return {
       name: heading || 'AI 生成 SOP',
       description: '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
-      sop: trimmed,
+      content: trimmed,
+      executionMode: 'prompt-generator',
     }
   }
   let parsed: unknown
@@ -218,5 +226,34 @@ export function parseGeneratedSop(text: string): GeneratedSop {
     ?? record.summary
     ?? '由 AI 根据生成说明和参考图片编译的可执行 SOP。',
   ).trim()
-  return { name, description, sop }
+  return { name, description, content: sop, executionMode: 'prompt-generator' }
+}
+
+export function parseGeneratedVariablePrompt(text: string): GeneratedSop {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error('AI 返回内容无法识别为变量提示词资产')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed.slice(start, end + 1))
+  } catch {
+    throw new Error('模型返回的变量提示词 JSON 格式不正确，请重试')
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('模型返回的变量提示词结构不正确')
+  const envelope = parsed as Record<string, unknown>
+  const nested = envelope.result ?? envelope.data ?? envelope.output
+  const record = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : envelope
+  const value = record.variablePrompt
+  const content = typeof value === 'string' ? value.trim() : ''
+  if (!content) throw new Error('AI 返回结果缺少可用的变量提示词正文')
+  const name = String(record.name ?? record.title ?? 'AI 变量提示词').trim()
+  const description = String(
+    record.description
+    ?? record.summary
+    ?? '由技能根据参考图片反推的可执行变量提示词。',
+  ).trim()
+  return { name, description, content, executionMode: 'variable-prompt' }
 }

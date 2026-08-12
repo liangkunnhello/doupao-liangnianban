@@ -81,6 +81,13 @@ const generalMeta: SopMetaInstruction = {
   kind: 'general',
 }
 
+const variablePromptMeta: SopMetaInstruction = {
+  ...imagePromptMeta,
+  id: 'meta-variable-prompt',
+  name: '参考图变量提示词技能',
+  kind: 'variable-prompt-skill',
+}
+
 function textContent(node: ReactTestInstance): string {
   return node.children.map((child) => typeof child === 'string' ? child : textContent(child)).join('')
 }
@@ -137,7 +144,7 @@ describe('SopManagementCenter apply and save actions', () => {
     expect(defaultDialog.props.style).toBeUndefined()
 
     act(() => {
-      result.renderer.root.findByProps({ 'aria-label': '进入 SOP 管理中心大弹窗模式' }).props.onClick()
+      result.renderer.root.findByProps({ 'aria-label': '进入 提示词与 SOP 管理大弹窗模式' }).props.onClick()
     })
     expect(result.renderer.root.find((node) => String(node.props.className).includes('sop-center-dialog')).props.style).toMatchObject({
       width: '80vw',
@@ -149,7 +156,7 @@ describe('SopManagementCenter apply and save actions', () => {
     act(() => {
       result = renderCenter()
     })
-    expect(result.renderer.root.findByProps({ 'aria-label': '退出 SOP 管理中心大弹窗模式' }).props['aria-pressed']).toBe(true)
+    expect(result.renderer.root.findByProps({ 'aria-label': '退出 提示词与 SOP 管理大弹窗模式' }).props['aria-pressed']).toBe(true)
     result.renderer.unmount()
   })
 
@@ -159,7 +166,7 @@ describe('SopManagementCenter apply and save actions', () => {
       result = renderCenter()
     })
 
-    const applyButton = findButton(result.renderer.root, '应用 SOP')
+    const applyButton = findButton(result.renderer.root, '使用 SOP')
     expect(applyButton?.props.disabled).toBe(false)
     expect(findButton(result.renderer.root, '保存修改')?.props.disabled).toBe(true)
 
@@ -179,7 +186,7 @@ describe('SopManagementCenter apply and save actions', () => {
     const nameInput = result.renderer.root.findAllByType('input').find((input) => input.props.value === item.name)
     act(() => nameInput!.props.onChange({ target: { value: '新版商品图 SOP' } }))
 
-    expect(findButton(result.renderer.root, '应用 SOP')?.props.disabled).toBe(true)
+    expect(findButton(result.renderer.root, '使用 SOP')?.props.disabled).toBe(true)
     const saveButton = findButton(result.renderer.root, '保存修改')
     expect(saveButton?.props.disabled).toBe(false)
 
@@ -483,7 +490,7 @@ describe('SopManagementCenter apply and save actions', () => {
       options?.onProgress?.({ stage: 'prepare', message: '正在整理 2 张参考图片' })
       options?.onProgress?.({ stage: 'request', message: 'AI 正在分析参考图片并编译 SOP' })
       options?.onProgress?.({ stage: 'parse', message: '正在校验生成结果' })
-      return { name: '多图商品 SOP', description: '多图说明', sop: '# SOP 正文' }
+      return { name: '多图商品 SOP', description: '多图说明', content: '# SOP 正文', executionMode: 'prompt-generator' as const }
     })
     let result!: ReturnType<typeof renderCenter>
     act(() => {
@@ -507,9 +514,45 @@ describe('SopManagementCenter apply and save actions', () => {
     )
     expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({ name: '多图商品 SOP' }))
     expect(textContent(result.renderer.root)).toContain('校验生成条件')
-    expect(textContent(result.renderer.root)).toContain('调用 AI 编译 SOP')
+    expect(textContent(result.renderer.root)).toContain('调用 AI 生成资产')
     expect(textContent(result.renderer.root)).toContain('SOP「多图商品 SOP」生成并保存成功')
     expect(findButton(result.renderer.root, '查看生成结果')).toBeTruthy()
+    result.renderer.unmount()
+  })
+
+  it('saves skill output as a direct variable-prompt asset', async () => {
+    const variablePrompt = '图片比例为16:9。生成{{主体}}。\n\n可变项：\n{{主体}}：猫 / 狗'
+    const onGenerateSop: GenerateSop = vi.fn(async () => ({
+      name: '变量提示词资产',
+      description: '直接执行',
+      content: variablePrompt,
+      executionMode: 'variable-prompt' as const,
+    }))
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [variablePromptMeta], onGenerateSop })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+    const dropZone = result.renderer.root.findByProps({ 'data-sop-reference-dropzone': true })
+    await act(async () => {
+      await dropZone.props.onDrop({
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+        dataTransfer: { types: ['Files'], files: [new File(['a'], '参考图.png', { type: 'image/png' })] },
+      })
+    })
+    await act(async () => {
+      await findButton(result.renderer.root, '反推并保存变量提示词')!.props.onClick()
+    })
+
+    expect(onGenerateSop).toHaveBeenCalledWith('', {}, expect.any(Array), 'variable-prompt-skill', variablePromptMeta.instruction, expect.any(Object))
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({
+      name: '变量提示词资产',
+      content: variablePrompt,
+      executionMode: 'variable-prompt',
+      metaInstructionId: variablePromptMeta.id,
+    }))
+    expect(textContent(result.renderer.root)).toContain('变量提示词「变量提示词资产」生成并保存成功')
     result.renderer.unmount()
   })
 })

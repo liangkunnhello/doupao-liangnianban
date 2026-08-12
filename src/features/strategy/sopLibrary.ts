@@ -3,6 +3,7 @@ import {
   SOP_GENERATOR_META_PRESET,
 } from './sopGeneration'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction, StrategyPreset } from './types'
+import { parseVariablePrompt } from '../../lib/variablePrompt'
 import {
   APP_COPY_STRATEGY_SKILL_META_INSTRUCTION,
   IMAGE_GENERATION_STRATEGY_SKILL_META_INSTRUCTION,
@@ -26,6 +27,7 @@ export function seedSopLibrary(presets: StrategyPreset[]): SopLibraryItem[] {
       name: preset.name,
       description: preset.description,
       content: preset.value,
+      executionMode: 'prompt-generator' as const,
       source: 'legacy-preset' as const,
       createdBy: preset.createdBy,
       createdAt: preset.createdAt,
@@ -59,7 +61,7 @@ export function seedSopMetaInstructions(): SopMetaInstruction[] {
       name: '技能：提取生图策略',
       description: '从一组参考图片提炼可迁移的视觉机制、通用提示词与严格变量池。',
       instruction: IMAGE_GENERATION_STRATEGY_SKILL_META_INSTRUCTION,
-      kind: 'image-prompt',
+      kind: 'variable-prompt-skill',
       createdAt: now,
       updatedAt: now,
     },
@@ -68,7 +70,7 @@ export function seedSopMetaInstructions(): SopMetaInstruction[] {
       name: '技能：APP 带文案策略提取',
       description: '提炼带文案营销素材的视觉、文案绑定、版式槽位和 OCR 质检策略。',
       instruction: APP_COPY_STRATEGY_SKILL_META_INSTRUCTION,
-      kind: 'image-prompt',
+      kind: 'variable-prompt-skill',
       createdAt: now,
       updatedAt: now,
     },
@@ -77,8 +79,38 @@ export function seedSopMetaInstructions(): SopMetaInstruction[] {
 
 export function mergeBuiltInSopMetaInstructions(items: SopMetaInstruction[] | undefined) {
   const existing = items ?? []
-  const existingIds = new Set(existing.map((item) => item.id))
-  return [...existing, ...seedSopMetaInstructions().filter((item) => !existingIds.has(item.id))]
+  const builtIns = seedSopMetaInstructions()
+  const builtInById = new Map(builtIns.map((item) => [item.id, item]))
+  const correctedSkillIds = new Set([
+    'sop-meta-skill-image-generation-strategies',
+    'sop-meta-skill-app-copy-strategies',
+  ])
+  const merged = existing.map((item) => {
+    const corrected = correctedSkillIds.has(item.id) ? builtInById.get(item.id) : undefined
+    return corrected ? { ...corrected, createdAt: item.createdAt } : item
+  })
+  const existingIds = new Set(merged.map((item) => item.id))
+  return [...merged, ...builtIns.filter((item) => !existingIds.has(item.id))]
+}
+
+const VARIABLE_PROMPT_SKILL_META_IDS = new Set([
+  'sop-meta-skill-image-generation-strategies',
+  'sop-meta-skill-app-copy-strategies',
+])
+
+export function migrateSopLibraryExecutionModes(items: SopLibraryItem[] | undefined) {
+  return (items ?? []).map((item) => {
+    if (item.executionMode) return item
+    const isValidSkillVariablePrompt = Boolean(
+      item.metaInstructionId
+      && VARIABLE_PROMPT_SKILL_META_IDS.has(item.metaInstructionId)
+      && parseVariablePrompt(item.content).enabled,
+    )
+    return {
+      ...item,
+      executionMode: isValidSkillVariablePrompt ? 'variable-prompt' as const : 'prompt-generator' as const,
+    }
+  })
 }
 
 export function sopLibraryId(prefix: 'group' | 'sop' | 'meta') {

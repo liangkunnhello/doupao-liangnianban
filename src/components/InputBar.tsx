@@ -28,6 +28,8 @@ import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
 import { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/gallerySopRun'
 import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
 import { useRequirementPrototype } from '../features/requirementPrototype/store'
+import { getSopExecutionMode, type SopLibraryItem } from '../features/strategy/types'
+import { resolveGalleryLibraryApplication } from '../features/strategy/galleryLibraryApplication'
 import type { AssistantActionFeedbackState, AssistantWordEntryApplyOptions } from '../features/assistantActions/AssistantActionBar'
 import { buildWordGroupName, resolveAssistantWordGroupId } from '../features/assistantActions/wordEntryGroups'
 import type { AssistantActionPreferences, AssistantWordEntryGroup } from '../features/assistantActions/types'
@@ -661,6 +663,23 @@ export default function InputBar() {
     () => sopItems.find((item) => item.id === gallerySopId) ?? null,
     [gallerySopId, sopItems],
   )
+  const handleGalleryLibraryApply = useCallback((item: SopLibraryItem) => {
+    try {
+      const application = resolveGalleryLibraryApplication(item)
+      if (application.mode === 'prompt-generator') {
+        setGallerySopId(application.sopId)
+        showToast(`已使用生成型 SOP「${item.name}」`, 'success')
+        return
+      }
+      setGallerySopId('')
+      setGallerySopAutoStartTabId(null)
+      setPrompt(application.prompt)
+      setShowGallerySopManagement(false)
+      showToast(`已将变量提示词「${item.name}」填入生图输入框`, 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法应用该变量提示词', 'error')
+    }
+  }, [setGallerySopId, setPrompt, showToast])
 
   /**
    * silent=true 时只挂载批次组件并触发自动流程，不呈现弹窗。
@@ -1065,7 +1084,7 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const gallerySopModeActive = appMode === 'gallery' && Boolean(activeGallerySop)
+  const gallerySopModeActive = appMode === 'gallery' && Boolean(activeGallerySop && getSopExecutionMode(activeGallerySop) === 'prompt-generator')
   const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'paused' || gallerySopRunStatus?.phase === 'submitting'
   const gallerySopAvailablePromptCount = gallerySopRunStatus?.availablePrompts ?? savedSopPromptCount
   const gallerySopHasPromptList = gallerySopAvailablePromptCount > 0
@@ -3894,7 +3913,7 @@ export default function InputBar() {
         <Suspense fallback={null}>
         <GallerySopManagementCenter
           selectedSopId={gallerySopId}
-          onApply={(item) => setGallerySopId(item.id)}
+          onApply={handleGalleryLibraryApply}
           onClear={() => { setGallerySopId(''); setGallerySopAutoStartTabId(null) }}
           onClose={() => setShowGallerySopManagement(false)}
         />

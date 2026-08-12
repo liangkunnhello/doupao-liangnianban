@@ -51,11 +51,12 @@ import { getSopCoverCandidates } from './sopCover'
 import { getAllSopBatchSnapshots } from '../../lib/db'
 import SopCoverImage from './SopCoverImage'
 import SopTextEditor from './SopTextEditor'
-import type { SopGroup, SopLibraryItem, SopMetaInstruction } from './types'
+import { getSopExecutionMode, type SopGroup, type SopLibraryItem, type SopMetaInstruction } from './types'
 import { isModalBackdropEvent } from '../../lib/modalBackdrop'
 import { useAppDialog } from '../../hooks/useAppDialog'
 import { LARGE_MODAL_SIZE_STYLE, useLargeModalMode } from '../../hooks/useLargeModalMode'
 import LargeModalToggle from '../../components/LargeModalToggle'
+import { parseVariablePrompt } from '../../lib/variablePrompt'
 
 type CenterTab = 'library' | 'meta' | 'generate'
 type GenerationStepId = Exclude<SopGenerationProgressStage, 'repair'> | 'save'
@@ -82,9 +83,9 @@ const SOP_GENERATION_STEPS: Array<{
 }> = [
   { id: 'validate', label: '校验生成条件', description: '检查元指令、说明和参考图片' },
   { id: 'prepare', label: '整理参考输入', description: '按顺序标记并组织全部参考图' },
-  { id: 'request', label: '调用 AI 编译 SOP', description: '分析共同规律、差异和执行约束' },
-  { id: 'parse', label: '校验生成结构', description: '检查名称、说明和完整 SOP 正文' },
-  { id: 'save', label: '保存到 SOP 库', description: '写入目标分组并准备立即使用' },
+  { id: 'request', label: '调用 AI 生成资产', description: '按元指令分析并生成目标内容' },
+  { id: 'parse', label: '校验生成结构', description: '检查名称、说明和正文格式' },
+  { id: 'save', label: '保存到资产库', description: '写入目标分组并准备立即使用' },
 ]
 
 function readImage(file: File) {
@@ -216,25 +217,36 @@ export default function SopManagementCenter({
     itemDraft.name !== persistedItem.name ||
     itemDraft.description !== persistedItem.description ||
     itemDraft.content !== persistedItem.content ||
+    itemDraft.executionMode !== persistedItem.executionMode ||
     itemDraft.groupId !== persistedItem.groupId ||
     itemDraft.coverImageId !== persistedItem.coverImageId
   ))
-  const itemDraftValid = Boolean(itemDraft?.name.trim() && itemDraft?.content.trim())
+  const itemDraftContentValid = Boolean(
+    itemDraft?.content.trim()
+    && (getSopExecutionMode(itemDraft) !== 'variable-prompt' || parseVariablePrompt(itemDraft.content).enabled),
+  )
+  const itemDraftValid = Boolean(itemDraft?.name.trim() && itemDraftContentValid)
   const coverCandidates = useMemo(
     () => getSopCoverCandidates(itemDraft?.id ?? '', tasks),
     [itemDraft?.id, tasks],
   )
   const itemApplied = Boolean(itemDraft && selectedSopId === itemDraft.id)
+  const itemVariablePromptMode = Boolean(itemDraft && getSopExecutionMode(itemDraft) === 'variable-prompt')
+  const itemVariablePromptValidation = itemVariablePromptMode && itemDraft ? parseVariablePrompt(itemDraft.content) : null
+  const generatorMeta = metaInstructions.find((item) => item.id === generatorMetaId)
+  const generatingVariablePrompt = generatorMeta?.kind === 'variable-prompt-skill'
   const itemEditorHint = autoSaveState === 'saved'
     ? '修改已自动保存。'
     : itemDirty
       ? itemDraftValid
         ? itemApplied
-          ? '修改将在 1 秒内自动保存，并更新当前使用的 SOP。'
+          ? `修改将在 1 秒内自动保存，并更新当前使用的${itemVariablePromptMode ? '变量提示词' : ' SOP'}。`
           : '修改将在 1 秒内自动保存。'
-        : '名称和正文不能为空，当前修改尚未保存。'
+        : itemVariablePromptMode
+          ? '名称不能为空，且变量提示词必须通过格式校验。'
+          : '名称和正文不能为空，当前修改尚未保存。'
       : itemApplied
-        ? '当前 SOP 已使用。'
+        ? `当前${itemVariablePromptMode ? '变量提示词' : ' SOP'}已使用。`
         : '无需编辑即可直接应用。'
 
   useEffect(() => {
@@ -299,7 +311,7 @@ export default function SopManagementCenter({
       autoSaveTimerRef.current = null
     }
     if (!itemDirty || !itemDraft) return
-    if (!itemDraft.name.trim() || !itemDraft.content.trim()) {
+    if (!itemDraft.name.trim() || !itemDraftContentValid) {
       setAutoSaveState('blocked')
       return
     }
@@ -318,7 +330,7 @@ export default function SopManagementCenter({
         autoSaveTimerRef.current = null
       }
     }
-  }, [itemDirty, itemDraft, onSaveItem])
+  }, [itemDirty, itemDraft, itemDraftContentValid, onSaveItem])
 
   const startRenameGroup = (group: SopGroup) => {
     setEditingGroupId(group.id)
@@ -341,6 +353,7 @@ export default function SopManagementCenter({
 
   const saveItemDraftNow = (draft = itemDraft) => {
     if (!draft?.name.trim() || !draft.content.trim()) return false
+    if (getSopExecutionMode(draft) === 'variable-prompt' && !parseVariablePrompt(draft.content).enabled) return false
     if (autoSaveTimerRef.current !== null) {
       window.clearTimeout(autoSaveTimerRef.current)
       autoSaveTimerRef.current = null
@@ -445,6 +458,7 @@ export default function SopManagementCenter({
       name: '未命名 SOP',
       description: '',
       content: '',
+      executionMode: 'prompt-generator',
       source: 'manual',
       createdBy: currentUserId,
       createdAt: now,
@@ -569,8 +583,8 @@ export default function SopManagementCenter({
       setJob({ status: 'error', message: '无法开始生成', error: '请选择一个 SOP 生成元指令' })
       return
     }
-    if (meta.kind === 'image-prompt' && referenceImages.length === 0) {
-      setJob({ status: 'error', message: '无法开始生成', error: '图片生成 SOP 至少需要一张画风参考图片' })
+    if ((meta.kind === 'image-prompt' || meta.kind === 'variable-prompt-skill') && referenceImages.length === 0) {
+      setJob({ status: 'error', message: '无法开始生成', error: meta.kind === 'variable-prompt-skill' ? '变量提示词技能至少需要一张参考图片' : '图片生成 SOP 至少需要一张画风参考图片' })
       return
     }
     if (!generatorBrief.trim() && referenceImages.length === 0) {
@@ -591,14 +605,14 @@ export default function SopManagementCenter({
         generatorBrief,
         {},
         referenceImages,
-        meta.kind === 'image-prompt' ? 'image-prompt' : 'general',
+        meta.kind === 'variable-prompt-skill' ? 'variable-prompt-skill' : meta.kind === 'image-prompt' ? 'image-prompt' : 'general',
         meta.instruction,
         { onProgress: updateGenerationProgress },
       )
       setJob((current) => ({
         ...current,
         status: 'running',
-        message: '正在保存到 SOP 库',
+        message: generated.executionMode === 'variable-prompt' ? '正在保存变量提示词资产' : '正在保存到 SOP 库',
         currentStep: 'save',
         completedSteps: generationStepsBefore('save'),
       }))
@@ -608,7 +622,8 @@ export default function SopManagementCenter({
         groupId: generatorGroupId || undefined,
         name: generated.name,
         description: generated.description,
-        content: generated.sop,
+        content: generated.content,
+        executionMode: generated.executionMode,
         source: 'generated',
         metaInstructionId: meta.id,
         createdBy: currentUserId,
@@ -620,7 +635,7 @@ export default function SopManagementCenter({
       selectItem(item)
       setJob({
         status: 'success',
-        message: `SOP「${item.name}」生成并保存成功`,
+        message: `${generated.executionMode === 'variable-prompt' ? '变量提示词' : 'SOP'}「${item.name}」生成并保存成功`,
         resultName: item.name,
         resultId: item.id,
         startedAt,
@@ -631,7 +646,7 @@ export default function SopManagementCenter({
       setJob((current) => ({
         ...current,
         status: 'error',
-        message: 'SOP 生成失败',
+        message: `${meta.kind === 'variable-prompt-skill' ? '变量提示词' : 'SOP'}生成失败`,
         error: getGenerationErrorMessage(error),
         startedAt,
       }))
@@ -667,22 +682,22 @@ export default function SopManagementCenter({
       >
         <header className="sop-center-header">
           <div>
-            <h2 id="sop-center-title" className="text-lg font-semibold tracking-tight">SOP 管理中心</h2>
-            <p className="sop-center-quiet-text mt-1 text-xs">统一管理 SOP、分组和生成元指令。</p>
+            <h2 id="sop-center-title" className="text-lg font-semibold tracking-tight">提示词与 SOP 管理</h2>
+            <p className="sop-center-quiet-text mt-1 text-xs">分别管理可直接生图的变量提示词与生成型 SOP。</p>
           </div>
           <div className="flex items-center gap-2">
-            <LargeModalToggle largeView={largeView} dialogName="SOP 管理中心" onToggle={toggleLargeView} />
-            <IconButton onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭 SOP 管理中心" icon={<X size={18} />} />
+            <LargeModalToggle largeView={largeView} dialogName="提示词与 SOP 管理" onToggle={toggleLargeView} />
+            <IconButton onClick={closeSafely} disabled={job.status === 'running'} aria-label="关闭提示词与 SOP 管理" icon={<X size={18} />} />
           </div>
         </header>
 
         <Tabs
-          aria-label="SOP 管理中心功能"
+          aria-label="提示词与 SOP 管理功能"
           value={tab}
           onValueChange={(value) => value === 'library' ? setTab(value) : runAfterDraftConfirmation(() => setTab(value))}
           className="sop-center-tabs"
           items={[
-            { value: 'library', label: 'SOP 库', icon: <Library size={16} /> },
+            { value: 'library', label: '提示词与 SOP 库', icon: <Library size={16} /> },
             { value: 'meta', label: '生成元指令', icon: <Settings2 size={16} /> },
             { value: 'generate', label: '智能生成', icon: <Sparkles size={16} /> },
           ]}
@@ -705,7 +720,7 @@ export default function SopManagementCenter({
                 </Tooltip>
               </div>
               <div className="mt-4 space-y-1">
-                {[{ id: 'all', name: '全部 SOP', count: items.length }, { id: 'favorites', name: '收藏', count: items.filter((item) => item.favorite).length }, { id: 'recent', name: '最近使用', count: items.filter((item) => item.lastUsedAt).length }, { id: 'ungrouped', name: '未分组', count: items.filter((item) => !item.groupId).length }].map((group) => <button key={group.id} type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="sop-center-nav-item" data-selected={selectedGroupId === group.id || undefined}><span>{group.name}</span><span className="text-xs opacity-70">{group.count}</span></button>)}
+                {[{ id: 'all', name: '全部资产', count: items.length }, { id: 'favorites', name: '收藏', count: items.filter((item) => item.favorite).length }, { id: 'recent', name: '最近使用', count: items.filter((item) => item.lastUsedAt).length }, { id: 'ungrouped', name: '未分组', count: items.filter((item) => !item.groupId).length }].map((group) => <button key={group.id} type="button" onClick={() => runAfterDraftConfirmation(() => setSelectedGroupId(group.id))} className="sop-center-nav-item" data-selected={selectedGroupId === group.id || undefined}><span>{group.name}</span><span className="text-xs opacity-70">{group.count}</span></button>)}
                 {groups.map((group) => {
                   const isEditing = editingGroupId === group.id
                   if (isEditing) {
@@ -748,8 +763,8 @@ export default function SopManagementCenter({
             </DialogPane>
 
             <DialogPane className="sop-center-list-panel">
-              <div className="flex items-center justify-between"><div><h3 className="font-semibold">SOP 列表</h3><p className="sop-center-quiet-text mt-1 text-xs">{filteredItems.length} 个 SOP</p></div><Button size="sm" variant="secondary" onClick={addItem} leadingIcon={<Plus size={15} />}>新建</Button></div>
-              <SearchField className="mt-3" label="搜索 SOP" value={search} onChange={setSearch} onClear={() => setSearch('')} placeholder="搜索名称或正文" />
+              <div className="flex items-center justify-between"><div><h3 className="font-semibold">资产列表</h3><p className="sop-center-quiet-text mt-1 text-xs">{filteredItems.length} 个资产</p></div><Button size="sm" variant="secondary" onClick={addItem} leadingIcon={<Plus size={15} />}>新建</Button></div>
+              <SearchField className="mt-3" label="搜索提示词或 SOP" value={search} onChange={setSearch} onClear={() => setSearch('')} placeholder="搜索名称或正文" />
               <div className="sop-center-sop-list mt-3" role="list">
                 {filteredItems.map((item) => {
                   const groupName = groups.find((group) => group.id === item.groupId)?.name ?? '未分组'
@@ -772,12 +787,13 @@ export default function SopManagementCenter({
                         <span className="block min-w-0 w-full truncate text-sm font-semibold">{item.name}</span>
                         <span className="sop-center-sop-params" aria-label="SOP 参数">
                           <span>{groupName}</span>
+                          <Badge tone={getSopExecutionMode(item) === 'variable-prompt' ? 'success' : 'neutral'}>{getSopExecutionMode(item) === 'variable-prompt' ? '变量提示词' : '生成型 SOP'}</Badge>
                           {selectedSopId === item.id && <Badge tone="success">使用中</Badge>}
                         </span>
                       </button>
                       <div className="sop-center-sop-actions" aria-label={`${item.name} 操作`}>
                         <IconButton size="sm" onClick={() => onSaveItem({ ...item, favorite: !item.favorite, updatedAt: Date.now() })} aria-label={`${item.favorite ? '取消收藏' : '收藏'} ${item.name}`} title={item.favorite ? '取消收藏' : '收藏'} icon={<Star size={14} fill={item.favorite ? 'currentColor' : 'none'} />} className={`sop-center-row-action ${item.favorite ? 'sop-center-action--favorite' : ''}`} />
-                        {onApply && <IconButton size="sm" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title="应用到当前生图" icon={<MousePointerClick size={14} />} className={`sop-center-row-action ${selectedSopId === item.id ? 'sop-center-action--applied' : ''}`} />}
+                        {onApply && <IconButton size="sm" onClick={() => applyItem(item)} aria-label={`应用 ${item.name}`} title={getSopExecutionMode(item) === 'variable-prompt' ? '填入生图输入框' : '使用 SOP'} icon={<MousePointerClick size={14} />} className={`sop-center-row-action ${selectedSopId === item.id ? 'sop-center-action--applied' : ''}`} />}
                         <IconButton size="sm" onClick={() => { const id = onDuplicateItem(item.id); if (id) setSelectedItemId(id) }} aria-label={`复制${item.name}`} title="复制 SOP" icon={<Copy size={14} />} className="sop-center-row-action" />
                         <IconButton size="sm" onClick={() => openConfirmDialog({
                           title: '删除 SOP？',
@@ -790,7 +806,7 @@ export default function SopManagementCenter({
                   </article>
                   )
                 })}
-                {filteredItems.length === 0 && <EmptyState title="当前分组暂无 SOP" description="新建 SOP，或切换到其他分组查看。" />}
+                {filteredItems.length === 0 && <EmptyState title="当前分组暂无资产" description="新建变量提示词或 SOP，或切换到其他分组查看。" />}
               </div>
             </DialogPane>
 
@@ -798,7 +814,7 @@ export default function SopManagementCenter({
               {itemDraft ? <div className="sop-center-editor-card flex min-h-0 flex-1 flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-[1_1_18rem]">
-                    <h3 className="font-semibold">SOP 参数与正文</h3>
+                    <h3 className="font-semibold">资产参数与正文</h3>
                     <p className="sop-center-quiet-text mt-1 text-xs" aria-live="polite">{itemEditorHint} Ctrl/Cmd+S 可立即保存。</p>
                   </div>
                   <Inline className="max-w-full" justify="flex-end">
@@ -809,40 +825,58 @@ export default function SopManagementCenter({
                       leadingIcon={<MousePointerClick size={15} />}
                       className={itemApplied ? 'text-[hsl(var(--ds-color-success))]' : undefined}
                     >
-                      {itemApplied ? '已使用' : '应用 SOP'}
+                      {itemApplied ? '已使用' : itemVariablePromptMode ? '填入生图输入框' : '使用 SOP'}
                     </Button>}
                     <Button
-                      disabled={!itemDirty || !itemDraft.name.trim() || !itemDraft.content.trim()}
+                      disabled={!itemDirty || !itemDraftValid}
                       onClick={() => saveItemDraftNow()}
                       variant={itemDirty ? 'primary' : 'secondary'}
                       leadingIcon={<Save size={15} />}
                     >
                       保存修改
                     </Button>
-                    <Button
+                    {!itemVariablePromptMode && <Button
                       disabled={!persistedItem}
                       onClick={() => persistedItem && viewGeneratedPrompts(persistedItem)}
                       variant="secondary"
                       leadingIcon={<ListChecks size={15} />}
                     >
                       生成提示词
-                    </Button>
+                    </Button>}
                     {onClear && selectedSopId && <Button onClick={onClear} variant="secondary">取消应用</Button>}
                   </Inline>
                 </div>
                 <div className="sop-center-editor-fields">
                   <TextField label="名称" value={itemDraft.name} onChange={(event) => setItemDraft({ ...itemDraft, name: event.target.value })} />
                   <SelectField label="所属分组" value={itemDraft.groupId ?? ''} onChange={(event) => setItemDraft({ ...itemDraft, groupId: event.target.value || undefined })} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
+                  <SelectField label="资产类型" value={getSopExecutionMode(itemDraft)} onChange={(event) => setItemDraft({ ...itemDraft, executionMode: event.target.value as SopLibraryItem['executionMode'] })} options={[{ value: 'prompt-generator', label: '生成型 SOP' }, { value: 'variable-prompt', label: '变量提示词' }]} />
                 </div>
-                <SopTextEditor
-                  documentId={itemDraft.id}
-                  value={itemDraft.content}
-                  onChange={(content) => setItemDraft({ ...itemDraft, content })}
-                  onTestRevision={onTestSopRevision
-                    ? (content) => onTestSopRevision({ ...itemDraft, content })
-                    : undefined}
-                />
-              </div> : <EmptyState className="h-full" title="选择或新建一个 SOP" description="从左侧列表选择内容后即可编辑。" />}
+                {itemVariablePromptMode ? (
+                  <div className="flex min-h-0 flex-1 flex-col gap-2">
+                    <TextArea
+                      label="变量提示词正文"
+                      aria-label="变量提示词正文"
+                      value={itemDraft.content}
+                      onChange={(event) => setItemDraft({ ...itemDraft, content: event.target.value })}
+                      className="min-h-[420px] flex-1 font-mono text-xs leading-6"
+                    />
+                    <p className={`text-xs ${itemVariablePromptValidation?.enabled ? 'text-[hsl(var(--ds-color-success))]' : 'text-[hsl(var(--ds-color-danger))]'}`}>
+                      {itemVariablePromptValidation?.enabled
+                        ? `已识别 ${itemVariablePromptValidation.variables.length} 个变量，共 ${itemVariablePromptValidation.combinationCount.toLocaleString()} 种组合。应用后将直接填入生图输入框。`
+                        : `格式尚未启用：${itemVariablePromptValidation?.errors[0] ?? '请填写正文、单独一行的“可变项：”及逐行变量定义。'}`}
+                    </p>
+                  </div>
+                ) : (
+                  <SopTextEditor
+                    documentId={itemDraft.id}
+                    value={itemDraft.content}
+                    onChange={(content) => setItemDraft({ ...itemDraft, content })}
+                    onTestRevision={onTestSopRevision
+                      ? (content) => onTestSopRevision({ ...itemDraft, content })
+                      : undefined}
+                  />
+                )}
+              </div> : <EmptyState className="h-full" title="选择或新建一个资产" description="从左侧列表选择内容后即可编辑。" />}
             </DialogPane>
           </DialogWorkspace>
         )}
@@ -853,7 +887,7 @@ export default function SopManagementCenter({
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold">生成元指令</h3>
-                  <p className="sop-center-quiet-text mt-1 text-xs">控制 AI 如何编译 SOP。</p>
+                  <p className="sop-center-quiet-text mt-1 text-xs">SOP 元指令生成 SOP；变量提示词技能直接反推可执行模板。</p>
                 </div>
                 <Button size="sm" variant="secondary" onClick={addMeta} leadingIcon={<Plus size={15} />}>新建</Button>
               </div>
@@ -893,7 +927,7 @@ export default function SopManagementCenter({
                     <Button disabled={!metaDraft.name.trim() || !metaDraft.instruction.trim()} onClick={() => onSaveMetaInstruction({ ...metaDraft, updatedAt: Date.now() })} leadingIcon={<Save size={15} />}>保存</Button>
                   </div>
                   <TextField label="名称" value={metaDraft.name} onChange={(event) => setMetaDraft({ ...metaDraft, name: event.target.value })} />
-                  <SelectField label="类型" value={metaDraft.kind} onChange={(event) => setMetaDraft({ ...metaDraft, kind: event.target.value as SopMetaInstruction['kind'] })} options={[{ value: 'general', label: '通用 SOP' }, { value: 'image-prompt', label: '图片提示词 SOP' }, { value: 'custom', label: '自定义' }]} />
+                  <SelectField label="类型" value={metaDraft.kind} onChange={(event) => setMetaDraft({ ...metaDraft, kind: event.target.value as SopMetaInstruction['kind'] })} options={[{ value: 'general', label: '通用 SOP' }, { value: 'image-prompt', label: '图片提示词 SOP' }, { value: 'variable-prompt-skill', label: '变量提示词技能' }, { value: 'custom', label: '自定义' }]} />
                   <TextArea label="说明" value={metaDraft.description} onChange={(event) => setMetaDraft({ ...metaDraft, description: event.target.value })} className="min-h-24 leading-6" />
                   <TextArea label="元指令正文" value={metaDraft.instruction} onChange={(event) => setMetaDraft({ ...metaDraft, instruction: event.target.value })} className="min-h-[420px] font-mono text-xs leading-6" />
                 </div>
@@ -909,12 +943,12 @@ export default function SopManagementCenter({
             <DialogPane tone="canvas" className="sop-center-editor-panel">
               <div className="sop-center-editor-card space-y-4">
                 <div>
-                  <h3 className="font-semibold">生成新 SOP</h3>
-                  <p className="sop-center-quiet-text mt-1 text-xs">选择元指令、目标分组并提供文字或图片输入。</p>
+                  <h3 className="font-semibold">{generatingVariablePrompt ? '反推变量提示词' : '生成新 SOP'}</h3>
+                  <p className="sop-center-quiet-text mt-1 text-xs">{generatingVariablePrompt ? '技能分析参考图片后，直接保存可填入生图输入框的变量提示词。' : '选择 SOP 元指令、目标分组并提供文字或图片输入。'}</p>
                 </div>
                 <SelectField label="生成元指令" value={generatorMetaId} onChange={(event) => setGeneratorMetaId(event.target.value)} options={[{ value: '', label: '请选择' }, ...metaInstructions.map((item) => ({ value: item.id, label: item.name }))]} />
                 <SelectField label="保存到分组" value={generatorGroupId} onChange={(event) => setGeneratorGroupId(event.target.value)} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
-                <TextArea label="生成说明" aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder="说明 SOP 的目标、输入、输出格式和禁止项" className="min-h-32 leading-6" />
+                <TextArea label="生成说明" aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder={generatingVariablePrompt ? '补充目标、复刻或探索方向、受众与文案要求' : '说明 SOP 的目标、输入、输出格式和禁止项'} className="min-h-32 leading-6" />
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <div>
@@ -967,7 +1001,7 @@ export default function SopManagementCenter({
                     </div>
                   )}
                 </div>
-                <Button onClick={() => void runGeneration()} loading={job.status === 'running'} className="w-full" size="lg" leadingIcon={<Sparkles size={17} />}>{job.status === 'running' ? '正在生成 SOP' : '开始生成并保存'}</Button>
+                <Button onClick={() => void runGeneration()} loading={job.status === 'running'} className="w-full" size="lg" leadingIcon={<Sparkles size={17} />}>{job.status === 'running' ? (generatingVariablePrompt ? '正在反推变量提示词' : '正在生成 SOP') : (generatingVariablePrompt ? '反推并保存变量提示词' : '开始生成并保存 SOP')}</Button>
               </div>
             </DialogPane>
             <DialogPane as="aside" className="sop-center-editor-panel">
@@ -994,7 +1028,7 @@ export default function SopManagementCenter({
                     </div>
                   )}
                   {job.error && <p role="alert" className="mt-3 whitespace-pre-wrap text-xs leading-5 text-[hsl(var(--ds-color-danger))]">{job.error}</p>}
-                  {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到 SOP 库，可立即在策略或画廊中使用。</p>}
+                  {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到资产库；变量提示词可直接填入生图输入框，SOP 可继续生成具体提示词。</p>}
                   {job.status === 'error' && <Button onClick={() => void runGeneration()} variant="secondary" size="sm" className="mt-4">重新生成</Button>}
                   {job.status === 'success' && <Button onClick={() => setTab('library')} variant="secondary" size="sm" className="mt-4">查看生成结果</Button>}
                 </div>

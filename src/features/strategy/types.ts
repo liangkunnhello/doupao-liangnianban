@@ -119,6 +119,8 @@ export interface SopLibraryItem {
   name: string
   description: string
   content: string
+  /** 变量提示词直接填入生图输入框；生成型 SOP 交给文本模型生成具体提示词。 */
+  executionMode?: 'prompt-generator' | 'variable-prompt'
   source: 'manual' | 'generated' | 'legacy-preset'
   metaInstructionId?: string
   createdBy: string
@@ -133,7 +135,12 @@ export interface SopMetaInstruction {
   name: string
   description: string
   instruction: string
-  kind: 'general' | 'image-prompt' | 'custom'
+  /** variable-prompt-skill 直接反推可执行变量提示词，不生成二次提示词 SOP。 */
+  kind: 'general' | 'image-prompt' | 'variable-prompt-skill' | 'custom'
   createdAt: number
   updatedAt: number
+}
+
+export function getSopExecutionMode(item: Pick<SopLibraryItem, 'executionMode'>) {
+  return item.executionMode ?? 'prompt-generator'
 }

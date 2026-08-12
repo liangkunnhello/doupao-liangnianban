@@ -74,7 +74,7 @@ describe('store SOP generation', () => {
       { name: 'B.jpg', dataUrl: 'data:image/jpeg;base64,BBB' },
     ], 'image-prompt', undefined, {
       onProgress: (item) => progress.push(item.stage),
-    })).resolves.toEqual({ name: '多图 SOP', description: '说明', sop: '# 正文' })
+    })).resolves.toEqual({ name: '多图 SOP', description: '说明', content: '# 正文', executionMode: 'prompt-generator' })
 
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
     expect(request.text.format).toMatchObject({ type: 'json_schema', strict: true })
@@ -97,11 +97,52 @@ describe('store SOP generation', () => {
 
     await expect(generateSopFromStore('生成 SOP', {}, [], 'general', undefined, {
       onProgress: (item) => progress.push(item.stage),
-    })).resolves.toEqual({ name: '修复后的 SOP', description: '说明', sop: '# 完整正文' })
+    })).resolves.toEqual({ name: '修复后的 SOP', description: '说明', content: '# 完整正文', executionMode: 'prompt-generator' })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(progress).toContain('repair')
     expect(progress.at(-1)).toBe('parse')
+  })
+
+  it('uses the skill schema and validates a direct variable prompt before returning it', async () => {
+    const variablePrompt = '图片比例为16:9。生成{{主体}}，使用{{构图}}。\n\n可变项：\n{{主体}}：猫 / 狗\n{{构图}}：近景 / 全景'
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(JSON.stringify({
+      name: '参考图变量策略',
+      description: '直接拆解后生图。',
+      variablePrompt,
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(generateSopFromStore('反推图片', {}, [
+      { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
+    ], 'variable-prompt-skill', '技能元指令')).resolves.toEqual({
+      name: '参考图变量策略',
+      description: '直接拆解后生图。',
+      content: variablePrompt,
+      executionMode: 'variable-prompt',
+    })
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(request.text.format.schema.required).toEqual(['name', 'description', 'variablePrompt'])
+    expect(request.instructions).toContain('不得返回 sop')
+    expect(request.input[0].content[0].text).toContain('不生成 SOP')
+  })
+
+  it('retries an invalid skill template and accepts the repaired variable prompt', async () => {
+    const repaired = '图片比例为16:9。生成{{主体}}。\n\n可变项：\n{{主体}}：猫 / 狗'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse('{"name":"错误模板","description":"说明","variablePrompt":"生成{{主体}}。\\n可变项：{{主体}}：猫 / 狗"}'))
+      .mockResolvedValueOnce(mockResponse(JSON.stringify({ name: '修复模板', description: '说明', variablePrompt: repaired })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(generateSopFromStore('', {}, [
+      { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
+    ], 'variable-prompt-skill', '技能元指令')).resolves.toMatchObject({
+      name: '修复模板',
+      content: repaired,
+      executionMode: 'variable-prompt',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('turns a revision proposal into one prompt and submits one image with current gallery context', async () => {
