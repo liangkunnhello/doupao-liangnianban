@@ -674,7 +674,7 @@ npm run electron:build
 - Windows：`nsis` 和 `portable`，x64。
 - macOS：`dmg`。
 - Linux：`AppImage`。
-- 发布目标：GitHub Releases，`owner: nideyilian`，`repo: doupao`。
+- 发布目标：GitHub Releases，`owner: liangkunnhello`，`repo: doupao-liangnianban`。
 
 ### 9.8 发布脚本
 

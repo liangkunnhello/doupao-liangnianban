@@ -30,7 +30,7 @@ import type {
 } from './types'
 import type { StrategyAsset, StrategyPreset } from '../strategy/types'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction } from '../strategy/types'
-import { seedSopGroups, seedSopLibrary, seedSopMetaInstructions, sopLibraryId } from '../strategy/sopLibrary'
+import { mergeBuiltInSopMetaInstructions, seedSopGroups, seedSopLibrary, seedSopMetaInstructions, sopLibraryId } from '../strategy/sopLibrary'
 
 function id(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -683,7 +683,7 @@ export const useRequirementPrototype = create<RequirementPrototypeState>()(
     }),
     {
       name: 'doupao.requirement-prototype.v1',
-      version: 3,
+      version: 4,
       migrate: (persistedState) => {
         const state = persistedState as Partial<RequirementPrototypeState>
         return {
@@ -691,7 +691,7 @@ export const useRequirementPrototype = create<RequirementPrototypeState>()(
           strategyAssets: (state.strategyAssets ?? []).map((strategy) => normalizeStrategyAsset(strategy)),
           sopGroups: state.sopGroups?.length ? state.sopGroups : seedSopGroups(),
           sopLibrary: state.sopLibrary?.length ? state.sopLibrary : seedSopLibrary(state.strategyPresets ?? seedStrategyPresets()),
-          sopMetaInstructions: state.sopMetaInstructions?.length ? state.sopMetaInstructions : seedSopMetaInstructions(),
+          sopMetaInstructions: mergeBuiltInSopMetaInstructions(state.sopMetaInstructions),
           strategyAssetVersions: Object.fromEntries(
             Object.entries(state.strategyAssetVersions ?? {}).map(([strategyId, versions]) => [
               strategyId,

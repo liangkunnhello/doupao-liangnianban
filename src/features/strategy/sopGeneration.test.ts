@@ -7,6 +7,7 @@ import {
   SOP_GENERATOR_META_PRESET,
   validateSopGenerationInput,
 } from './sopGeneration'
+import { seedSopMetaInstructions } from './sopLibrary'
 
 describe('SOP natural-language generator', () => {
   it('ships a named meta instruction that requires structured SOP output', () => {
@@ -26,6 +27,17 @@ describe('SOP natural-language generator', () => {
 
   it('allows a managed meta instruction to override the built-in compiler', () => {
     expect(getSopGeneratorInstruction('general', '自定义元指令')).toBe('自定义元指令')
+  })
+
+  it('installs both requested skills as managed meta instructions', () => {
+    const metaInstructions = seedSopMetaInstructions()
+    const imageSkill = metaInstructions.find((item) => item.id === 'sop-meta-skill-image-generation-strategies')
+    const copySkill = metaInstructions.find((item) => item.id === 'sop-meta-skill-app-copy-strategies')
+
+    expect(imageSkill?.instruction).toContain('参考图生图策略提取器')
+    expect(imageSkill?.instruction).toContain('可变项：')
+    expect(copySkill?.instruction).toContain('subject_copy_binding')
+    expect(copySkill?.instruction).toContain('{{主体文案包}}')
   })
 
   it('requires a reference image for image prompt SOP generation', () => {

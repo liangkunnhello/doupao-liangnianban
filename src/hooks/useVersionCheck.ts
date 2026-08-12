@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const REPO = 'nideyilian/doupao'
+const REPO = 'liangkunnhello/doupao-liangnianban'
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`
 
 function compareVersions(a: string, b: string) {

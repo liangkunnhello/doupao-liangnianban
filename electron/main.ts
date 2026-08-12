@@ -27,8 +27,8 @@ autoUpdater.allowPrerelease = true
 // 配置 GitHub 作为更新源
 autoUpdater.setFeedURL({
   provider: 'github',
-  owner: 'nideyilian',
-  repo: 'doupao',
+  owner: 'liangkunnhello',
+  repo: 'doupao-liangnianban',
 })
 
 function sendToWindow(channel: string, ...args: unknown[]) {
@@ -129,7 +129,7 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    title: 'DOUPAO Image',
+    title: '豆泡两年半',
     autoHideMenuBar: true,
     show: false,
     backgroundColor: '#1a1a2e',

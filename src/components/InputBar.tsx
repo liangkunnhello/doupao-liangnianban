@@ -10,6 +10,7 @@ import {
 } from '../lib/inputImageLimits'
 import { convertVariableMentionAtVisibleOffsetToText, createVariableMention, escapePromptHtmlAttribute, escapePromptHtmlText, getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, moveVariableMentionInPrompt, resolveVariableMentionEntry, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { calculateImageSize, formatImageRatio, normalizeImageSize } from '../lib/size'
+import { parseVariablePrompt } from '../lib/variablePrompt'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getSafeBoundingClientRect } from '../lib/domRect'
@@ -49,6 +50,15 @@ const QUICK_ASPECT_RATIOS = ['16:9', '9:16', '1:1'] as const
 function getAspectRatioFromSize(size: string): string {
   const match = normalizeImageSize(size).match(/^(\d+)x(\d+)$/i)
   return match ? formatImageRatio(Number(match[1]), Number(match[2])).replace(/^≈/, '') : ''
+}
+
+function getSizeTierForVariablePrompt(size: string): '1K' | '2K' | '4K' {
+  const match = normalizeImageSize(size).match(/^(\d+)x(\d+)$/i)
+  if (!match) return '1K'
+  const pixels = Number(match[1]) * Number(match[2])
+  if (pixels > 4_500_000) return '4K'
+  if (pixels > 1_700_000) return '2K'
+  return '1K'
 }
 
 function withAspectRatioPrompt(prompt: string, ratio: string): string {
@@ -610,6 +620,7 @@ export default function InputBar() {
     () => wordLibraryEntries.filter((e) => e.deletedAt == null).map((entry) => entry.key),
     [wordLibraryEntries],
   )
+  const variablePromptState = useMemo(() => parseVariablePrompt(prompt), [prompt])
   const gallerySopScopeId = activeWorkspaceTabId ?? '__default__'
   const gallerySopId = gallerySopIdsByTab[gallerySopScopeId] ?? ''
   const gallerySopPromptCount = gallerySopPromptCountsByTab[gallerySopScopeId] ?? 5
@@ -1256,6 +1267,13 @@ export default function InputBar() {
     setParams({ size })
     setPrompt(withAspectRatioPrompt(prompt, ratio))
   }, [prompt, setParams, setPrompt])
+
+  useEffect(() => {
+    if (!variablePromptState.enabled || !variablePromptState.aspectRatio) return
+    const size = calculateImageSize(getSizeTierForVariablePrompt(params.size), variablePromptState.aspectRatio)
+    if (!size || normalizeImageSize(params.size) === normalizeImageSize(size)) return
+    setParams({ size })
+  }, [params.size, setParams, variablePromptState.aspectRatio, variablePromptState.enabled])
 
   const qualityOptions = isFalProvider
     ? [
@@ -3522,7 +3540,20 @@ export default function InputBar() {
             )}
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-gray-400 dark:text-gray-500">
-            <span>Enter 发送 · Shift+Enter 换行 · @ 引用参考图</span>
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>Enter 发送 · Shift+Enter 换行 · @ 引用参考图</span>
+              {variablePromptState.enabled && (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300" title={`已识别 ${variablePromptState.variables.length} 个变量，共 ${variablePromptState.combinationCount.toLocaleString()} 种组合`}>
+                  已启用变量提示词
+                  {variablePromptState.aspectRatio ? ` · ${variablePromptState.aspectRatio}` : ''}
+                </span>
+              )}
+              {variablePromptState.detected && !variablePromptState.enabled && (
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-600 dark:bg-amber-500/10 dark:text-amber-300" title={variablePromptState.errors.join('\n')}>
+                  变量提示词格式有误：{variablePromptState.errors[0]}
+                </span>
+              )}
+            </span>
             <span className="tabular-nums">{prompt.trim().length} 字</span>
           </div>
 

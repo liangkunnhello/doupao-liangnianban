@@ -42,6 +42,8 @@ import { DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_RETRIES, DEFAULT_SETTINGS, getActiv
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { loadGalleryViewMode, saveGalleryViewMode, type GalleryViewMode } from './lib/galleryPreferences'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { parseVariablePrompt, renderVariablePromptBatch } from './lib/variablePrompt'
+import { calculateImageSize, normalizeImageSize, type SizeTier } from './lib/size'
 import { appendAdNegativeRule, createAdNegativeRuleSnapshot, getAdNegativeRule } from './lib/adNegativeRules'
 import {
   CURRENT_THUMBNAIL_VERSION,
@@ -4531,6 +4533,15 @@ export async function migrateLocalSaveRoot(newRoot: string): Promise<void> {
   }
 }
 
+function inferSizeTier(size: string): SizeTier {
+  const match = normalizeImageSize(size).match(/^(\d+)x(\d+)$/i)
+  if (!match) return '1K'
+  const pixels = Number(match[1]) * Number(match[2])
+  if (pixels > 4_500_000) return '4K'
+  if (pixels > 1_700_000) return '2K'
+  return '1K'
+}
+
 /** 提交新任务（使用显式数据，不依赖全局状态） */
 export async function submitTaskWithData(
   data: {
@@ -4551,6 +4562,12 @@ export async function submitTaskWithData(
     useStore.getState()
 
   const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId, sopBatch } = data
+
+  const variablePrompt = parseVariablePrompt(prompt)
+  if (variablePrompt.detected && !variablePrompt.enabled) {
+    showToast(`变量提示词格式有误：${variablePrompt.errors[0] ?? '请检查可变项格式'}`, 'error')
+    return
+  }
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -4637,7 +4654,10 @@ export async function submitTaskWithData(
   }
 
   const hasInputImages = orderedInputImages.length > 0 || (inputImageFolder ? inputImageFolder.imageIds.length > 0 : false)
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages })
+  const promptAdjustedParams = variablePrompt.enabled && variablePrompt.aspectRatio
+    ? { ...params, size: calculateImageSize(inferSizeTier(params.size), variablePrompt.aspectRatio) ?? params.size }
+    : params
+  const normalizedParams = normalizeParamsForSettings(promptAdjustedParams, requestSettings, { hasInputImages })
 
   const taskState = useStore.getState()
   const tabIdToUpdate = targetTabId ?? taskState.activeWorkspaceTabId ?? taskState.workspaceTabs[0]?.id ?? null
@@ -7087,6 +7107,11 @@ async function executeTask(taskId: string) {
     const n = task.params.n > 0 ? task.params.n : 1
     const useFolderMode = shouldCycleReferenceImages(task.params.reference_mode, task.inputImageIds.length, n)
     const variableResolver = { wordLibraryEntries: useStore.getState().wordLibraryEntries.filter((e) => e.deletedAt == null) }
+    const variablePrompt = parseVariablePrompt(task.prompt)
+    const renderedVariablePrompts = variablePrompt.enabled
+      ? renderVariablePromptBatch(task.prompt, n, task.id)
+      : []
+    const resolveTaskPrompt = (slotIndex = 0) => renderedVariablePrompts[slotIndex] ?? task.prompt
 
     const maxConcurrent = normalizeMaxConcurrent(activeProfile.maxConcurrent)
     const maxRetries = normalizeMaxRetries(activeProfile.maxRetries)
@@ -7299,7 +7324,7 @@ async function executeTask(taskId: string) {
       }
       const isAsyncCustom = taskProvider !== 'fal' && isAsyncCustomProviderTask(requestSettings, taskProvider, inputDataUrls.length > 0)
       const capabilities: ImageProviderCapabilities = {
-        maxImagesPerRequest: useFolderMode ? 1 : apiMaxN,
+        maxImagesPerRequest: useFolderMode || variablePrompt.enabled ? 1 : apiMaxN,
         supportsSeed: taskProvider === 'fal',
         supportsAsyncRecovery: taskProvider === 'fal' || isAsyncCustom,
         supportsCancel: taskProvider === 'fal' || isAsyncCustom,
@@ -7523,7 +7548,7 @@ async function executeTask(taskId: string) {
             callImageApi({
               settings: requestSettings,
               prompt: appendAdNegativeRule(
-                replaceImageMentionsForApi(task.prompt, requestInputDataUrls.length, undefined, variableResolver),
+                replaceImageMentionsForApi(resolveTaskPrompt(planned.slotIndexes[0]), requestInputDataUrls.length, undefined, variableResolver),
                 task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
               ),
               params: { ...taskParams, n: planned.count, ...(seed !== undefined ? { seed } : {}) },
@@ -7729,7 +7754,7 @@ async function executeTask(taskId: string) {
       result = await retryTransientRequest(() => callImageApi({
         settings: requestSettings,
         prompt: appendAdNegativeRule(
-          replaceImageMentionsForApi(task.prompt, inputDataUrls.length, undefined, variableResolver),
+          replaceImageMentionsForApi(resolveTaskPrompt(0), inputDataUrls.length, undefined, variableResolver),
           task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
         ),
         params: task.params,

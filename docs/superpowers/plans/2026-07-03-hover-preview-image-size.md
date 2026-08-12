@@ -294,7 +294,7 @@ Expected: tests and builds pass again, Electron Builder uploads the Windows inst
 Run:
 
 ```powershell
-gh release view v0.7.12 --repo nideyilian/doupao
+gh release view v0.7.12 --repo liangkunnhello/doupao-liangnianban
 git status -sb
 ```
 

@@ -85,7 +85,7 @@ export default function SupportPromptModal() {
             赞助作者
           </a>
           <a
-            href="https://github.com/nideyilian/doupao/issues"
+            href="https://github.com/liangkunnhello/doupao-liangnianban/issues"
             target="_blank"
             rel="noopener noreferrer"
             onClick={dismissSupportPrompt}

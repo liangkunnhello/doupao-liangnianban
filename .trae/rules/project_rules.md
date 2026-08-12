@@ -1,9 +1,9 @@
 # Project Rules
 
 ## Project Overview
-- **Name**: GPT Image Playground (豆泡)
+- **Name**: 豆泡两年半
 - **Type**: Electron + React + Vite desktop application
-- **GitHub Repo**: https://github.com/nideyilian/doupao
+- **GitHub Repo**: https://github.com/liangkunnhello/doupao-liangnianban
 - **Current Version**: see `package.json` version field
 
 ## Build & Quality Commands
@@ -45,10 +45,10 @@ Note: User's network may require Watt Toolkit GitHub acceleration to be enabled.
 ### Step 5: Verify Release
 1. Check GitHub Actions workflow status:
    ```
-   curl -s -H "Authorization: token <GH_TOKEN>" https://api.github.com/repos/nideyilian/doupao/actions/runs?per_page=1
+   curl -s -H "Authorization: token <GH_TOKEN>" https://api.github.com/repos/liangkunnhello/doupao-liangnianban/actions/runs?per_page=1
    ```
 2. Wait for workflow to complete (usually 5-10 minutes)
-3. Confirm Release appears at: https://github.com/nideyilian/doupao/releases
+3. Confirm Release appears at: https://github.com/liangkunnhello/doupao-liangnianban/releases
 
 ### Auto-Update Mechanism
 - electron-updater checks GitHub Releases for new versions

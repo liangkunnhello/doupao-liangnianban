@@ -1,7 +1,17 @@
 {
-  "name": "gpt-image-playground",
+  "name": "doupao-liangnianban",
   "private": true,
   "version": "0.7.51",
+  "description": "豆泡两年半：图片生成、编辑与批量变量提示词工具",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liangkunnhello/doupao-liangnianban.git"
+  },
+  "homepage": "https://github.com/liangkunnhello/doupao-liangnianban#readme",
+  "bugs": {
+    "url": "https://github.com/liangkunnhello/doupao-liangnianban/issues"
+  },
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -60,7 +70,7 @@
   },
   "build": {
     "appId": "com.cooksleep.doupao-v2",
-    "productName": "DOUPAO V2",
+    "productName": "豆泡两年半",
     "directories": {
       "output": "release"
     },
@@ -71,8 +81,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "nideyilian",
-      "repo": "doupao",
+      "owner": "liangkunnhello",
+      "repo": "doupao-liangnianban",
       "releaseType": "release"
     },
     "win": {

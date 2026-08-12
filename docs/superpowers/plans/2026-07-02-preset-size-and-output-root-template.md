@@ -347,7 +347,7 @@ Expected: tests and build pass again, Electron artifacts upload successfully, an
 Run:
 
 ```powershell
-gh release view v0.7.11 --repo nideyilian/doupao
+gh release view v0.7.11 --repo liangkunnhello/doupao-liangnianban
 ```
 
 Expected: release `v0.7.11` exists and lists uploaded Windows artifacts.

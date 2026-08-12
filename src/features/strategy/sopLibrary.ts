@@ -3,6 +3,10 @@ import {
   SOP_GENERATOR_META_PRESET,
 } from './sopGeneration'
 import type { SopGroup, SopLibraryItem, SopMetaInstruction, StrategyPreset } from './types'
+import {
+  APP_COPY_STRATEGY_SKILL_META_INSTRUCTION,
+  IMAGE_GENERATION_STRATEGY_SKILL_META_INSTRUCTION,
+} from './skillMetaInstructions'
 
 export function seedSopGroups(): SopGroup[] {
   const now = Date.now()
@@ -50,7 +54,31 @@ export function seedSopMetaInstructions(): SopMetaInstruction[] {
       createdAt: now,
       updatedAt: now,
     },
+    {
+      id: 'sop-meta-skill-image-generation-strategies',
+      name: '技能：提取生图策略',
+      description: '从一组参考图片提炼可迁移的视觉机制、通用提示词与严格变量池。',
+      instruction: IMAGE_GENERATION_STRATEGY_SKILL_META_INSTRUCTION,
+      kind: 'image-prompt',
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'sop-meta-skill-app-copy-strategies',
+      name: '技能：APP 带文案策略提取',
+      description: '提炼带文案营销素材的视觉、文案绑定、版式槽位和 OCR 质检策略。',
+      instruction: APP_COPY_STRATEGY_SKILL_META_INSTRUCTION,
+      kind: 'image-prompt',
+      createdAt: now,
+      updatedAt: now,
+    },
   ]
+}
+
+export function mergeBuiltInSopMetaInstructions(items: SopMetaInstruction[] | undefined) {
+  const existing = items ?? []
+  const existingIds = new Set(existing.map((item) => item.id))
+  return [...existing, ...seedSopMetaInstructions().filter((item) => !existingIds.has(item.id))]
 }
 
 export function sopLibraryId(prefix: 'group' | 'sop' | 'meta') {

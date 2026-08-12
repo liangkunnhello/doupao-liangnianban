@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🎨 GPT Image Playground
+# 🎨 豆泡两年半
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/CookSleep/gpt_image_playground?style=flat-square&color=eab308)](https://github.com/CookSleep/gpt_image_playground/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/CookSleep/gpt_image_playground?style=flat-square&color=3b82f6)](https://github.com/CookSleep/gpt_image_playground/network/members)
-[![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](https://github.com/CookSleep/gpt_image_playground/blob/main/LICENSE)
+[![GitHub Repo stars](https://img.shields.io/github/stars/liangkunnhello/doupao-liangnianban?style=flat-square&color=eab308)](https://github.com/liangkunnhello/doupao-liangnianban/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/liangkunnhello/doupao-liangnianban?style=flat-square&color=3b82f6)](https://github.com/liangkunnhello/doupao-liangnianban/network/members)
+[![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](https://github.com/liangkunnhello/doupao-liangnianban/blob/main/LICENSE)
 [![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
@@ -17,7 +17,7 @@
 
 [![Vercel 在线体验](https://img.shields.io/badge/Vercel-%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-black?style=for-the-badge&logo=vercel&logoColor=white)](https://gpt-image-playground.cooksleep.dev)
 &nbsp;&nbsp;&nbsp;
-[![GitHub Pages 在线体验](https://img.shields.io/badge/GitHub%20Pages-%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-222222?style=for-the-badge&logo=github&logoColor=white)](https://cooksleep.github.io/gpt_image_playground)
+[![GitHub Pages 在线体验](https://img.shields.io/badge/GitHub%20Pages-%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-222222?style=for-the-badge&logo=github&logoColor=white)](https://liangkunnhello.github.io/doupao-liangnianban)
 
 </div>
 
@@ -119,7 +119,7 @@
 <details>
 <summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FCookSleep%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fliangkunnhello%2Fdoupao-liangnianban&project-name=doupao-liangnianban&repository-name=doupao-liangnianban)
 
 点击上方按钮导入仓库即可，Vercel 会自动执行构建并部署静态文件。
 
@@ -326,7 +326,7 @@ https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}&model={
 ```
 
 ```text
-https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&model={model}
+https://liangkunnhello.github.io/doupao-liangnianban?apiUrl={address}&apiKey={key}&model={model}
 ```
 
 **方式二：自定义格式服务商**
@@ -437,11 +437,11 @@ JSON 结构示例：
 ## ⭐ Star History
 
 <div align="center">
-  <a href="https://www.star-history.com/#CookSleep/gpt_image_playground&Date">
+  <a href="https://www.star-history.com/#liangkunnhello/doupao-liangnianban&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=CookSleep/gpt_image_playground&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=CookSleep/gpt_image_playground&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=CookSleep/gpt_image_playground&type=Date" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=liangkunnhello/doupao-liangnianban&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=liangkunnhello/doupao-liangnianban&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=liangkunnhello/doupao-liangnianban&type=Date" />
     </picture>
   </a>
 </div>
