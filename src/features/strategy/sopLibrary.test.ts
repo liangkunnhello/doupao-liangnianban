@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeBuiltInSopMetaInstructions, migrateSopLibraryExecutionModes } from './sopLibrary'
+import { getMetaInstructionExcludeText, mergeBuiltInSopMetaInstructions, migrateSopLibraryExecutionModes, seedSopMetaInstructions } from './sopLibrary'
 import type { SopLibraryItem, SopMetaInstruction } from './types'
 
 function asset(content: string, metaInstructionId?: string): SopLibraryItem {
@@ -33,6 +33,14 @@ describe('SOP library compatibility migration', () => {
     expect(repaired?.instruction).not.toContain('name、description 和 sop')
   })
 
+  it('defaults visual strategy extraction to no text and copy strategy extraction to preserving copy', () => {
+    const metas = seedSopMetaInstructions()
+    const visual = metas.find((item) => item.id === 'sop-meta-skill-image-generation-strategies')
+    const copy = metas.find((item) => item.id === 'sop-meta-skill-app-copy-strategies')
+    expect(getMetaInstructionExcludeText(visual)).toBe(true)
+    expect(getMetaInstructionExcludeText(copy)).toBe(false)
+  })
+
   it('migrates only valid skill templates to direct execution and preserves erroneous old SOP output', () => {
     const variablePrompt = '图片比例为16:9。生成{{主体}}。\n\n可变项：\n{{主体}}：猫 / 狗'
     const [valid, erroneous, legacy] = migrateSopLibraryExecutionModes([
@@ -43,5 +51,20 @@ describe('SOP library compatibility migration', () => {
     expect(valid.executionMode).toBe('variable-prompt')
     expect(erroneous.executionMode).toBe('prompt-generator')
     expect(legacy.executionMode).toBe('prompt-generator')
+  })
+
+  it('infers the text policy for existing variable assets without overwriting an explicit choice', () => {
+    const visualPrompt = '图片比例为16:9。生成{{主体}}。\n\n可变项：\n{{主体}}：猫 / 狗'
+    const copyPrompt = '图片比例为16:9。生成{{主体文案包}}。\n\n可变项：\n{{主体文案包}}：猫，标题“萌宠” / 狗，标题“伙伴”'
+    const [visual, copySkill, manualCopy, explicit] = migrateSopLibraryExecutionModes([
+      { ...asset(visualPrompt, 'sop-meta-skill-image-generation-strategies'), executionMode: 'variable-prompt' },
+      { ...asset(copyPrompt, 'sop-meta-skill-app-copy-strategies'), executionMode: 'variable-prompt' },
+      { ...asset(copyPrompt), executionMode: 'variable-prompt' },
+      { ...asset(visualPrompt), executionMode: 'variable-prompt', excludeText: false },
+    ])
+    expect(visual.excludeText).toBe(true)
+    expect(copySkill.excludeText).toBe(false)
+    expect(manualCopy.excludeText).toBe(false)
+    expect(explicit.excludeText).toBe(false)
   })
 })

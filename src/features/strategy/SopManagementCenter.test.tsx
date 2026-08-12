@@ -105,6 +105,7 @@ function renderCenter(options: {
   onTestSopRevision?: (item: SopLibraryItem) => Promise<void>
 } = {}) {
   const onSaveItem = vi.fn()
+  const onSaveMetaInstruction = vi.fn()
   const onApply = vi.fn()
   const renderer = create(
     <SopManagementCenter
@@ -119,7 +120,7 @@ function renderCenter(options: {
       onSaveItem={onSaveItem}
       onDuplicateItem={vi.fn(() => null)}
       onDeleteItem={vi.fn()}
-      onSaveMetaInstruction={vi.fn()}
+      onSaveMetaInstruction={onSaveMetaInstruction}
       onDuplicateMetaInstruction={vi.fn(() => null)}
       onDeleteMetaInstruction={vi.fn()}
       onGenerateSop={options.onGenerateSop ?? vi.fn()}
@@ -130,7 +131,7 @@ function renderCenter(options: {
       onClose={vi.fn()}
     />,
   )
-  return { renderer, onApply, onSaveItem }
+  return { renderer, onApply, onSaveItem, onSaveMetaInstruction }
 }
 
 describe('SopManagementCenter apply and save actions', () => {
@@ -533,6 +534,8 @@ describe('SopManagementCenter apply and save actions', () => {
       result = renderCenter({ metaInstructions: [variablePromptMeta], onGenerateSop })
     })
     act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+    const excludeTextSwitch = result.renderer.root.findByProps({ 'aria-label': '排除参考图中的文字与文案排版' })
+    expect(excludeTextSwitch.props.checked).toBe(true)
     const dropZone = result.renderer.root.findByProps({ 'data-sop-reference-dropzone': true })
     await act(async () => {
       await dropZone.props.onDrop({
@@ -545,14 +548,36 @@ describe('SopManagementCenter apply and save actions', () => {
       await findButton(result.renderer.root, '反推并保存变量提示词')!.props.onClick()
     })
 
-    expect(onGenerateSop).toHaveBeenCalledWith('', {}, expect.any(Array), 'variable-prompt-skill', variablePromptMeta.instruction, expect.any(Object))
+    expect(onGenerateSop).toHaveBeenCalledWith('', {}, expect.any(Array), 'variable-prompt-skill', variablePromptMeta.instruction, expect.objectContaining({ excludeText: true }))
     expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({
       name: '变量提示词资产',
       content: variablePrompt,
       executionMode: 'variable-prompt',
+      excludeText: true,
       metaInstructionId: variablePromptMeta.id,
     }))
     expect(textContent(result.renderer.root)).toContain('变量提示词「变量提示词资产」生成并保存成功')
+    result.renderer.unmount()
+  })
+
+  it('persists the text exclusion switch on the selected skill for future reuse', () => {
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [variablePromptMeta] })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+    const excludeTextSwitch = result.renderer.root.findByProps({ 'aria-label': '排除参考图中的文字与文案排版' })
+    expect(excludeTextSwitch.props.checked).toBe(true)
+
+    act(() => excludeTextSwitch.props.onCheckedChange(false))
+
+    expect(result.onSaveMetaInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      id: variablePromptMeta.id,
+      excludeTextByDefault: false,
+      updatedAt: expect.any(Number),
+    }))
+    expect(result.renderer.root.findByProps({ 'aria-label': '排除参考图中的文字与文案排版' }).props.checked).toBe(false)
+    expect(textContent(result.renderer.root)).toContain('允许当前技能分析并保留有意设计的文案')
     result.renderer.unmount()
   })
 })

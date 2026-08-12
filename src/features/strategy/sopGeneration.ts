@@ -115,6 +115,8 @@ export interface SopGenerationProgress {
 export interface SopGenerationOptions {
   onProgress?: (progress: SopGenerationProgress) => void
   signal?: AbortSignal
+  /** 变量提示词技能专用：忽略所有文字、文案与文案排版，并生成纯视觉模板。 */
+  excludeText?: boolean
 }
 
 export type GenerateSop = (
@@ -145,6 +147,7 @@ export function buildSopRequestContent(
   context: { product?: string; materialType?: string; generationMode?: string },
   referenceImages: SopReferenceImage[],
   kind: SopGeneratorKind = 'general',
+  excludeText?: boolean,
 ) {
   const content: Array<Record<string, string>> = [{
     type: 'input_text',
@@ -158,6 +161,9 @@ export function buildSopRequestContent(
         : kind === 'image-prompt'
           ? '图片生成 SOP（参考图画风反推、多变体中文提示词直出）'
           : '通用执行 SOP'}`,
+      kind === 'variable-prompt-skill' && typeof excludeText === 'boolean'
+        ? `文字处理：${excludeText ? '排除全部文字与文案排版，只提取纯视觉策略' : '不强制排除文字，按所选技能处理有意设计的文案'}`
+        : '',
       referenceImages.length > 0 ? `已附带 ${referenceImages.length} 张参考图片：${referenceImages.map((image) => image.name).join('、')}` : '未附带参考图片',
       referenceImages.length > 1 ? '请先逐张分析每张图片，再归纳共同视觉常量、可变元素和离群差异；不得只分析第一张图片。' : '',
       '请综合全部输入完整编译，不要省略用户要求的严格输出模板。',

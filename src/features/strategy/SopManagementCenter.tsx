@@ -13,6 +13,7 @@ import {
   ScrollArea,
   SearchField,
   SelectField,
+  Switch,
   Tabs,
   TextArea,
   TextField,
@@ -46,7 +47,7 @@ import {
   type SopGenerationProgressStage,
   type SopReferenceImage,
 } from './sopGeneration'
-import { sopLibraryId } from './sopLibrary'
+import { getMetaInstructionExcludeText, sopLibraryId } from './sopLibrary'
 import { getSopCoverCandidates } from './sopCover'
 import { getAllSopBatchSnapshots } from '../../lib/db'
 import SopCoverImage from './SopCoverImage'
@@ -104,6 +105,7 @@ function generationStepsBefore(step: GenerationStepId) {
 
 function getGenerationErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : '未知错误，请检查 API 配置后重试'
+  if (/开启“排除文字”后/.test(message)) return `${message}。请保持开关开启并重新生成，或关闭开关后改用带文案策略。`
   if (/缺少名称、说明或 SOP 正文|缺少可用的 SOP 正文|返回不完整内容/.test(message)) {
     return 'AI 返回内容不完整，系统已自动尝试修复。请重新生成；若仍失败，请切换文本模型或简化生成元指令。'
   }
@@ -170,6 +172,7 @@ export default function SopManagementCenter({
   const [generatorMetaId, setGeneratorMetaId] = useState(metaInstructions[0]?.id ?? '')
   const [generatorGroupId, setGeneratorGroupId] = useState(groups[0]?.id ?? '')
   const [generatorBrief, setGeneratorBrief] = useState('')
+  const [excludeTextOverrides, setExcludeTextOverrides] = useState<Record<string, boolean>>({})
   const [referenceImages, setReferenceImages] = useState<Array<SopReferenceImage & { id: string }>>([])
   const [referenceDragActive, setReferenceDragActive] = useState(false)
   const [job, setJob] = useState<GenerationJob>({ status: 'idle', message: '等待生成' })
@@ -218,6 +221,7 @@ export default function SopManagementCenter({
     itemDraft.description !== persistedItem.description ||
     itemDraft.content !== persistedItem.content ||
     itemDraft.executionMode !== persistedItem.executionMode ||
+    itemDraft.excludeText !== persistedItem.excludeText ||
     itemDraft.groupId !== persistedItem.groupId ||
     itemDraft.coverImageId !== persistedItem.coverImageId
   ))
@@ -235,6 +239,9 @@ export default function SopManagementCenter({
   const itemVariablePromptValidation = itemVariablePromptMode && itemDraft ? parseVariablePrompt(itemDraft.content) : null
   const generatorMeta = metaInstructions.find((item) => item.id === generatorMetaId)
   const generatingVariablePrompt = generatorMeta?.kind === 'variable-prompt-skill'
+  const generatorExcludeText = generatorMeta
+    ? excludeTextOverrides[generatorMeta.id] ?? getMetaInstructionExcludeText(generatorMeta)
+    : false
   const itemEditorHint = autoSaveState === 'saved'
     ? '修改已自动保存。'
     : itemDirty
@@ -476,6 +483,7 @@ export default function SopManagementCenter({
       description: '',
       instruction: '',
       kind: 'custom',
+      excludeTextByDefault: true,
       createdAt: now,
       updatedAt: now,
     }
@@ -607,7 +615,7 @@ export default function SopManagementCenter({
         referenceImages,
         meta.kind === 'variable-prompt-skill' ? 'variable-prompt-skill' : meta.kind === 'image-prompt' ? 'image-prompt' : 'general',
         meta.instruction,
-        { onProgress: updateGenerationProgress },
+        { onProgress: updateGenerationProgress, excludeText: meta.kind === 'variable-prompt-skill' ? generatorExcludeText : undefined },
       )
       setJob((current) => ({
         ...current,
@@ -624,6 +632,7 @@ export default function SopManagementCenter({
         description: generated.description,
         content: generated.content,
         executionMode: generated.executionMode,
+        excludeText: generated.executionMode === 'variable-prompt' ? generatorExcludeText : undefined,
         source: 'generated',
         metaInstructionId: meta.id,
         createdBy: currentUserId,
@@ -927,7 +936,11 @@ export default function SopManagementCenter({
                     <Button disabled={!metaDraft.name.trim() || !metaDraft.instruction.trim()} onClick={() => onSaveMetaInstruction({ ...metaDraft, updatedAt: Date.now() })} leadingIcon={<Save size={15} />}>保存</Button>
                   </div>
                   <TextField label="名称" value={metaDraft.name} onChange={(event) => setMetaDraft({ ...metaDraft, name: event.target.value })} />
-                  <SelectField label="类型" value={metaDraft.kind} onChange={(event) => setMetaDraft({ ...metaDraft, kind: event.target.value as SopMetaInstruction['kind'] })} options={[{ value: 'general', label: '通用 SOP' }, { value: 'image-prompt', label: '图片提示词 SOP' }, { value: 'variable-prompt-skill', label: '变量提示词技能' }, { value: 'custom', label: '自定义' }]} />
+                  <SelectField label="类型" value={metaDraft.kind} onChange={(event) => {
+                    const kind = event.target.value as SopMetaInstruction['kind']
+                    setMetaDraft({ ...metaDraft, kind, excludeTextByDefault: kind === 'variable-prompt-skill' ? metaDraft.excludeTextByDefault ?? true : metaDraft.excludeTextByDefault })
+                  }} options={[{ value: 'general', label: '通用 SOP' }, { value: 'image-prompt', label: '图片提示词 SOP' }, { value: 'variable-prompt-skill', label: '变量提示词技能' }, { value: 'custom', label: '自定义' }]} />
+                  {metaDraft.kind === 'variable-prompt-skill' && <Switch checked={getMetaInstructionExcludeText(metaDraft)} onCheckedChange={(checked) => setMetaDraft({ ...metaDraft, excludeTextByDefault: checked })} label="默认排除文字与文案排版" description="保存后，使用此技能生成变量提示词时会沿用该设置。" />}
                   <TextArea label="说明" value={metaDraft.description} onChange={(event) => setMetaDraft({ ...metaDraft, description: event.target.value })} className="min-h-24 leading-6" />
                   <TextArea label="元指令正文" value={metaDraft.instruction} onChange={(event) => setMetaDraft({ ...metaDraft, instruction: event.target.value })} className="min-h-[420px] font-mono text-xs leading-6" />
                 </div>
@@ -949,6 +962,22 @@ export default function SopManagementCenter({
                 <SelectField label="生成元指令" value={generatorMetaId} onChange={(event) => setGeneratorMetaId(event.target.value)} options={[{ value: '', label: '请选择' }, ...metaInstructions.map((item) => ({ value: item.id, label: item.name }))]} />
                 <SelectField label="保存到分组" value={generatorGroupId} onChange={(event) => setGeneratorGroupId(event.target.value)} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
                 <TextArea label="生成说明" aria-label="SOP 生成说明" value={generatorBrief} onChange={(event) => setGeneratorBrief(event.target.value)} placeholder={generatingVariablePrompt ? '补充目标、复刻或探索方向、受众与文案要求' : '说明 SOP 的目标、输入、输出格式和禁止项'} className="min-h-32 leading-6" />
+                {generatingVariablePrompt && generatorMeta && (
+                  <Switch
+                    checked={generatorExcludeText}
+                    disabled={job.status === 'running'}
+                    onCheckedChange={(checked) => {
+                      setExcludeTextOverrides((current) => ({ ...current, [generatorMeta.id]: checked }))
+                      onSaveMetaInstruction({ ...generatorMeta, excludeTextByDefault: checked, updatedAt: Date.now() })
+                    }}
+                    aria-label="排除参考图中的文字与文案排版"
+                    label="排除文字与文案排版"
+                    description={generatorExcludeText
+                      ? '只提取纯视觉策略；不生成文案、标题、文字区或文案排版变量。此选择会随当前技能保存。'
+                      : '允许当前技能分析并保留有意设计的文案；此选择会随当前技能保存。'}
+                    className="rounded-xl border border-[hsl(var(--ds-color-border))] bg-[hsl(var(--ds-color-surface-subtle))] p-3"
+                  />
+                )}
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <div>

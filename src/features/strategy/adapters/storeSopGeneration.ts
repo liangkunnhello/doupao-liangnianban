@@ -19,6 +19,11 @@ import {
   type SopPromptBatchContext,
 } from '../sopPromptBatch'
 import type { SopLibraryItem } from '../types'
+import {
+  applyVariablePromptTextPolicy,
+  EXCLUDE_TEXT_SKILL_INSTRUCTION,
+  KEEP_TEXT_SKILL_INSTRUCTION,
+} from '../variablePromptTextPolicy'
 
 const SOP_GENERATION_TEXT_FORMAT = {
   type: 'json_schema',
@@ -101,16 +106,17 @@ export const generateSopFromStore: GenerateSop = async (
   }
 
   const proxy = readClientDevProxyConfig()
+  const variablePromptMode = kind === 'variable-prompt-skill'
+  const excludeText = variablePromptMode ? options?.excludeText ?? true : false
   options?.onProgress?.({
     stage: 'prepare',
     message: referenceImages.length > 0
       ? `正在整理 ${referenceImages.length} 张参考图片与生成说明`
       : '正在整理生成说明与元指令',
   })
-  const content = buildSopRequestContent(brief, context, referenceImages, kind)
+  const content = buildSopRequestContent(brief, context, referenceImages, kind, excludeText)
   const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   const baseInstruction = getSopGeneratorInstruction(kind, metaInstruction)
-  const variablePromptMode = kind === 'variable-prompt-skill'
   const responseFormat = variablePromptMode ? VARIABLE_PROMPT_GENERATION_TEXT_FORMAT : SOP_GENERATION_TEXT_FORMAT
   const send = (useStructuredOutput: boolean, retryIncomplete = false) => fetch(url, {
     method: 'POST',
@@ -127,6 +133,7 @@ export const generateSopFromStore: GenerateSop = async (
         variablePromptMode
           ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
           : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
+        variablePromptMode ? (excludeText ? EXCLUDE_TEXT_SKILL_INSTRUCTION : KEEP_TEXT_SKILL_INSTRUCTION) : '',
         retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
       ].filter(Boolean).join('\n\n'),
       input: [{ role: 'user', content }],
@@ -156,11 +163,12 @@ export const generateSopFromStore: GenerateSop = async (
   const parse = (text: string) => {
     if (!variablePromptMode) return parseGeneratedSop(text)
     const generated = parseGeneratedVariablePrompt(text)
-    const validation = parseVariablePrompt(generated.content)
+    const contentWithTextPolicy = applyVariablePromptTextPolicy(generated.content, excludeText)
+    const validation = parseVariablePrompt(contentWithTextPolicy)
     if (!validation.enabled) {
       throw new Error(`生成的变量提示词格式有误：${validation.errors[0] ?? '未识别到有效变量'}`)
     }
-    return generated
+    return { ...generated, content: contentWithTextPolicy }
   }
   try {
     return parse(extractResponseText(await response.json()))
@@ -174,7 +182,8 @@ export const generateSopFromStore: GenerateSop = async (
     options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验修复后的变量提示词' : '正在校验修复后的 SOP 结构' })
     try {
       return parse(extractResponseText(await retryResponse.json()))
-    } catch {
+    } catch (retryError) {
+      if (retryError instanceof Error && /开启“排除文字”后/.test(retryError.message)) throw retryError
       throw new Error('AI 连续两次返回不完整内容，请切换文本模型或简化元指令后重试')
     }
   }

@@ -121,6 +121,8 @@ export interface SopLibraryItem {
   content: string
   /** 变量提示词直接填入生图输入框；生成型 SOP 交给文本模型生成具体提示词。 */
   executionMode?: 'prompt-generator' | 'variable-prompt'
+  /** 生成变量提示词资产时是否忽略参考图中的文字与文案排版。 */
+  excludeText?: boolean
   source: 'manual' | 'generated' | 'legacy-preset'
   metaInstructionId?: string
   createdBy: string
@@ -137,6 +139,8 @@ export interface SopMetaInstruction {
   instruction: string
   /** variable-prompt-skill 直接反推可执行变量提示词，不生成二次提示词 SOP。 */
   kind: 'general' | 'image-prompt' | 'variable-prompt-skill' | 'custom'
+  /** 变量提示词技能是否默认忽略参考图中的文字与文案排版；在生成面板修改后持久复用。 */
+  excludeTextByDefault?: boolean
   createdAt: number
   updatedAt: number
 }

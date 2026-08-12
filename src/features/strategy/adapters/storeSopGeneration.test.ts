@@ -115,7 +115,7 @@ describe('store SOP generation', () => {
 
     await expect(generateSopFromStore('反推图片', {}, [
       { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
-    ], 'variable-prompt-skill', '技能元指令')).resolves.toEqual({
+    ], 'variable-prompt-skill', '技能元指令', { excludeText: false })).resolves.toEqual({
       name: '参考图变量策略',
       description: '直接拆解后生图。',
       content: variablePrompt,
@@ -137,11 +137,39 @@ describe('store SOP generation', () => {
 
     await expect(generateSopFromStore('', {}, [
       { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
-    ], 'variable-prompt-skill', '技能元指令')).resolves.toMatchObject({
+    ], 'variable-prompt-skill', '技能元指令', { excludeText: false })).resolves.toMatchObject({
       name: '修复模板',
       content: repaired,
       executionMode: 'variable-prompt',
     })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('enforces the persisted no-text policy in the request and saved template', async () => {
+    const prompt = '图片比例为16:9。生成{{主体}}。\n\n可变项：\n{{主体}}：猫 / 狗'
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(JSON.stringify({ name: '纯视觉', description: '说明', variablePrompt: prompt })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const generated = await generateSopFromStore('', {}, [
+      { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
+    ], 'variable-prompt-skill', '技能元指令', { excludeText: true })
+
+    expect(generated.content).toContain('忽略参考图中的所有文字与文案排版')
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(request.instructions).toContain('禁止出现文案、文字、标题')
+    expect(request.input[0].content[0].text).toContain('排除全部文字与文案排版')
+  })
+
+  it('rejects copy variables when no-text mode remains enabled after retry', async () => {
+    const copyPrompt = '图片比例为16:9。生成{{主体文案包}}。\n\n可变项：\n{{主体文案包}}：猫，标题“萌宠” / 狗，标题“伙伴”'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(mockResponse(JSON.stringify({ name: '错误', description: '说明', variablePrompt: copyPrompt })))
+      .mockResolvedValueOnce(mockResponse(JSON.stringify({ name: '仍错误', description: '说明', variablePrompt: copyPrompt })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(generateSopFromStore('', {}, [
+      { name: 'A.png', dataUrl: 'data:image/png;base64,AAA' },
+    ], 'variable-prompt-skill', '技能元指令', { excludeText: true })).rejects.toThrow('开启“排除文字”后不能生成变量')
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 

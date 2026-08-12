@@ -683,7 +683,7 @@ export const useRequirementPrototype = create<RequirementPrototypeState>()(
     }),
     {
       name: 'doupao.requirement-prototype.v1',
-      version: 5,
+      version: 6,
       migrate: (persistedState) => {
         const state = persistedState as Partial<RequirementPrototypeState>
         return {

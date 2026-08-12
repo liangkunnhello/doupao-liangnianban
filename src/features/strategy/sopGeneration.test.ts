@@ -120,4 +120,11 @@ describe('SOP natural-language generator', () => {
       { type: 'input_image', image_url: 'data:image/jpeg;base64,BBB' },
     ])
   })
+
+  it('describes the selected text policy only for variable-prompt skills', () => {
+    const excluded = buildSopRequestContent('', {}, [{ name: '参考图.png', dataUrl: 'data:image/png;base64,AAA' }], 'variable-prompt-skill', true)
+    const allowed = buildSopRequestContent('', {}, [{ name: '参考图.png', dataUrl: 'data:image/png;base64,AAA' }], 'variable-prompt-skill', false)
+    expect(excluded[0].text).toContain('排除全部文字与文案排版，只提取纯视觉策略')
+    expect(allowed[0].text).toContain('不强制排除文字')
+  })
 })
