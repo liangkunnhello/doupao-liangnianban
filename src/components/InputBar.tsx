@@ -1,6 +1,6 @@
 import { lazy, Suspense, useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitTaskWithData, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -37,10 +37,52 @@ import { normalizePromptVariableMarkers, replaceVariableNameInPrompt } from '../
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useDialogFocusTrap } from '../design-system'
+import { SquareIcon as Square, WandSparklesIcon as WandSparkles } from '../design-system/icons'
+import {
+  buildGalleryAgentPromptBatch,
+  GALLERY_AGENT_SIMILARITY_LEVELS,
+  generateGalleryAgentVariablePrompts,
+  shouldUseGalleryAgentReferenceImages,
+  type GalleryAgentSimilarity,
+  type GalleryAgentSkillKind,
+} from '../features/strategy/galleryAgentGeneration'
 
 const AgentBatchPlannerModal = lazy(() => import('./AgentBatchPlannerModal'))
 const GallerySopBatchModal = lazy(() => import('../features/strategy/adapters/GallerySopBatchModal'))
 const GallerySopManagementCenter = lazy(() => import('../features/strategy/adapters/GallerySopManagementCenter'))
+
+const GALLERY_AGENT_MODE_STORAGE_KEY = 'doupao.gallery-agent-mode.v1'
+const GALLERY_AGENT_SIMILARITY_STORAGE_KEY = 'doupao.gallery-agent-similarity.v1'
+
+type GalleryAgentRunStatus = {
+  phase: 'analyzing' | 'extracting' | 'submitting' | 'success' | 'error' | 'stopped'
+  message: string
+  productType?: string
+  skillKind?: GalleryAgentSkillKind
+  completed?: number
+  total?: number
+}
+
+function readGalleryAgentMode() {
+  try {
+    return window.localStorage.getItem(GALLERY_AGENT_MODE_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function readGalleryAgentSimilarity(): GalleryAgentSimilarity {
+  try {
+    const value = Number(window.localStorage.getItem(GALLERY_AGENT_SIMILARITY_STORAGE_KEY))
+    return Math.max(1, Math.min(5, Math.round(value || 3))) as GalleryAgentSimilarity
+  } catch {
+    return 3
+  }
+}
+
+function isAbortError(error: unknown) {
+  return typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError'
+}
 
 
 function getMentionTagTextLength(el: Element) {
@@ -575,6 +617,10 @@ export default function InputBar() {
   const [gallerySopAutoGenerateByTab, setGallerySopAutoGenerateByTab] = useState<Record<string, boolean>>({})
   const [gallerySopSecondReferenceByTab, setGallerySopSecondReferenceByTab] = useState<Record<string, boolean>>({})
   const [gallerySopRunStatusByTab, setGallerySopRunStatusByTab] = useState<Record<string, GallerySopRunStatus>>({})
+  const [galleryAgentEnabled, setGalleryAgentEnabled] = useState(readGalleryAgentMode)
+  const [galleryAgentSimilarity, setGalleryAgentSimilarity] = useState<GalleryAgentSimilarity>(readGalleryAgentSimilarity)
+  const [galleryAgentRunStatusByTab, setGalleryAgentRunStatusByTab] = useState<Record<string, GalleryAgentRunStatus>>({})
+  const galleryAgentAbortRef = useRef<Record<string, AbortController>>({})
   const [taskMoveMenuOpen, setTaskMoveMenuOpen] = useState(false)
   const taskMoveMenuRef = useRef<HTMLDivElement>(null)
   const taskMoveDestinations = useMemo(
@@ -609,6 +655,27 @@ export default function InputBar() {
     if (selectedTaskIds.length === 0) setTaskMoveMenuOpen(false)
   }, [selectedTaskIds.length])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GALLERY_AGENT_MODE_STORAGE_KEY, String(galleryAgentEnabled))
+    } catch {
+      // Ignore unavailable storage; the current session still keeps the setting.
+    }
+  }, [galleryAgentEnabled])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GALLERY_AGENT_SIMILARITY_STORAGE_KEY, String(galleryAgentSimilarity))
+    } catch {
+      // Ignore unavailable storage; the current session still keeps the setting.
+    }
+  }, [galleryAgentSimilarity])
+
+  useEffect(() => () => {
+    Object.values(galleryAgentAbortRef.current).forEach((controller) => controller.abort())
+    galleryAgentAbortRef.current = {}
+  }, [])
+
   const VAR_COLOR_MAP = useMemo(() => {
     const sorted = [...wordLibraryEntries].filter((e) => e.deletedAt == null).sort((a, b) => a.key.localeCompare(b.key, 'zh-CN'))
     const map: Record<string, string> = {}
@@ -631,6 +698,10 @@ export default function InputBar() {
   const gallerySopSecondReference = gallerySopSecondReferenceByTab[gallerySopScopeId] ?? false
   const gallerySopTotalImages = getSopTotalImageCount(gallerySopPromptCount, gallerySopImagesPerPrompt)
   const gallerySopRunStatus = gallerySopRunStatusByTab[gallerySopScopeId]
+  const galleryAgentRunStatus = galleryAgentRunStatusByTab[gallerySopScopeId]
+  const galleryAgentIsRunning = galleryAgentRunStatus?.phase === 'analyzing'
+    || galleryAgentRunStatus?.phase === 'extracting'
+    || galleryAgentRunStatus?.phase === 'submitting'
   const setGallerySopId = useCallback((id: string) => {
     if (id === gallerySopId) return
     window.localStorage.removeItem(getGallerySopPromptRunStorageKey(activeWorkspaceTabId))
@@ -663,9 +734,18 @@ export default function InputBar() {
     () => sopItems.find((item) => item.id === gallerySopId) ?? null,
     [gallerySopId, sopItems],
   )
+  const setGalleryAgentMode = useCallback((enabled: boolean) => {
+    if (galleryAgentIsRunning) return
+    setGalleryAgentEnabled(enabled)
+    if (enabled) {
+      setGallerySopId('')
+      setGallerySopAutoStartTabId(null)
+    }
+  }, [galleryAgentIsRunning, setGallerySopId])
   const handleGalleryLibraryApply = useCallback((item: SopLibraryItem) => {
     try {
       const application = resolveGalleryLibraryApplication(item)
+      setGalleryAgentEnabled(false)
       if (application.mode === 'prompt-generator') {
         setGallerySopId(application.sopId)
         showToast(`已使用生成型 SOP「${item.name}」`, 'success')
@@ -1088,11 +1168,18 @@ export default function InputBar() {
   const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'paused' || gallerySopRunStatus?.phase === 'submitting'
   const gallerySopAvailablePromptCount = gallerySopRunStatus?.availablePrompts ?? savedSopPromptCount
   const gallerySopHasPromptList = gallerySopAvailablePromptCount > 0
-  const canSubmit = gallerySopModeActive
+  const galleryAgentModeActive = appMode === 'gallery' && galleryAgentEnabled
+  const canSubmit = galleryAgentModeActive
+    ? Boolean(inputImages.length > 0 && hasSubmitApiConfig && !galleryAgentIsRunning)
+    : gallerySopModeActive
     ? Boolean(activeGallerySop && !activeAgentIsRunning)
     : Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
+    : galleryAgentModeActive
+      ? galleryAgentIsRunning
+        ? '停止智能体生成'
+        : `智能体生成 ${params.n} 张图片`
     : gallerySopModeActive
       ? gallerySopIsRunning
         ? '查看 SOP 提示词生成进度'
@@ -1104,6 +1191,10 @@ export default function InputBar() {
       : '请先配置 API'
   const submitButtonText = activeAgentIsRunning
     ? '停止'
+    : galleryAgentModeActive
+      ? galleryAgentIsRunning
+        ? '停止智能体'
+        : `智能生成 ${params.n} 张`
     : gallerySopModeActive
       ? gallerySopIsRunning
         ? '查看提示词进度'
@@ -1113,19 +1204,168 @@ export default function InputBar() {
     : maskDraft ? '遮罩编辑' : '生成图像'
   const submitTooltipText = activeAgentIsRunning
     ? '停止生成'
+    : galleryAgentModeActive
+      ? galleryAgentIsRunning
+        ? galleryAgentRunStatus?.message ?? '停止智能体生成'
+        : inputImages.length === 0
+          ? '请先添加至少一张参考图片'
+          : submitButtonAriaLabel
     : gallerySopModeActive
     ? submitButtonAriaLabel
     : '尚未完成 API 配置，请在右上角设置中进行'
   const showSubmitTooltip = submitHover && (
     activeAgentIsRunning ||
+    galleryAgentModeActive ||
     (gallerySopModeActive ? true : !hasSubmitApiConfig)
   )
-  const promptPlaceholder = gallerySopModeActive
+  const promptPlaceholder = galleryAgentModeActive
+    ? '补充产品、目标受众、文案保留或画面限制（可选）；智能体会先识别产品并选择策略技能'
+    : gallerySopModeActive
     ? '本次生成要求（可选）：补充本批次的主题、内容和限制；留空则完全按 SOP 执行'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
+  const stopGalleryAgent = useCallback(() => {
+    const controller = galleryAgentAbortRef.current[gallerySopScopeId]
+    if (!controller || controller.signal.aborted) return
+    controller.abort()
+    setGalleryAgentRunStatusByTab((current) => ({
+      ...current,
+      [gallerySopScopeId]: {
+        ...(current[gallerySopScopeId] ?? { message: '已停止智能体生成' }),
+        phase: 'stopped',
+        message: (current[gallerySopScopeId]?.completed ?? 0) > 0
+          ? `已停止继续提交，已提交的 ${current[gallerySopScopeId]?.completed} 张图片仍会完成生成`
+          : '已停止智能体生成',
+      },
+    }))
+  }, [gallerySopScopeId])
+
+  const runGalleryAgent = useCallback(async () => {
+    const scopeId = gallerySopScopeId
+    const images = inputImages.map((image) => ({ ...image }))
+    if (images.length === 0) {
+      showToast('智能体模式至少需要一张参考图片', 'error')
+      return
+    }
+    const previous = galleryAgentAbortRef.current[scopeId]
+    previous?.abort()
+    const controller = new AbortController()
+    galleryAgentAbortRef.current[scopeId] = controller
+    const requestedCount = Math.max(1, Math.trunc(params.n || 1))
+    const activeTab = workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId)
+    setGalleryAgentRunStatusByTab((current) => ({
+      ...current,
+      [scopeId]: { phase: 'analyzing', message: '正在识别产品与素材类型' },
+    }))
+    try {
+      const generated = await generateGalleryAgentVariablePrompts({
+        images,
+        brief: stripImageMentionMarkers(prompt).trim(),
+        similarity: galleryAgentSimilarity,
+        targetImageCount: requestedCount,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (controller.signal.aborted || galleryAgentAbortRef.current[scopeId] !== controller) return
+          setGalleryAgentRunStatusByTab((current) => ({
+            ...current,
+            [scopeId]: {
+              ...current[scopeId],
+              phase: progress.stage === 'analyze' ? 'analyzing' : 'extracting',
+              message: progress.message,
+              completed: progress.completed,
+              total: progress.total,
+            },
+          }))
+        },
+      })
+      controller.signal.throwIfAborted()
+      if (galleryAgentAbortRef.current[scopeId] !== controller) return
+      const finalPrompts = buildGalleryAgentPromptBatch(
+        generated.variablePrompts,
+        requestedCount,
+        `${scopeId}:${Date.now()}`,
+      )
+      if (finalPrompts.length === 0) throw new Error('智能体未能拆解出可用的最终提示词')
+      setGalleryAgentRunStatusByTab((current) => ({
+        ...current,
+        [scopeId]: {
+          phase: 'submitting',
+          message: `已选择${generated.plan.skillKind === 'app-copy' ? '带文案' : '纯视觉'}技能，正在提交 ${finalPrompts.length} 张图片`,
+          productType: generated.plan.productType,
+          skillKind: generated.plan.skillKind,
+          completed: 0,
+          total: finalPrompts.length,
+        },
+      }))
+      const useReferences = shouldUseGalleryAgentReferenceImages(galleryAgentSimilarity)
+      let submitted = 0
+      for (let index = 0; index < finalPrompts.length; index++) {
+        controller.signal.throwIfAborted()
+        const taskId = await submitTaskWithData({
+          prompt: finalPrompts[index],
+          inputImages: useReferences ? images : [],
+          inputImageFolder: null,
+          params: { ...params, n: 1 },
+          maskDraft: null,
+          targetTabId: activeWorkspaceTabId,
+          scheduledOutputPath: customOutputPath.trim() || undefined,
+          scheduledOutputSubFolder: activeTab?.name,
+        }, { silentSuccess: true })
+        if (taskId) {
+          submitted += 1
+          setGalleryAgentRunStatusByTab((current) => ({
+            ...current,
+            [scopeId]: {
+              ...(current[scopeId] ?? { phase: 'submitting', message: '正在提交图片任务' }),
+              completed: submitted,
+              total: finalPrompts.length,
+              message: `正在提交图片任务 ${submitted}/${finalPrompts.length}`,
+            },
+          }))
+        }
+      }
+      controller.signal.throwIfAborted()
+      if (submitted === 0) throw new Error('图片任务未能提交，请检查图片 API 配置')
+      setGalleryAgentRunStatusByTab((current) => ({
+        ...current,
+        [scopeId]: {
+          phase: 'success',
+          message: `已识别“${generated.plan.productType}”并提交 ${submitted} 张图片`,
+          productType: generated.plan.productType,
+          skillKind: generated.plan.skillKind,
+          completed: submitted,
+          total: finalPrompts.length,
+        },
+      }))
+      showToast(`智能体已选择${generated.plan.skillKind === 'app-copy' ? '带文案' : '纯视觉'}技能，提交 ${submitted} 张图片`, 'success')
+    } catch (error) {
+      if (galleryAgentAbortRef.current[scopeId] !== controller) return
+      if (controller.signal.aborted || isAbortError(error)) {
+        setGalleryAgentRunStatusByTab((current) => ({
+          ...current,
+          [scopeId]: {
+            ...(current[scopeId] ?? {}),
+            phase: 'stopped',
+            message: '已停止智能体生成',
+          },
+        }))
+        return
+      }
+      const message = error instanceof Error ? error.message : '智能体生成失败'
+      setGalleryAgentRunStatusByTab((current) => ({
+        ...current,
+        [scopeId]: { phase: 'error', message },
+      }))
+      showToast(message, 'error')
+    } finally {
+      if (galleryAgentAbortRef.current[scopeId] === controller) delete galleryAgentAbortRef.current[scopeId]
+    }
+  }, [activeWorkspaceTabId, customOutputPath, galleryAgentSimilarity, gallerySopScopeId, inputImages, params, prompt, showToast, workspaceTabs])
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
+    } else if (galleryAgentModeActive) {
+      if (galleryAgentIsRunning) stopGalleryAgent()
+      else void runGalleryAgent()
     } else if (gallerySopModeActive) {
       if (!activeGallerySop) {
         showToast('请先选择 SOP 预设', 'error')
@@ -1145,7 +1385,7 @@ export default function InputBar() {
     } else {
       void submitTask()
     }
-  }, [activeGallerySop, appMode, gallerySopAutoGenerate, gallerySopIsRunning, gallerySopModeActive, gallerySopPromptCount, gallerySopScopeId, openGallerySopBatch, revealGallerySopBatch])
+  }, [activeGallerySop, appMode, galleryAgentIsRunning, galleryAgentModeActive, gallerySopAutoGenerate, gallerySopIsRunning, gallerySopModeActive, gallerySopPromptCount, gallerySopScopeId, openGallerySopBatch, revealGallerySopBatch, runGalleryAgent, stopGalleryAgent])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -3044,9 +3284,77 @@ export default function InputBar() {
     )
   }
 
+  const renderGalleryAgentControls = () => {
+    if (appMode !== 'gallery') return null
+    const level = GALLERY_AGENT_SIMILARITY_LEVELS[galleryAgentSimilarity]
+    return (
+      <>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={galleryAgentEnabled}
+          aria-label="智能体模式"
+          disabled={galleryAgentIsRunning}
+          onClick={() => setGalleryAgentMode(!galleryAgentEnabled)}
+          className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-full px-3 text-xs font-semibold transition-[background-color,transform] duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${
+            galleryAgentEnabled
+              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:hover:bg-emerald-500/25'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-white/[0.1]'
+          }`}
+        >
+          <WandSparkles size={15} />
+          智能体
+          <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 overflow-hidden rounded-full ${galleryAgentEnabled ? 'bg-emerald-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
+            <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${galleryAgentEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+          </span>
+        </button>
+        {galleryAgentEnabled && (
+          <>
+            <label
+              className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-emerald-200/80 bg-emerald-50/80 px-3 text-xs text-emerald-700 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-200"
+              title={`${galleryAgentSimilarity}/5 · ${level.guidance}`}
+            >
+              <span>相似度</span>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={galleryAgentSimilarity}
+                disabled={galleryAgentIsRunning}
+                onChange={(event) => setGalleryAgentSimilarity(Number(event.target.value) as GalleryAgentSimilarity)}
+                aria-label="智能体相似度"
+                className="h-1.5 w-24 accent-emerald-600 disabled:cursor-not-allowed"
+              />
+              <span className="min-w-[4.5rem] font-semibold tabular-nums">{galleryAgentSimilarity}/5 · {level.label}</span>
+            </label>
+            {galleryAgentRunStatus && (
+              <span
+                className={`inline-flex h-8 max-w-[22rem] shrink-0 items-center gap-2 truncate rounded-full px-3 text-xs font-medium ${
+                  galleryAgentRunStatus.phase === 'error'
+                    ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
+                    : galleryAgentRunStatus.phase === 'success'
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200'
+                      : galleryAgentRunStatus.phase === 'stopped'
+                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
+                        : 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
+                }`}
+                title={galleryAgentRunStatus.message}
+              >
+                {galleryAgentIsRunning && <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-current motion-reduce:animate-none" />}
+                <span className="truncate">{galleryAgentRunStatus.message}</span>
+              </span>
+            )}
+          </>
+        )}
+      </>
+    )
+  }
+
   const renderInputContextControls = () => (
     <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex">
-      {renderSopContextControls()}
+      {renderGalleryAgentControls()}
+      {!galleryAgentModeActive && renderSopContextControls()}
       {renderParamSummary()}
     </div>
   )
@@ -3578,6 +3886,11 @@ export default function InputBar() {
 
           {/* 参数 + 按钮 */}
           <div className="mt-3">
+            {appMode === 'gallery' && (
+              <div className="mb-2 flex flex-wrap items-center gap-2 sm:hidden">
+                {renderGalleryAgentControls()}
+              </div>
+            )}
             {/* 桌面端布局 */}
             <div className="hidden sm:flex flex-nowrap items-center justify-between gap-3">
               {renderInputContextControls()}
@@ -3639,12 +3952,12 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : gallerySopModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : gallerySopModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : galleryAgentIsRunning ? stopGalleryAgent() : gallerySopModeActive || galleryAgentModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
+                    disabled={activeAgentIsRunning || galleryAgentIsRunning ? false : gallerySopModeActive || galleryAgentModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
                     className={`flex min-w-[116px] items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition-[background-color,transform,box-shadow,opacity] duration-150 shadow-sm hover:shadow active:scale-[0.97] ${
-                      activeAgentIsRunning
+                      activeAgentIsRunning || galleryAgentIsRunning
                         ? 'bg-[hsl(var(--ds-color-danger))] text-white hover:bg-[hsl(var(--ds-color-danger-hover))]'
-                        : gallerySopModeActive
+                        : gallerySopModeActive || galleryAgentModeActive
                         ? 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
                         ? 'bg-[hsl(var(--ds-color-surface-subtle))] text-[hsl(var(--ds-color-text-muted))] dark:bg-[hsl(var(--ds-color-surface-subtle))] cursor-pointer'
@@ -3652,10 +3965,8 @@ export default function InputBar() {
                     }`}
                     aria-label={submitButtonAriaLabel}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
+                    {activeAgentIsRunning || galleryAgentIsRunning ? (
+                      <Square size={18} fill="currentColor" />
                     ) : (
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -3766,23 +4077,21 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : gallerySopModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : gallerySopModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : galleryAgentIsRunning ? stopGalleryAgent() : gallerySopModeActive || galleryAgentModeActive ? submitCurrentMode() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
+                    disabled={activeAgentIsRunning || galleryAgentIsRunning ? false : gallerySopModeActive || galleryAgentModeActive ? !canSubmit : hasSubmitApiConfig ? !canSubmit : false}
                     aria-label={submitButtonAriaLabel}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition shadow-sm ${
-                      activeAgentIsRunning
+                      activeAgentIsRunning || galleryAgentIsRunning
                         ? 'bg-[hsl(var(--ds-color-danger))] text-white hover:bg-[hsl(var(--ds-color-danger-hover))]'
-                        : gallerySopModeActive
+                        : gallerySopModeActive || galleryAgentModeActive
                         ? 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                         : !hasSubmitApiConfig
                         ? 'bg-[hsl(var(--ds-color-surface-subtle))] text-[hsl(var(--ds-color-text-muted))] dark:bg-[hsl(var(--ds-color-surface-subtle))] cursor-pointer'
                         : 'bg-[hsl(var(--ds-color-primary))] text-[hsl(var(--ds-color-text-inverse))] hover:bg-[hsl(var(--ds-color-primary-hover))] disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:text-[hsl(var(--ds-color-text-subtle))] dark:disabled:bg-[hsl(var(--ds-color-surface-subtle))] disabled:opacity-100 disabled:cursor-not-allowed'
                     }`}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
+                    {activeAgentIsRunning || galleryAgentIsRunning ? (
+                      <Square size={16} fill="currentColor" />
                     ) : (
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
