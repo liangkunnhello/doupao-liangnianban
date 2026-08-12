@@ -104,6 +104,30 @@ describe('store SOP generation', () => {
     expect(progress.at(-1)).toBe('parse')
   })
 
+  it('aborts the active model request without starting a repair retry', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal
+      if (signal?.aborted) {
+        reject(new DOMException('已停止', 'AbortError'))
+        return
+      }
+      signal?.addEventListener('abort', () => reject(new DOMException('已停止', 'AbortError')), { once: true })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const generation = generateSopFromStore('生成 SOP', {}, [], 'general', undefined, {
+      signal: controller.signal,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+
+    controller.abort()
+
+    await expect(generation).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('uses the skill schema and validates a direct variable prompt before returning it', async () => {
     const variablePrompt = '图片比例为16:9。生成{{主体}}，使用{{构图}}。\n\n可变项：\n{{主体}}：猫 / 狗\n{{构图}}：近景 / 全景'
     const fetchMock = vi.fn().mockResolvedValue(mockResponse(JSON.stringify({

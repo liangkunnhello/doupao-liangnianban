@@ -34,6 +34,7 @@ import {
   PlusIcon as Plus,
   SaveIcon as Save,
   Settings2Icon as Settings2,
+  SquareIcon as Square,
   SparklesIcon as Sparkles,
   StarIcon as Star,
   TrashIcon as Trash2,
@@ -62,7 +63,7 @@ import { parseVariablePrompt } from '../../lib/variablePrompt'
 type CenterTab = 'library' | 'meta' | 'generate'
 type GenerationStepId = Exclude<SopGenerationProgressStage, 'repair'> | 'save'
 type GenerationJob = {
-  status: 'idle' | 'running' | 'success' | 'error'
+  status: 'idle' | 'running' | 'success' | 'error' | 'stopped'
   message: string
   error?: string
   startedAt?: number
@@ -110,6 +111,13 @@ function getGenerationErrorMessage(error: unknown) {
     return 'AI 返回内容不完整，系统已自动尝试修复。请重新生成；若仍失败，请切换文本模型或简化生成元指令。'
   }
   return message
+}
+
+function isAbortError(error: unknown) {
+  return typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && error.name === 'AbortError'
 }
 
 export default function SopManagementCenter({
@@ -184,6 +192,7 @@ export default function SopManagementCenter({
   const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>('idle')
   const autoSaveTimerRef = useRef<number | null>(null)
   const referenceDragDepthRef = useRef(0)
+  const generationAbortRef = useRef<AbortController | null>(null)
 
   const viewGeneratedPrompts = async (item: SopLibraryItem) => {
     setSnapshotDialogOpen(true)
@@ -263,6 +272,12 @@ export default function SopManagementCenter({
     const timer = window.setInterval(update, 1000)
     return () => window.clearInterval(timer)
   }, [job.startedAt, job.status])
+
+  useEffect(() => () => {
+    const controller = generationAbortRef.current
+    generationAbortRef.current = null
+    controller?.abort()
+  }, [])
 
   useEffect(() => {
     const selected = filteredItems.find((item) => item.id === selectedItemId)
@@ -573,16 +588,28 @@ export default function SopManagementCenter({
     event.stopPropagation()
   }
 
-  const updateGenerationProgress = (progress: SopGenerationProgress) => {
+  const updateGenerationProgress = (progress: SopGenerationProgress, controller: AbortController) => {
+    if (controller.signal.aborted || generationAbortRef.current !== controller) return
     const step: GenerationStepId = progress.stage === 'repair' ? 'parse' : progress.stage
-    setJob((current) => ({
-      ...current,
-      status: 'running',
-      message: progress.message,
-      error: undefined,
-      currentStep: step,
-      completedSteps: generationStepsBefore(step),
-    }))
+    setJob((current) => {
+      if (controller.signal.aborted || generationAbortRef.current !== controller || current.status !== 'running') return current
+      return {
+        ...current,
+        message: progress.message,
+        error: undefined,
+        currentStep: step,
+        completedSteps: generationStepsBefore(step),
+      }
+    })
+  }
+
+  const stopGeneration = () => {
+    const controller = generationAbortRef.current
+    if (!controller || controller.signal.aborted) return
+    controller.abort()
+    setJob((current) => current.status === 'running'
+      ? { ...current, status: 'stopped', message: '已停止生成', error: undefined }
+      : current)
   }
 
   const runGeneration = async () => {
@@ -599,6 +626,9 @@ export default function SopManagementCenter({
       setJob({ status: 'error', message: '无法开始生成', error: '请填写生成说明或添加参考图片' })
       return
     }
+    generationAbortRef.current?.abort()
+    const controller = new AbortController()
+    generationAbortRef.current = controller
     const startedAt = Date.now()
     setElapsed(0)
     setJob({
@@ -615,8 +645,13 @@ export default function SopManagementCenter({
         referenceImages,
         meta.kind === 'variable-prompt-skill' ? 'variable-prompt-skill' : meta.kind === 'image-prompt' ? 'image-prompt' : 'general',
         meta.instruction,
-        { onProgress: updateGenerationProgress, excludeText: meta.kind === 'variable-prompt-skill' ? generatorExcludeText : undefined },
+        {
+          signal: controller.signal,
+          onProgress: (progress) => updateGenerationProgress(progress, controller),
+          excludeText: meta.kind === 'variable-prompt-skill' ? generatorExcludeText : undefined,
+        },
       )
+      if (controller.signal.aborted || generationAbortRef.current !== controller) return
       setJob((current) => ({
         ...current,
         status: 'running',
@@ -652,6 +687,17 @@ export default function SopManagementCenter({
         completedSteps: SOP_GENERATION_STEPS.map((step) => step.id),
       })
     } catch (error) {
+      if (generationAbortRef.current !== controller) return
+      if (controller.signal.aborted || isAbortError(error)) {
+        setJob((current) => ({
+          ...current,
+          status: 'stopped',
+          message: '已停止生成',
+          error: undefined,
+          startedAt,
+        }))
+        return
+      }
       setJob((current) => ({
         ...current,
         status: 'error',
@@ -659,6 +705,8 @@ export default function SopManagementCenter({
         error: getGenerationErrorMessage(error),
         startedAt,
       }))
+    } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null
     }
   }
 
@@ -1030,7 +1078,15 @@ export default function SopManagementCenter({
                     </div>
                   )}
                 </div>
-                <Button onClick={() => void runGeneration()} loading={job.status === 'running'} className="w-full" size="lg" leadingIcon={<Sparkles size={17} />}>{job.status === 'running' ? (generatingVariablePrompt ? '正在反推变量提示词' : '正在生成 SOP') : (generatingVariablePrompt ? '反推并保存变量提示词' : '开始生成并保存 SOP')}</Button>
+                {job.status === 'running' ? (
+                  <Button onClick={stopGeneration} variant="danger" className="w-full" size="lg" leadingIcon={<Square size={16} />}>停止生成</Button>
+                ) : (
+                  <Button onClick={() => void runGeneration()} className="w-full" size="lg" leadingIcon={<Sparkles size={17} />}>
+                    {job.status === 'stopped'
+                      ? (generatingVariablePrompt ? '重新反推变量提示词' : '重新生成 SOP')
+                      : (generatingVariablePrompt ? '反推并保存变量提示词' : '开始生成并保存 SOP')}
+                  </Button>
+                )}
               </div>
             </DialogPane>
             <DialogPane as="aside" className="sop-center-editor-panel">
@@ -1044,7 +1100,7 @@ export default function SopManagementCenter({
                 </div>
                 <div aria-live="polite" className="sop-center-status" data-status={job.status}>
                   <div className="flex items-center gap-3">
-                    {job.status === 'running' ? <LoaderCircle className="sop-center-status-icon animate-spin" size={22} /> : job.status === 'success' ? <CheckCircle2 className="sop-center-status-icon" size={22} /> : job.status === 'error' ? <XCircle className="sop-center-status-icon" size={22} /> : <Sparkles className="sop-center-status-icon" size={22} />}
+                    {job.status === 'running' ? <LoaderCircle className="sop-center-status-icon animate-spin" size={22} /> : job.status === 'success' ? <CheckCircle2 className="sop-center-status-icon" size={22} /> : job.status === 'error' ? <XCircle className="sop-center-status-icon" size={22} /> : job.status === 'stopped' ? <Square className="sop-center-status-icon" size={20} /> : <Sparkles className="sop-center-status-icon" size={22} />}
                     <div>
                       <p className="text-sm font-semibold">{job.message}</p>
                       {job.status === 'running' && <p className="sop-center-quiet-text mt-1 text-xs">已运行 {elapsed} 秒，请保持窗口开启</p>}
@@ -1059,6 +1115,7 @@ export default function SopManagementCenter({
                   {job.error && <p role="alert" className="mt-3 whitespace-pre-wrap text-xs leading-5 text-[hsl(var(--ds-color-danger))]">{job.error}</p>}
                   {job.status === 'success' && <p className="sop-center-status-copy mt-3 text-xs leading-5">结果已自动保存到资产库；变量提示词可直接填入生图输入框，SOP 可继续生成具体提示词。</p>}
                   {job.status === 'error' && <Button onClick={() => void runGeneration()} variant="secondary" size="sm" className="mt-4">重新生成</Button>}
+                  {job.status === 'stopped' && <Button onClick={() => void runGeneration()} variant="secondary" size="sm" className="mt-4">重新生成</Button>}
                   {job.status === 'success' && <Button onClick={() => setTab('library')} variant="secondary" size="sm" className="mt-4">查看生成结果</Button>}
                 </div>
                 <ol className="sop-center-step-list" aria-label="SOP 生成详细步骤">

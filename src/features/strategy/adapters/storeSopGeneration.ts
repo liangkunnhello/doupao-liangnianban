@@ -94,6 +94,7 @@ export const generateSopFromStore: GenerateSop = async (
   metaInstruction,
   options,
 ) => {
+  options?.signal?.throwIfAborted()
   options?.onProgress?.({ stage: 'validate', message: '正在校验生成条件与模型配置' })
   validateSopGenerationInput(description, referenceImages, kind)
   const brief = description.trim()
@@ -118,29 +119,32 @@ export const generateSopFromStore: GenerateSop = async (
   const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   const baseInstruction = getSopGeneratorInstruction(kind, metaInstruction)
   const responseFormat = variablePromptMode ? VARIABLE_PROMPT_GENERATION_TEXT_FORMAT : SOP_GENERATION_TEXT_FORMAT
-  const send = (useStructuredOutput: boolean, retryIncomplete = false) => fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${profile.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    signal: options?.signal,
-    cache: 'no-store',
-    body: JSON.stringify({
-      model: profile.model || settings.model,
-      instructions: [
-        baseInstruction,
-        variablePromptMode
-          ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
-          : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
-        variablePromptMode ? (excludeText ? EXCLUDE_TEXT_SKILL_INSTRUCTION : KEEP_TEXT_SKILL_INSTRUCTION) : '',
-        retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
-      ].filter(Boolean).join('\n\n'),
-      input: [{ role: 'user', content }],
-      max_output_tokens: 8000,
-      ...(useStructuredOutput ? { text: { format: responseFormat } } : {}),
-    }),
-  })
+  const send = (useStructuredOutput: boolean, retryIncomplete = false) => {
+    options?.signal?.throwIfAborted()
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${profile.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: options?.signal,
+      cache: 'no-store',
+      body: JSON.stringify({
+        model: profile.model || settings.model,
+        instructions: [
+          baseInstruction,
+          variablePromptMode
+            ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
+            : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
+          variablePromptMode ? (excludeText ? EXCLUDE_TEXT_SKILL_INSTRUCTION : KEEP_TEXT_SKILL_INSTRUCTION) : '',
+          retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
+        ].filter(Boolean).join('\n\n'),
+        input: [{ role: 'user', content }],
+        max_output_tokens: 8000,
+        ...(useStructuredOutput ? { text: { format: responseFormat } } : {}),
+      }),
+    })
+  }
 
   options?.onProgress?.({
     stage: 'request',
@@ -150,6 +154,7 @@ export const generateSopFromStore: GenerateSop = async (
   })
   let structuredOutputEnabled = true
   let response = await send(structuredOutputEnabled)
+  options?.signal?.throwIfAborted()
   if (!response.ok && (response.status === 400 || response.status === 422)) {
     structuredOutputEnabled = false
     options?.onProgress?.({ stage: 'request', message: '当前模型已切换为兼容生成模式' })
@@ -171,17 +176,23 @@ export const generateSopFromStore: GenerateSop = async (
     return { ...generated, content: contentWithTextPolicy }
   }
   try {
-    return parse(extractResponseText(await response.json()))
+    const responseText = extractResponseText(await response.json())
+    options?.signal?.throwIfAborted()
+    return parse(responseText)
   } catch (error) {
+    options?.signal?.throwIfAborted()
     options?.onProgress?.({ stage: 'repair', message: '返回结构不完整，正在自动修复并重试' })
     const retryResponse = await send(structuredOutputEnabled, true)
+    options?.signal?.throwIfAborted()
     if (!retryResponse.ok) {
       const body = await retryResponse.text()
       throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}自动修复失败（${retryResponse.status}）：${body.slice(0, 180)}`)
     }
     options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验修复后的变量提示词' : '正在校验修复后的 SOP 结构' })
     try {
-      return parse(extractResponseText(await retryResponse.json()))
+      const retryResponseText = extractResponseText(await retryResponse.json())
+      options?.signal?.throwIfAborted()
+      return parse(retryResponseText)
     } catch (retryError) {
       if (retryError instanceof Error && /开启“排除文字”后/.test(retryError.message)) throw retryError
       throw new Error('AI 连续两次返回不完整内容，请切换文本模型或简化元指令后重试')

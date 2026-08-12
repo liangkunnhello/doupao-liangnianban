@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, create, type ReactTestInstance } from 'react-test-renderer'
 import SopManagementCenter from './SopManagementCenter'
-import type { GenerateSop } from './sopGeneration'
+import type { GeneratedSop, GenerateSop, SopGenerationProgress } from './sopGeneration'
 import type { SopLibraryItem, SopMetaInstruction } from './types'
 import { DEFAULT_PARAMS, type TaskRecord } from '../../types'
 
@@ -518,6 +518,87 @@ describe('SopManagementCenter apply and save actions', () => {
     expect(textContent(result.renderer.root)).toContain('调用 AI 生成资产')
     expect(textContent(result.renderer.root)).toContain('SOP「多图商品 SOP」生成并保存成功')
     expect(findButton(result.renderer.root, '查看生成结果')).toBeTruthy()
+    result.renderer.unmount()
+  })
+
+  it('stops an active generation request without saving a partial result', async () => {
+    let capturedSignal: AbortSignal | undefined
+    let reportProgress: ((progress: SopGenerationProgress) => void) | undefined
+    const onGenerateSop: GenerateSop = vi.fn((_brief, _context, _images, _kind, _instruction, options) => {
+      capturedSignal = options?.signal
+      reportProgress = options?.onProgress
+      options?.onProgress?.({ stage: 'request', message: 'AI 正在生成 SOP' })
+      return new Promise<GeneratedSop>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new DOMException('已停止', 'AbortError')), { once: true })
+      })
+    })
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [generalMeta], onGenerateSop })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+    act(() => result.renderer.root.findByProps({ 'aria-label': 'SOP 生成说明' }).props.onChange({ target: { value: '生成商品摄影 SOP' } }))
+
+    act(() => findButton(result.renderer.root, '开始生成并保存')!.props.onClick())
+    expect(findButton(result.renderer.root, '停止生成')).toBeTruthy()
+    expect(capturedSignal?.aborted).toBe(false)
+
+    await act(async () => {
+      findButton(result.renderer.root, '停止生成')!.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(result.onSaveItem).not.toHaveBeenCalled()
+    expect(textContent(result.renderer.root)).toContain('已停止生成')
+    expect(findButton(result.renderer.root, '重新生成 SOP')).toBeTruthy()
+    expect(result.renderer.root.findByProps({ 'aria-label': '关闭提示词与 SOP 管理' }).props.disabled).toBe(false)
+
+    act(() => reportProgress?.({ stage: 'parse', message: '旧任务不应恢复运行' }))
+    expect(textContent(result.renderer.root)).not.toContain('旧任务不应恢复运行')
+    expect(textContent(result.renderer.root)).toContain('已停止生成')
+    result.renderer.unmount()
+  })
+
+  it('creates a fresh request and saves successfully after a stopped generation', async () => {
+    const signals: AbortSignal[] = []
+    const onGenerateSop: GenerateSop = vi.fn((_brief, _context, _images, _kind, _instruction, options) => {
+      if (options?.signal) signals.push(options.signal)
+      if (signals.length === 1) {
+        return new Promise<GeneratedSop>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(new DOMException('已停止', 'AbortError')), { once: true })
+        })
+      }
+      return Promise.resolve({
+        name: '重新生成的 SOP',
+        description: '重新生成成功',
+        content: '# 完整 SOP',
+        executionMode: 'prompt-generator' as const,
+      })
+    })
+    let result!: ReturnType<typeof renderCenter>
+    act(() => {
+      result = renderCenter({ metaInstructions: [generalMeta], onGenerateSop })
+    })
+    act(() => findButton(result.renderer.root, '智能生成')!.props.onClick())
+    act(() => result.renderer.root.findByProps({ 'aria-label': 'SOP 生成说明' }).props.onChange({ target: { value: '生成商品摄影 SOP' } }))
+    act(() => findButton(result.renderer.root, '开始生成并保存')!.props.onClick())
+    await act(async () => {
+      findButton(result.renderer.root, '停止生成')!.props.onClick()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      findButton(result.renderer.root, '重新生成 SOP')!.props.onClick()
+      await Promise.resolve()
+    })
+
+    expect(signals).toHaveLength(2)
+    expect(signals[0]).not.toBe(signals[1])
+    expect(signals[0].aborted).toBe(true)
+    expect(signals[1].aborted).toBe(false)
+    expect(result.onSaveItem).toHaveBeenCalledWith(expect.objectContaining({ name: '重新生成的 SOP' }))
+    expect(textContent(result.renderer.root)).toContain('SOP「重新生成的 SOP」生成并保存成功')
     result.renderer.unmount()
   })
 

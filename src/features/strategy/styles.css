@@ -1156,6 +1156,13 @@
   border-color: hsl(var(--ds-color-danger) / 0.18);
 }
 
+.sop-center-status[data-status="stopped"] {
+  --sop-center-status-color: var(--ds-color-warning);
+
+  background: hsl(var(--ds-color-warning-subtle) / 0.72);
+  border-color: hsl(var(--ds-color-warning) / 0.2);
+}
+
 .sop-center-status-icon,
 .sop-center-status-copy {
   color: hsl(var(--sop-center-status-color));
