@@ -6,6 +6,11 @@ import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_
 import type { AgentConversation, ExportData, SopBatchSnapshot, StoredCompositeAsset, StoredImage, StoredImageThumbnail, TaskRecord, WorkspaceTab } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 import { formatGeneratedImageDate } from './lib/generatedImageFilename'
+
+const imageAspectRatioGateMocks = vi.hoisted(() => ({
+  validateGeneratedImageAspectRatio: vi.fn(),
+}))
+
 vi.mock('./lib/db', () => {
   const tasks = new Map<string, TaskRecord>()
   const images = new Map<string, StoredImage>()
@@ -145,6 +150,9 @@ vi.mock('./lib/api', () => ({
     revisedPrompts: [],
   })),
 }))
+vi.mock('./lib/imageAspectRatioGate', () => ({
+  validateGeneratedImageAspectRatio: imageAspectRatioGateMocks.validateGeneratedImageAspectRatio,
+}))
 vi.mock('./lib/agentApi', () => ({
   callAgentConversationTitleApi: vi.fn(async () => '标题'),
   callAgentResponsesApi: vi.fn(() => new Promise(() => {})),
@@ -177,7 +185,7 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllImageIds, getAllImages, getAllTasks, getCompositeAsset, putAgentConversation, putCompositeAssets, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { cleanStaleAgentInputDrafts, DEFAULT_FAVORITE_COLLECTION_ID, MAX_RETAINED_STREAM_PARTIAL_IMAGES, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, exportData, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, moveTasksToWorkspaceTab, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, retryTask, reuseConfig, submitAgentMessage, submitTask, updateTaskInStore, updateTasksFavoriteCollections, useStore } from './store'
@@ -1046,6 +1054,19 @@ describe('schedule state', () => {
 
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
+    vi.mocked(callImageApi).mockReset()
+    vi.mocked(callImageApi).mockResolvedValue({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    })
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio.mockReset()
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio.mockResolvedValue({
+      accepted: true,
+      required: false,
+      requestedSize: 'auto',
+    })
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       prompt: 'prompt',
@@ -1204,6 +1225,126 @@ describe('mask draft lifecycle in store actions', () => {
     // 全部补齐，无失败槽位。
     expect(task.batchItemStatuses ?? []).toEqual(Array(10).fill('done'))
     expect(task.batchItemErrors ?? []).toHaveLength(0)
+  })
+
+  it('regenerates a single image until the returned aspect ratio passes', async () => {
+    let requestCount = 0
+    vi.mocked(callImageApi).mockImplementation(async () => ({
+      images: [`data:image/png;base64,single-${requestCount++}`],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+    }))
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio
+      .mockResolvedValueOnce({
+        accepted: false,
+        required: true,
+        requestedSize: '720x1280',
+        error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+      })
+      .mockResolvedValueOnce({
+        accepted: false,
+        required: true,
+        requestedSize: '720x1280',
+        error: '图片比例门禁未通过：要求 720x1280，实际 1536x1024',
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        required: true,
+        requestedSize: '720x1280',
+      })
+    useStore.setState({ params: { ...DEFAULT_PARAMS, n: 1, size: '720x1280' } })
+
+    await submitTask()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
+    expect(callImageApi).toHaveBeenCalledTimes(3)
+    expect(useStore.getState().tasks[0].outputImages).toHaveLength(1)
+    expect((await getAllImages())
+      .map((image) => image.dataUrl)
+      .filter((dataUrl): dataUrl is string => dataUrl?.includes('base64,single-') === true)).toEqual([
+      'data:image/png;base64,single-2',
+    ])
+  })
+
+  it('fails a single-image task when all aspect-ratio attempts are rejected', async () => {
+    let requestCount = 0
+    vi.mocked(callImageApi).mockImplementation(async () => ({
+      images: [`data:image/png;base64,rejected-${requestCount++}`],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+    }))
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio.mockResolvedValue({
+      accepted: false,
+      required: true,
+      requestedSize: '720x1280',
+      error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+    })
+    useStore.setState({ params: { ...DEFAULT_PARAMS, n: 1, size: '720x1280' } })
+
+    await submitTask()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('error'))
+    const failedTask = useStore.getState().tasks[0]
+    expect(callImageApi).toHaveBeenCalledTimes(3)
+    expect(failedTask.outputImages).toEqual([])
+    expect(failedTask.error).toContain('自动重新生成 2 次后仍未通过')
+    expect((await getAllImages()).some((image) => image.dataUrl?.includes('base64,rejected-'))).toBe(false)
+  })
+
+  it('rejects a wrong-ratio batch image before storage and fills its slot with a replacement', async () => {
+    let requestCount = 0
+    vi.mocked(callImageApi).mockImplementation(async () => ({
+      images: [`data:image/png;base64,batch-${requestCount++}`],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+    }))
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio.mockImplementation(async (dataUrl: string) => ({
+      accepted: !dataUrl.endsWith('batch-0'),
+      required: true,
+      requestedSize: '720x1280',
+      ...(dataUrl.endsWith('batch-0')
+        ? { error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024' }
+        : {}),
+    }))
+    useStore.setState({ params: { ...DEFAULT_PARAMS, n: 2, size: '720x1280' } })
+
+    await submitTask()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('done'))
+    const completedTask = useStore.getState().tasks[0]
+    expect(callImageApi).toHaveBeenCalledTimes(3)
+    expect(completedTask.outputImages).toHaveLength(2)
+    expect(completedTask.batchItemStatuses).toEqual(['done', 'done'])
+    expect((await getAllImages()).map((image) => image.dataUrl)).not.toContain('data:image/png;base64,batch-0')
+  })
+
+  it('fails a batch when every generated image misses the required aspect ratio', async () => {
+    let requestCount = 0
+    vi.mocked(callImageApi).mockImplementation(async () => ({
+      images: [`data:image/png;base64,batch-rejected-${requestCount++}`],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+    }))
+    imageAspectRatioGateMocks.validateGeneratedImageAspectRatio.mockResolvedValue({
+      accepted: false,
+      required: true,
+      requestedSize: '720x1280',
+      error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+    })
+    useStore.setState({ params: { ...DEFAULT_PARAMS, n: 2, size: '720x1280' } })
+
+    await submitTask()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks[0].status).toBe('error'))
+    const failedTask = useStore.getState().tasks[0]
+    expect(callImageApi).toHaveBeenCalledTimes(6)
+    expect(failedTask.outputImages).toEqual([])
+    expect(failedTask.error).toContain('重新生成次数已用尽')
+    expect((await getAllImages()).some((image) => image.dataUrl?.includes('base64,batch-rejected-'))).toBe(false)
   })
 
   it('does not save batch-generated images again when the task finishes', async () => {

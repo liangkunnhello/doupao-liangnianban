@@ -164,6 +164,27 @@ describe('image postprocess plan', () => {
     expect(canvasImageMocks.canvasToBlob).not.toHaveBeenCalled()
   })
 
+  it('flattens a PNG response to opaque JPEG when JPEG was requested', async () => {
+    canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
+    canvasImageMocks.canvasToBlob.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))
+
+    const result = await postprocessGeneratedImage('data:image/png;base64,iVBORw0KGgo=', params({
+      output_format: 'jpeg',
+    }))
+
+    expect(canvasImageMocks.canvasToBlob).toHaveBeenCalledWith(expect.any(Object), 'image/jpeg', undefined)
+    const context = (globalThis.document.createElement as any).mock.results[0].value.getContext.mock.results[0].value
+    expect(context.fillStyle).toBe('#ffffff')
+    expect(context.fillRect).toHaveBeenCalledWith(0, 0, 640, 480)
+    expect(result).toEqual({
+      dataUrl: 'data:image/jpeg;base64,encoded',
+      actualParams: {
+        size: '640x480',
+        output_format: 'jpeg',
+      },
+    })
+  })
+
   it('accepts image/jpg as jpeg during resize-only postprocessing', async () => {
     canvasImageMocks.loadImage.mockResolvedValue({ naturalWidth: 640, naturalHeight: 480 })
     canvasImageMocks.canvasToBlob.mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' }))

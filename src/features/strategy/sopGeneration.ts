@@ -194,6 +194,68 @@ export function extractResponseText(payload: unknown) {
   return parts.join('\n')
 }
 
+/** 从 Chat Completions 响应（`choices[0].message.content`）提取文本。 */
+export function extractChatCompletionText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const choices = (payload as { choices?: unknown[] }).choices
+  if (!Array.isArray(choices) || choices.length === 0) return ''
+  const first = choices[0]
+  if (!first || typeof first !== 'object') return ''
+  const message = (first as { message?: unknown }).message
+  if (!message || typeof message !== 'object') return ''
+  const content = (message as { content?: unknown }).content
+  return typeof content === 'string' ? content : ''
+}
+
+function toChatCompletionContent(content: unknown): unknown {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: Array<Record<string, unknown>> = []
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue
+    const record = part as Record<string, unknown>
+    if ((record.type === 'input_text' || record.type === 'output_text') && typeof record.text === 'string') {
+      parts.push({ type: 'text', text: record.text })
+    } else if (record.type === 'input_image' && typeof record.image_url === 'string') {
+      parts.push({ type: 'image_url', image_url: { url: record.image_url } })
+    }
+  }
+  if (parts.length === 1 && parts[0].type === 'text') return parts[0].text
+  return parts
+}
+
+/** 把 Responses 风格的 `instructions + input` 转成 Chat Completions 的 `messages`。 */
+export function toChatCompletionMessages(instruction: string, input: unknown): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = [{ role: 'system', content: instruction }]
+  if (typeof input === 'string') {
+    messages.push({ role: 'user', content: input })
+    return messages
+  }
+  if (!Array.isArray(input)) {
+    messages.push({ role: 'user', content: '' })
+    return messages
+  }
+  for (const value of input) {
+    if (!value || typeof value !== 'object') continue
+    const record = value as Record<string, unknown>
+    if (record.role !== 'user' && record.role !== 'assistant') continue
+    messages.push({ role: record.role, content: toChatCompletionContent(record.content) })
+  }
+  return messages
+}
+
+/** 把 Responses 的结构化输出格式转成 Chat Completions 的 `response_format`。 */
+export function toChatResponseFormat(format: { name: string; strict?: boolean; schema: unknown }) {
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: format.name,
+      strict: format.strict === true,
+      schema: format.schema,
+    },
+  }
+}
+
 export function parseGeneratedSop(text: string): GeneratedSop {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   const start = trimmed.indexOf('{')

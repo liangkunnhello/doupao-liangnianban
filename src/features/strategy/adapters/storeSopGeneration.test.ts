@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateSopFromStore, getSopPromptGenerationModelFromStore, testSopRevisionFromStore } from './storeSopGeneration'
+import { generatePromptsFromSopStore, generateSopFromStore, getSopPromptGenerationModelFromStore, testSopRevisionFromStore } from './storeSopGeneration'
 
 const storeMocks = vi.hoisted(() => ({
   submitTaskWithData: vi.fn(),
   showToast: vi.fn(),
+  profileTimeout: 600,
 }))
 
 vi.mock('../../../lib/apiProfiles', () => ({
@@ -14,6 +15,7 @@ vi.mock('../../../lib/apiProfiles', () => ({
     baseUrl: 'https://api.example.com/v1',
     model: 'gpt-test',
     apiProxy: false,
+    timeout: storeMocks.profileTimeout,
   }),
 }))
 
@@ -46,17 +48,17 @@ function responsePayload(text: string) {
 }
 
 function mockResponse(text: string) {
-  return {
-    ok: true,
+  return new Response(JSON.stringify(responsePayload(text)), {
     status: 200,
-    json: vi.fn().mockResolvedValue(responsePayload(text)),
-    text: vi.fn().mockResolvedValue(''),
-  } as unknown as Response
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  storeMocks.profileTimeout = 600
 })
 
 describe('store SOP generation', () => {
@@ -120,12 +122,47 @@ describe('store SOP generation', () => {
       signal: controller.signal,
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+    expect(fetchMock.mock.calls[0][1]?.signal).not.toBe(controller.signal)
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(false)
 
     controller.abort()
 
     await expect(generation).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('times out a stalled prompt response and lets the batch retry finish with an error', async () => {
+    vi.useFakeTimers()
+    storeMocks.profileTimeout = 1
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: () => new Promise<string>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      }),
+    } as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const generation = generatePromptsFromSopStore({
+      id: 'sop-timeout',
+      name: '超时测试',
+      description: '',
+      content: '# 生成提示词',
+      source: 'manual',
+      createdBy: 'user-1',
+      createdAt: 1,
+      updatedAt: 1,
+    }, 1)
+    const assertion = expect(generation).rejects.toThrow('提示词批次生成失败，已自动尝试 2 次：提示词生成失败：SOP 提示词生成超时：超过 1 秒')
+
+    // Each batch attempt now tries both text protocols before failing.
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    await assertion
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
   it('uses the skill schema and validates a direct variable prompt before returning it', async () => {

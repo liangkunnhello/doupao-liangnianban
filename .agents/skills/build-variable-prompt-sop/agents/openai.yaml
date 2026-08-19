@@ -1,0 +1,4 @@
+interface:
+  display_name: "Variable Prompt SOP"
+  short_description: "Build reusable variable-prompt SOPs from reference images"
+  default_prompt: "Use $build-variable-prompt-sop to generate a variable-prompt SOP from reference images."

@@ -43,6 +43,7 @@ describe('callAgentResponsesApi', () => {
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.stream).toBe(true)
     expect(body.tools[0].partial_images).toBe(2)
+    expect(body.tools[0].background).toBe('opaque')
     expect(body.instructions).toContain('Information-flow ad negative constraints')
     expect(body.instructions).toContain('Whenever 2 or more images are ready to generate, call generate_image_batch exactly once')
     expect(body.instructions).toContain('Set requested_count to the exact number of images')

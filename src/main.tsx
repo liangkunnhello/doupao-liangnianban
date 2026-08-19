@@ -9,12 +9,19 @@ import './theme/styles/skins.css'
 import { installMobileViewportGuards } from './lib/viewport'
 import { installChunkLoadRecovery } from './lib/chunkRecovery'
 import { bootstrapAppearance } from './theme/appearance'
+import { initMcpBridge } from './mcp/bridge'
+import { recoverInterruptedSopBatchSnapshots } from './features/strategy/adapters/sopBatchRecovery'
 
 // 在 React 渲染之前同步应用上次外观快照，消除首屏皮肤闪烁
 bootstrapAppearance()
 
 installMobileViewportGuards()
 installChunkLoadRecovery()
+// Electron 桌面端：向主进程 MCP 服务注册工具并监听调用
+initMcpBridge()
+void recoverInterruptedSopBatchSnapshots().catch((error) => {
+  console.error('Failed to recover interrupted SOP prompt runs', error)
+})
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {

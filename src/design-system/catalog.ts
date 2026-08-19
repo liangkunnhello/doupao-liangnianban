@@ -115,6 +115,7 @@ export const legacyComponentCoverage: LegacyComponentCoverage[] = [
   { module: 'src/components/ScheduleRunner.tsx', responsibility: '日程执行协调器', decision: 'retain', targets: ['ToastMessage', 'StatusIndicator', 'Progress'] },
   { module: 'src/components/SearchBar.tsx', responsibility: '画廊筛选和搜索工具条', decision: 'compose', targets: ['Toolbar', 'SearchField', 'SelectField', 'IconButton'] },
   { module: 'src/components/Select.tsx', responsibility: '支持动作和拖拽排序的高级选择器', decision: 'retain', targets: ['SelectField', 'Popover', 'Menu'] },
+  { module: 'src/components/SettingsMcpPanel.tsx', responsibility: '桌面 MCP 服务配置与状态面板', decision: 'compose', targets: ['Panel', 'Fieldset', 'TextField', 'Switch', 'Button', 'Alert', 'StatusIndicator'] },
   { module: 'src/components/SettingsModal.tsx', responsibility: '全局设置和 API 配置弹窗', decision: 'retain', targets: ['Dialog', 'Tabs', 'Fieldset', 'TextField', 'SelectField', 'Switch', 'Alert'] },
   { module: 'src/components/SizePickerModal.tsx', responsibility: '输出尺寸选择弹窗', decision: 'compose', targets: ['Dialog', 'Grid', 'SegmentedControl', 'Button'] },
   { module: 'src/components/SopBatchDetailModal.tsx', responsibility: 'SOP 批次结果详情弹窗', decision: 'compose', targets: ['Dialog', 'Grid', 'Thumbnail', 'StatusIndicator', 'Progress'] },

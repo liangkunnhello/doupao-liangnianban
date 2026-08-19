@@ -106,6 +106,11 @@ export interface SlotAssignment {
   perceptualHash?: string
 }
 
+export interface SlotValidationRejection {
+  slotIndex: number
+  error: string
+}
+
 export interface ImageFingerprintLike {
   contentHash?: string
   perceptualHash?: string
@@ -257,7 +262,13 @@ export function markExhaustedSlots(state: GenerationState, policy: GenerationPol
       slot.attempts >= 1 + policy.replacementAttempts
     ) {
       changed = true
-      return { ...slot, status: 'failed' as const, error: '补偿次数已用尽，无法补齐该图片' }
+      return {
+        ...slot,
+        status: 'failed' as const,
+        error: slot.error
+          ? `${slot.error}；重新生成次数已用尽`
+          : '补偿次数已用尽，无法补齐该图片',
+      }
     }
     return slot
   })
@@ -360,6 +371,7 @@ export function applyProviderResult(
   requestId: string,
   assignments: SlotAssignment[],
   rejected?: { slotIndexes: number[]; kind: 'exact-duplicate' | 'near-duplicate' },
+  validationRejections: SlotValidationRejection[] = [],
 ): GenerationState {
   const request = state.remoteRequests.find((req) => req.id === requestId)
   if (!request) return state // 幂等：未知请求直接忽略
@@ -372,6 +384,9 @@ export function applyProviderResult(
   }
 
   const rejectedSet = new Set(rejected?.slotIndexes ?? [])
+  const validationRejectionBySlot = new Map(
+    validationRejections.map((rejection) => [rejection.slotIndex, rejection.error]),
+  )
   let duplicateCount = state.duplicateCount
   let nearDuplicateCount = state.nearDuplicateCount
   if (rejected?.kind === 'exact-duplicate') duplicateCount += rejected.slotIndexes.length
@@ -388,12 +403,16 @@ export function applyProviderResult(
         outputImageId: assignment.imageId,
         contentHash: assignment.contentHash,
         perceptualHash: assignment.perceptualHash,
+        error: undefined,
       }
     }
     // 未分配（供应商欠交付，或对应图片被去重拒绝）→ 回到 pending 等待补偿。
     // 已标记为 failed 的槽位保留失败状态。
     if (slot.status === 'failed') return slot
-    return { ...slot, status: 'pending' as const }
+    const validationError = validationRejectionBySlot.get(slot.index)
+    if (validationError) return { ...slot, status: 'pending' as const, error: validationError }
+    if (rejectedSet.has(slot.index)) return { ...slot, status: 'pending' as const, error: '图片重复，已拦截并等待重新生成' }
+    return { ...slot, status: 'pending' as const, error: undefined }
   })
 
   const remoteRequests = state.remoteRequests.map((req) =>

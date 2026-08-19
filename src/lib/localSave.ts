@@ -1,6 +1,7 @@
 import type { AgentConversation, AgentRound, TaskRecord } from '../types'
 import type { UpdateStatus } from '../hooks/useAutoUpdate'
 import { sanitizeGeneratedImageFilenamePart } from './generatedImageFilename'
+import { getImageMimeFromDataUrl } from './imageApiShared'
 
 type ElectronAPI = {
   apiFetch?: (
@@ -22,6 +23,10 @@ type ElectronAPI = {
   selectDirectory: () => Promise<string | null>
   selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => Promise<string[] | null>
+  loadHanhaiProcessingPresets?: (filePath?: string | null) => Promise<
+    | { success: true; source: import('../features/composite/lib/hanhaiPresetImport').HanhaiImportSource | null }
+    | { success: false; error: string }
+  >
   saveImage: (filePath: string, dataUrl: string) => Promise<boolean>
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => Promise<boolean>
   authorizeCompositeOutputDirectory?: (dirPath: string) => Promise<boolean>
@@ -65,6 +70,15 @@ type ElectronAPI = {
   installUpdate: () => Promise<{ success: boolean }>
   getAppVersion: () => Promise<string>
   getStartupMode?: () => Promise<{ safeMode: boolean }>
+  mcpRegisterTools?: (tools: unknown[]) => void
+  onMcpToolCall?: (callback: (payload: { id: string; name: string; args: Record<string, unknown> }) => void) => () => void
+  mcpRespondToolCall?: (id: string, payload: { result?: unknown; error?: string }) => void
+  mcpGetConfig?: () => Promise<import('../mcp/types').McpBridgeConfig>
+  mcpGetStatus?: () => Promise<import('../mcp/types').McpBridgeStatus>
+  mcpUpdateConfig?: (patch: { enabled?: boolean; port?: number; regenerateToken?: boolean }) => Promise<{
+    config: import('../mcp/types').McpBridgeConfig
+    status: import('../mcp/types').McpBridgeStatus
+  }>
   isElectron: boolean
 }
 
@@ -165,7 +179,7 @@ const EXT_MAP: Record<string, string> = {
 }
 
 export function getImageExtensionFromDataUrl(dataUrl: string, fallbackExt: string = 'png'): string {
-  const mime = dataUrl.match(/^data:([^;,]+)/i)?.[1]?.toLowerCase()
+  const mime = getImageMimeFromDataUrl(dataUrl) ?? dataUrl.match(/^data:([^;,]+)/i)?.[1]?.toLowerCase()
   if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg'
   if (mime === 'image/webp') return 'webp'
   if (mime === 'image/png') return 'png'
@@ -180,7 +194,7 @@ async function ensureSubDir(basePath: string, subDir: string): Promise<string> {
   return dirPath
 }
 
-function sanitizeFolderName(name: string): string {
+export function sanitizeFolderName(name: string): string {
   return name.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').slice(0, 100) || '未命名'
 }
 

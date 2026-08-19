@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS, type AgentConversation, type AgentRound, type TaskRecord } from '../types'
-import { formatAgentRoundSummaryMarkdown, saveAgentRoundSummaryToLocal, saveImageToLocal } from './localSave'
+import { formatAgentRoundSummaryMarkdown, getImageExtensionFromDataUrl, saveAgentRoundSummaryToLocal, saveImageToLocal } from './localSave'
 
 describe('local image saving', () => {
   const savedImages: Array<{ filePath: string; dataUrl: string }> = []
@@ -40,6 +40,10 @@ describe('local image saving', () => {
   afterEach(() => {
     vi.useRealTimers()
     Reflect.deleteProperty(globalThis, 'window')
+  })
+
+  it('uses the PNG extension when PNG bytes are mislabeled as JPEG', () => {
+    expect(getImageExtensionFromDataUrl('data:image/jpeg;base64,iVBORw0KGgo=', 'jpeg')).toBe('png')
   })
 
   it('resolves date variables in explicit output paths and names images from the folder name', async () => {

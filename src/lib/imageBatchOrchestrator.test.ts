@@ -246,6 +246,50 @@ describe('scenario: single slot exhausts replacement budget', () => {
   })
 })
 
+describe('scenario: aspect ratio validation rejection', () => {
+  it('keeps the rejected slot pending and schedules a replacement', () => {
+    const p = policy({ capabilities: { maxImagesPerRequest: 1, supportsSeed: false, supportsAsyncRecovery: false, supportsCancel: false } })
+    let state = createInitialGenerationState(1)
+    const initial = planNextRequests(state, p)[0]
+    state = submit(state, initial, { id: 'r0' })
+
+    state = applyProviderResult(state, 'r0', [], undefined, [{
+      slotIndex: 0,
+      error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+    }])
+
+    expect(state.slots[0]).toMatchObject({
+      status: 'pending',
+      attempts: 1,
+      error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+    })
+    expect(state.remoteRequests[0].status).toBe('completed')
+    expect(planNextRequests(state, p)).toEqual([
+      expect.objectContaining({ slotIndexes: [0], count: 1, reason: 'replacement' }),
+    ])
+  })
+
+  it('reports the ratio failure after replacement attempts are exhausted', () => {
+    const p = policy({ replacementAttempts: 2, capabilities: { maxImagesPerRequest: 1, supportsSeed: false, supportsAsyncRecovery: false, supportsCancel: false } })
+    let state = createInitialGenerationState(1)
+
+    for (let round = 0; round < 3; round++) {
+      const planned = planNextRequests(state, p)[0]
+      state = submit(state, planned, { id: `ratio-${round}` })
+      state = applyProviderResult(state, `ratio-${round}`, [], undefined, [{
+        slotIndex: 0,
+        error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024',
+      }])
+    }
+
+    state = markExhaustedSlots(state, p)
+    expect(state.slots[0]).toMatchObject({
+      status: 'failed',
+      error: '图片比例门禁未通过：要求 720x1280，实际 1024x1024；重新生成次数已用尽',
+    })
+  })
+})
+
 describe('scenario: user cancel stops compensation', () => {
   it('no replacement requests are planned after cancel', () => {
     const p = policy({ capabilities: { maxImagesPerRequest: 10, supportsSeed: false, supportsAsyncRecovery: false, supportsCancel: false } })

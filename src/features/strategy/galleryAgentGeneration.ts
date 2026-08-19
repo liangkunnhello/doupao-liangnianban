@@ -2,7 +2,7 @@ import { getAgentTextApiProfile, validateApiProfile } from '../../lib/apiProfile
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../../lib/devProxy'
 import { parseVariablePrompt, renderVariablePromptBatch } from '../../lib/variablePrompt'
 import type { InputImage } from '../../types'
-import { extractResponseText } from './sopGeneration'
+import { extractChatCompletionText, extractResponseText, toChatCompletionMessages, toChatResponseFormat } from './sopGeneration'
 import {
   APP_COPY_STRATEGY_SKILL_META_INSTRUCTION,
   IMAGE_GENERATION_STRATEGY_SKILL_META_INSTRUCTION,
@@ -199,7 +199,8 @@ async function requestGalleryAgentPlan(
     throw new Error('画廊智能体需要支持 Responses API 的 OpenAI 兼容文本模型')
   }
   const proxy = readClientDevProxyConfig()
-  const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
+  const useChatCompletions = settings.agentTextProtocol === 'chat-completions'
+  const url = buildApiUrl(profile.baseUrl, useChatCompletions ? 'chat/completions' : 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   const inputContent: Array<{ type: 'input_text'; text: string } | { type: 'input_image'; image_url: string }> = [
     { type: 'input_text', text: `${buildPlanInstruction(similarity, brief, excludeText)}\n\n最终计划生成 ${targetImageCount} 张图片，策略方向数量不得超过 ${targetImageCount}。` },
   ]
@@ -207,8 +208,23 @@ async function requestGalleryAgentPlan(
     inputContent.push({ type: 'input_text', text: `参考图 ${index + 1}/${images.length}` })
     inputContent.push({ type: 'input_image', image_url: image.dataUrl })
   })
+  const planInstruction = '只返回请求的 JSON 规划对象，不要生成最终图片提示词，不要使用 Markdown 代码围栏。'
   const send = (structured: boolean) => {
     signal?.throwIfAborted()
+    const body = useChatCompletions
+      ? {
+          model: profile.model || settings.model,
+          messages: toChatCompletionMessages(planInstruction, [{ role: 'user', content: inputContent }]),
+          max_tokens: 2200,
+          ...(structured ? { response_format: toChatResponseFormat(GALLERY_AGENT_PLAN_FORMAT) } : {}),
+        }
+      : {
+          model: profile.model || settings.model,
+          instructions: planInstruction,
+          input: [{ role: 'user', content: inputContent }],
+          max_output_tokens: 2200,
+          ...(structured ? { text: { format: GALLERY_AGENT_PLAN_FORMAT } } : {}),
+        }
     return fetch(url, {
       method: 'POST',
       headers: {
@@ -217,13 +233,7 @@ async function requestGalleryAgentPlan(
       },
       signal,
       cache: 'no-store',
-      body: JSON.stringify({
-        model: profile.model || settings.model,
-        instructions: '只返回请求的 JSON 规划对象，不要生成最终图片提示词，不要使用 Markdown 代码围栏。',
-        input: [{ role: 'user', content: inputContent }],
-        max_output_tokens: 2200,
-        ...(structured ? { text: { format: GALLERY_AGENT_PLAN_FORMAT } } : {}),
-      }),
+      body: JSON.stringify(body),
     })
   }
 
@@ -234,7 +244,8 @@ async function requestGalleryAgentPlan(
     const body = await response.text()
     throw new Error(`智能体产品分析失败（${response.status}）：${body.slice(0, 180)}`)
   }
-  const text = extractResponseText(await response.json())
+  const payload = await response.json()
+  const text = useChatCompletions ? extractChatCompletionText(payload) : extractResponseText(payload)
   signal?.throwIfAborted()
   return normalizeGalleryAgentPlan(parseJsonObject(text), similarity)
 }

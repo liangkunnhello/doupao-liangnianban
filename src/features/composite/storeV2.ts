@@ -6,6 +6,7 @@ import { addCompositeHistoryRecord } from './lib/compositeExportHistoryV2'
 import { createDefaultCompositeV2State } from './lib/compositeV2Defaults'
 import { fitCompositeTextLayer } from './lib/compositeTextLayout'
 import { hasLegacyCompositeAssets, migrateLegacyCompositeAssets } from './lib/compositeAssetMigration'
+import type { HanhaiImportBundle } from './lib/hanhaiPresetImport'
 import type {
   CompositeV2BackgroundImage,
   CompositeV2ExportStatus,
@@ -143,6 +144,7 @@ type CompositeV2StoreActions = {
   addOutputRule: (groupId: string, rule: Omit<CompositeV2OutputSizeRule, 'id'>) => void
   deleteOutputRule: (groupId: string, ruleId: string) => void
   setDistributionConfig: (patch: Partial<CompositeV2State['distributionConfig']>) => void
+  importHanhaiPresets: (bundle: HanhaiImportBundle) => { imported: number; skipped: number }
 }
 
 export type CompositeV2StoreState = CompositeV2BatchState & CompositeV2UndoState & CompositeV2State & CompositeV2StoreActions
@@ -599,6 +601,53 @@ function createCompositeV2StoreInitializer(options: CreateCompositeV2StoreOption
           selectedPreviewPresetId: preset.id,
         }
       }, 'presets:structure'),
+      importHanhaiPresets: (bundle) => {
+        let result = { imported: 0, skipped: bundle.presets.length }
+        setWithHistory((state) => {
+          const existingPresetIds = new Set(state.presets.map((preset) => preset.id))
+          const newPresets = bundle.presets.filter((preset) => !existingPresetIds.has(preset.id))
+          result = { imported: newPresets.length, skipped: bundle.presets.length - newPresets.length }
+          if (newPresets.length === 0) return {}
+
+          const newPresetIds = new Set(newPresets.map((preset) => preset.id))
+          const presetGroups = [...state.presetGroups]
+          for (const incoming of bundle.presetGroups) {
+            const incomingIds = incoming.presetIds.filter((id) => newPresetIds.has(id))
+            if (incomingIds.length === 0) continue
+            const index = presetGroups.findIndex((group) => group.id === incoming.id)
+            if (index < 0) {
+              presetGroups.push({ ...incoming, presetIds: [...incomingIds] })
+              continue
+            }
+            const current = presetGroups[index]!
+            const currentIds = new Set(current.presetIds)
+            const additions = incomingIds.filter((id) => !currentIds.has(id))
+            if (additions.length > 0) {
+              presetGroups[index] = { ...current, presetIds: [...current.presetIds, ...additions], updatedAt: Date.now() }
+            }
+          }
+
+          const existingLogoIds = new Set(state.projectLogos.map((logo) => logo.id))
+          const newLogos = bundle.projectLogos.filter((logo) => !existingLogoIds.has(logo.id))
+          const existingVariableNames = new Set(state.customVariables.map((variable) => variable.name))
+          const newVariables = bundle.customVariables.filter((variable) => !existingVariableNames.has(variable.name))
+          const firstGroup = bundle.presetGroups.find((group) => group.presetIds.some((id) => newPresetIds.has(id)))
+          const firstPresetId = firstGroup?.presetIds.find((id) => newPresetIds.has(id)) ?? newPresets[0]!.id
+          return {
+            presets: [...state.presets, ...newPresets],
+            presetGroups,
+            projectLogos: [...state.projectLogos, ...newLogos],
+            logoOrder: [...state.logoOrder, ...newLogos.map((logo) => logo.id)],
+            customVariables: [...state.customVariables, ...newVariables],
+            selectedPresetGroupId: firstGroup?.id ?? state.selectedPresetGroupId,
+            selectedPreviewPresetId: firstPresetId,
+            enabledPresetIdsForRun: firstGroup
+              ? firstGroup.presetIds.filter((id) => newPresetIds.has(id))
+              : state.enabledPresetIdsForRun,
+          }
+        }, 'hanhai:import')
+        return result
+      },
       deletePreset: (presetId) => setWithHistory((state) => {
         const presets = state.presets.filter((preset) => preset.id !== presetId)
         if (presets.length === state.presets.length) return {}

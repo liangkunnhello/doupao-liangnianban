@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
   selectFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-file', { filters }),
   selectFiles: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('fs:select-files', { filters }),
+  loadHanhaiProcessingPresets: (filePath?: string | null) => ipcRenderer.invoke('hanhai:load-processing-presets', { filePath }),
   saveImage: (filePath: string, dataUrl: string) => ipcRenderer.invoke('fs:save-image', { filePath, dataUrl }),
   saveCompositeImage: (filePath: string, dataUrl: string, maxSizeKb?: number) => ipcRenderer.invoke('composite:save-image', { filePath, dataUrl, maxSizeKb }),
   authorizeCompositeOutputDirectory: (dirPath: string) => ipcRenderer.invoke('composite:authorize-output-directory', { dirPath }),
@@ -84,5 +85,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('update:install'),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
   getStartupMode: () => ipcRenderer.invoke('app:get-startup-mode'),
+  mcpRegisterTools: (tools: unknown[]) => ipcRenderer.send('mcp:register-tools', tools),
+  onMcpToolCall: (callback: (payload: { id: string; name: string; args: Record<string, unknown> }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; name: string; args: Record<string, unknown> }) => callback(payload)
+    ipcRenderer.on('mcp:tool-call', handler)
+    return () => ipcRenderer.removeListener('mcp:tool-call', handler)
+  },
+  mcpRespondToolCall: (id: string, payload: { result?: unknown; error?: string }) => ipcRenderer.send('mcp:tool-result', { id, ...payload }),
+  mcpGetConfig: () => ipcRenderer.invoke('mcp:get-config'),
+  mcpGetStatus: () => ipcRenderer.invoke('mcp:get-status'),
+  mcpUpdateConfig: (patch: { enabled?: boolean; port?: number; regenerateToken?: boolean }) => ipcRenderer.invoke('mcp:update-config', patch),
   isElectron: true,
 })

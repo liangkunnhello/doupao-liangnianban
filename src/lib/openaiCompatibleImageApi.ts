@@ -188,6 +188,8 @@ function createResponsesImageTool(
     action: isEdit ? 'edit' : 'generate',
     size: params.size,
     output_format: params.output_format,
+    // There is no transparent-background switch in the app; keep output opaque.
+    background: 'opaque',
     moderation: params.moderation,
   }
 
@@ -507,6 +509,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
       formData.append('prompt', prompt)
       formData.append('size', params.size)
       formData.append('output_format', params.output_format)
+      formData.append('background', 'opaque')
       formData.append('moderation', params.moderation)
 
       if (!profile.codexCli) {
@@ -568,6 +571,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
         prompt,
         size: params.size,
         output_format: params.output_format,
+        background: 'opaque',
         moderation: params.moderation,
       }
 

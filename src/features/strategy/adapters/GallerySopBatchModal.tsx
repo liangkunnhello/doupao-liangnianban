@@ -40,6 +40,7 @@ import {
   SOP_HIGH_VOLUME_WARNING_THRESHOLD,
 } from '../sopPromptBatch'
 import { generatePromptsFromSopStore, getSopPromptGenerationModelFromStore } from './storeSopGeneration'
+import { recoverInterruptedSopBatchSnapshots } from './sopBatchRecovery'
 import { useCloseOnEscape } from '../../../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../../../hooks/usePreventBackgroundScroll'
 import { Switch, useDialogFocusTrap } from '../../../design-system'
@@ -405,6 +406,7 @@ export default function GallerySopBatchModal({
   const targetCount = normalizedCounts.promptCount
   const targetImagesPerPrompt = normalizedCounts.imagesPerPrompt
   const totalImageCount = getSopTotalImageCount(targetCount, targetImagesPerPrompt)
+  const requestedInitialCounts = getSopRunCounts(initialPromptCount, initialImagesPerPrompt)
   const selectedSources = useMemo(
     () => selectSopPromptSources(allSources, targetCount, brief),
     [allSources, brief, targetCount],
@@ -656,7 +658,12 @@ export default function GallerySopBatchModal({
     if (snapshot) queuePromptRunSnapshot(snapshot)
   }
 
-  const applyPromptRun = async (run: SopBatchSnapshot, message: string, restoreGenerationContext = false) => {
+  const applyPromptRun = async (
+    run: SopBatchSnapshot,
+    message: string,
+    restoreGenerationContext = false,
+    countOverride?: { promptCount: number; imagesPerPrompt: number },
+  ) => {
     if (run.id !== activeRunIdRef.current) await flushPromptRunSnapshot()
     setSelectedLibraryItem({ type: 'run', id: run.id })
     const sourceByImageId = new Map(run.referenceImageIds.map((imageId, index) => [
@@ -706,12 +713,19 @@ export default function GallerySopBatchModal({
           return dataUrl ? { id: imageId, dataUrl } : null
         }))).filter((image): image is InputImage => Boolean(image))
       : []
+    const restoredCounts = getSopRunCounts(
+      countOverride?.promptCount
+        ?? run.promptCount
+        ?? restoredPrompts.filter((item) => !item.deleted && item.promptText.trim()).length
+        ?? initialPromptCount,
+      countOverride?.imagesPerPrompt ?? run.imagesPerPrompt ?? initialImagesPerPrompt,
+    )
 
     setCurrentRunId(run.id, run.status === 'submitted' || Boolean(run.batchId))
     activePromptGenerationModelRef.current = run.promptGenerationModel ?? ''
     setRunTitle(getPromptRunTitle(run))
-    setPromptCount(run.promptCount || restoredPrompts.filter((item) => !item.deleted && item.promptText.trim()).length || initialPromptCount)
-    setImagesPerPrompt(run.imagesPerPrompt || initialImagesPerPrompt)
+    setPromptCount(restoredCounts.promptCount)
+    setImagesPerPrompt(restoredCounts.imagesPerPrompt)
     setBrief(run.brief)
     setSources(restoredSources)
     setPrompts(restoredPrompts)
@@ -728,8 +742,8 @@ export default function GallerySopBatchModal({
       restoredPrompts,
       autoGenerateRef.current,
       run.brief,
-      run.promptCount,
-      run.imagesPerPrompt,
+      restoredCounts.promptCount,
+      restoredCounts.imagesPerPrompt,
     )
     if (restoreGenerationContext && restoredImages.length !== run.referenceImageIds.length) {
       showToast(`已加载提示词，但有 ${run.referenceImageIds.length - restoredImages.length} 张历史参考图不可用`, 'info')
@@ -742,9 +756,9 @@ export default function GallerySopBatchModal({
     autoStartRef.current = false
 
     void (async () => {
-      const allRuns = await getAllSopBatchSnapshots()
+      const recoveredRuns = await recoverInterruptedSopBatchSnapshots({ workspaceTabId: targetWorkspaceTabId })
       if (!active) return
-      const sortedRuns = sortPromptRunsNewestFirst(allRuns)
+      const sortedRuns = sortPromptRunsNewestFirst(recoveredRuns)
       setRecentRuns(sortedRuns)
       const restoredGroups = readPromptCollectionGroups(sortedRuns)
       setPromptGroups(restoredGroups)
@@ -769,7 +783,17 @@ export default function GallerySopBatchModal({
             secondReferenceRef.current = persisted.secondReference
             setSecondReference(persisted.secondReference)
           }
-          await applyPromptRun(storedRun, `已恢复上次 SOP 提示词列表，当前可用 ${storedRun.prompts.filter((item) => !item.deleted && item.text.trim()).length} 条`, true)
+          await applyPromptRun(
+            storedRun,
+            `已恢复上次 SOP 提示词列表，当前可用 ${storedRun.prompts.filter((item) => !item.deleted && item.text.trim()).length} 条`,
+            true,
+            autoStart
+              ? {
+                  promptCount: storedRun.promptCount,
+                  imagesPerPrompt: requestedInitialCounts.imagesPerPrompt,
+                }
+              : undefined,
+          )
           if (active) setRestoreComplete(true)
           return
         }
@@ -787,11 +811,17 @@ export default function GallerySopBatchModal({
         : []
       if (legacyPrompts.length > 0) {
         const legacySources = Array.isArray(persisted?.sources) ? persisted.sources : []
+        const legacyCounts = getSopRunCounts(
+          persisted?.promptCount ?? persisted?.quantity ?? initialPromptCount,
+          autoStart
+            ? requestedInitialCounts.imagesPerPrompt
+            : persisted?.imagesPerPrompt ?? initialImagesPerPrompt,
+        )
         const migratedRunId = promptRunId()
         setCurrentRunId(migratedRunId)
         setRunTitle('')
-        setPromptCount(persisted?.promptCount ?? persisted?.quantity ?? initialPromptCount)
-        setImagesPerPrompt(persisted?.imagesPerPrompt ?? initialImagesPerPrompt)
+        setPromptCount(legacyCounts.promptCount)
+        setImagesPerPrompt(legacyCounts.imagesPerPrompt)
         setBrief(typeof persisted?.brief === 'string' ? persisted.brief : initialBrief)
         if (typeof persisted?.autoGenerate === 'boolean') {
           autoGenerateRef.current = persisted.autoGenerate
@@ -812,8 +842,8 @@ export default function GallerySopBatchModal({
           legacyPrompts,
           persisted?.autoGenerate ?? autoGenerateRef.current,
           persisted?.brief ?? initialBrief,
-          persisted?.promptCount ?? persisted?.quantity ?? initialPromptCount,
-          persisted?.imagesPerPrompt ?? initialImagesPerPrompt,
+          legacyCounts.promptCount,
+          legacyCounts.imagesPerPrompt,
         )
       } else {
         const newRunId = promptRunId()
@@ -845,11 +875,29 @@ export default function GallerySopBatchModal({
     }
   }, [promptRunStorageKey, initialSopId])
 
-  useEffect(() => () => {
-    componentActiveRef.current = false
-    if (snapshotTimerRef.current != null) window.clearTimeout(snapshotTimerRef.current)
-    const pending = pendingSnapshotRef.current
-    if (pending) void putSopBatchSnapshot(pending)
+  const appliedInitialCountsRef = useRef(requestedInitialCounts)
+  useEffect(() => {
+    const previous = appliedInitialCountsRef.current
+    if (
+      previous.promptCount === requestedInitialCounts.promptCount
+      && previous.imagesPerPrompt === requestedInitialCounts.imagesPerPrompt
+    ) return
+    if (running) return
+    appliedInitialCountsRef.current = requestedInitialCounts
+    setPromptCount(requestedInitialCounts.promptCount)
+    setImagesPerPrompt(requestedInitialCounts.imagesPerPrompt)
+  }, [requestedInitialCounts.imagesPerPrompt, requestedInitialCounts.promptCount, running])
+
+  useEffect(() => {
+    // React StrictMode replays effects in development. Restore the mounted flag on
+    // every setup so the first generated batch is not mistaken for an unmount.
+    componentActiveRef.current = true
+    return () => {
+      componentActiveRef.current = false
+      if (snapshotTimerRef.current != null) window.clearTimeout(snapshotTimerRef.current)
+      const pending = pendingSnapshotRef.current
+      if (pending) void putSopBatchSnapshot(pending)
+    }
   }, [])
 
   const toggleAutoGenerate = (nextAutoGenerate: boolean) => {
@@ -1798,11 +1846,17 @@ export default function GallerySopBatchModal({
     if (failCount === 0) resetCompletedRun()
   }
 
-  const generateForSources = async (retrySourceId?: string, freshRun = false) => {
+  const generateForSources = async (retrySourceId?: string, freshRun = false, preserveExisting = false) => {
     if (!selectedSop) {
       setStatus('error')
       setStatusMessage('无法生成提示词')
       setError('请先选择一个 SOP')
+      return
+    }
+    if (selectedSources.length === 0) {
+      setStatus('error')
+      setStatusMessage('无法生成提示词')
+      setError('当前没有可用的文生图或参考图输入')
       return
     }
     activePromptGenerationModelRef.current = getSopPromptGenerationModelFromStore()
@@ -1852,9 +1906,10 @@ export default function GallerySopBatchModal({
         ? `正在生成 ${targetCount} 条文生图提示词`
         : `正在逐张参考 ${selectedSources.length} 张图片生成 ${targetCount} 条提示词`)
     setError('')
-    persistPromptRun(retrySourceId ? currentPrompts : [], plannedSources, autoGenerate, 'generating')
+    const keepExistingPrompts = Boolean(retrySourceId) || preserveExisting
+    persistPromptRun(keepExistingPrompts ? currentPrompts : [], plannedSources, autoGenerate, 'generating')
     const existingPrompts = currentPrompts.filter((item) => !item.deleted && item.promptText.trim()).map((item) => item.promptText.trim())
-    const nextPrompts = retrySourceId ? [...currentPrompts] : []
+    const nextPrompts = keepExistingPrompts ? [...currentPrompts] : []
     const nextSources = [...plannedSources]
     const progressiveDispatch = autoGenerateRef.current && !retrySourceId
     const progressiveBatchId = progressiveDispatch ? `sop-batch-${Date.now().toString(36)}` : ''
@@ -1908,7 +1963,8 @@ export default function GallerySopBatchModal({
             : undefined,
           exact: false,
           existingPrompts: [...existingPrompts, ...nextPrompts.map((item) => item.promptText.trim()).filter(Boolean)],
-          maxBatchSize: progressiveDispatch ? 1 : undefined,
+          // 单条落地，避免长 SOP + 参考图在一次大批量结构化请求中长时间无输出。
+          maxBatchSize: 1,
           beforeBatch: waitWhileGenerationPaused,
           signal: generationController.signal,
           onBatch: async (batchPrompts) => {
@@ -2095,8 +2151,31 @@ export default function GallerySopBatchModal({
     }
   }
 
+  const reportUnexpectedGenerationFailure = (cause: unknown) => {
+    if (!componentActiveRef.current) return
+    generationAbortRef.current = null
+    generationPausedRef.current = false
+    releasePauseWaiters()
+    const message = cause instanceof Error ? cause.message : '提示词生成失败，请检查文本模型配置后重试'
+    setStatus('error')
+    setStatusMessage('提示词生成失败')
+    setError(message)
+    showToast(message, 'error')
+  }
+
+  const runPromptGeneration = (retrySourceId?: string, freshRun = false, preserveExisting = false) => {
+    void generateForSources(retrySourceId, freshRun, preserveExisting).catch(reportUnexpectedGenerationFailure)
+  }
+
   const generatePromptList = async (replaceConfirmed = false) => {
-    if (running || !selectedSop) return
+    if (running) return
+    if (!selectedSop) {
+      setStatus('error')
+      setStatusMessage('无法生成提示词')
+      setError('请先选择一个有效的生成型 SOP')
+      showToast('请先选择一个有效的生成型 SOP', 'error')
+      return
+    }
     const replacingCurrent = visiblePrompts.length > 0
     if (replacingCurrent && !replaceConfirmed) {
       setConfirmDialog({
@@ -2123,7 +2202,7 @@ export default function GallerySopBatchModal({
         secondReferenceRef.current,
       )
     }
-    void generateForSources(undefined, replacingCurrent)
+    runPromptGeneration(undefined, replacingCurrent)
   }
 
   const addManualPrompt = (sourceId: string) => {
@@ -2218,18 +2297,40 @@ export default function GallerySopBatchModal({
 
   useEffect(() => {
     if (!restoreComplete || !autoStart || autoStartRef.current || running || !selectedSop) return
+    if (targetImagesPerPrompt !== requestedInitialCounts.imagesPerPrompt) return
     // 上一轮残留的提示词会阻断自动生成。此处必须显式通知宿主，
     // 否则静默运行时用户按下发送后会毫无反馈。
     if (visiblePrompts.length > 0) {
       autoStartRef.current = true
       onAutoStartConsumed?.()
+      setConfirmDialog({
+        title: '检测到上一批未提交的提示词',
+        message: `当前已有 ${visiblePrompts.length} 条提示词，目标为 ${targetCount} 条。你可以保留现有内容并补齐缺口、继续提交当前列表，或清空后重新生成。`,
+        buttons: [
+          ...(missingCount > 0 ? [{
+            label: `补齐到 ${targetCount} 条`,
+            tone: 'primary' as const,
+            action: () => runPromptGeneration(undefined, false, true),
+          }] : []),
+          {
+            label: '继续提交',
+            tone: 'secondary',
+            action: () => void submitPromptList(),
+          },
+          {
+            label: '清空重来',
+            tone: 'danger',
+            action: () => void generatePromptList(true),
+          },
+        ],
+      })
       onNeedsAttention?.('existing-prompts')
       return
     }
     autoStartRef.current = true
     onAutoStartConsumed?.()
-    void generateForSources()
-  }, [autoStart, onAutoStartConsumed, onNeedsAttention, restoreComplete, running, selectedSop, visiblePrompts.length])
+    runPromptGeneration()
+  }, [autoStart, generatePromptList, missingCount, onAutoStartConsumed, onNeedsAttention, requestedInitialCounts.imagesPerPrompt, requestedInitialCounts.promptCount, restoreComplete, running, selectedSop, setConfirmDialog, submitPromptList, targetCount, targetImagesPerPrompt, visiblePrompts.length])
 
   useEffect(() => {
     if (!autoStart) autoStartRef.current = false
@@ -2853,7 +2954,7 @@ export default function GallerySopBatchModal({
                       <div className="flex items-center gap-2">
                         {sourceRun.status === 'running' && <span className="flex items-center gap-1.5 text-xs text-ds-primary"><LoaderCircle size={13} className="animate-spin" />生成中</span>}
                         {canRetrySource && (
-                          <button type="button" onClick={() => void generateForSources(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-ds-primary/30 bg-ds-surface px-2.5 text-xs font-medium text-ds-primary transition-colors hover:bg-ds-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><RefreshCw size={13} />补齐 {sourceMissing} 条</button>
+                          <button type="button" onClick={() => runPromptGeneration(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-ds-primary/30 bg-ds-surface px-2.5 text-xs font-medium text-ds-primary transition-colors hover:bg-ds-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><RefreshCw size={13} />补齐 {sourceMissing} 条</button>
                         )}
                         <button type="button" onClick={() => addManualPrompt(sourceRun.source.id)} disabled={running} className="flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-xs font-medium text-ds-text transition-colors hover:bg-ds-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ds-primary disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} />新增提示词</button>
                       </div>

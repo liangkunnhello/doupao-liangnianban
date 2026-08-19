@@ -299,7 +299,7 @@ export interface GenerationSlot {
   contentHash?: string
   /** 感知哈希（pHash），用于近似重复检测 */
   perceptualHash?: string
-  /** 失败原因（status === 'failed' 时） */
+  /** 最近一次校验拒绝或最终失败原因 */
   error?: string
 }
 

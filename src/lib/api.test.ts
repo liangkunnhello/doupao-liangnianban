@@ -33,6 +33,7 @@ describe('callImageApi', () => {
       const [, init] = fetchMock.mock.calls[0]
       const body = JSON.parse(String((init as RequestInit).body))
       expect(body.input).toBe('Use the following text as the complete prompt. Do not rewrite it:\nprompt')
+      expect(body.tools[0].background).toBe('opaque')
     },
   )
 
@@ -56,6 +57,10 @@ describe('callImageApi', () => {
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
     })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.background).toBe('opaque')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(result.actualParams).toEqual({

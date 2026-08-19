@@ -101,6 +101,7 @@ import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { setApiTransportMode } from './lib/desktopApiFetch'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { mergePostprocessedActualParams, postprocessGeneratedImage } from './lib/imagePostprocess'
+import { validateGeneratedImageAspectRatio } from './lib/imageAspectRatioGate'
 import {
   fingerprintImage,
 } from './lib/imageFingerprint'
@@ -123,12 +124,13 @@ import {
   type ImageProviderCapabilities,
   type PlannedRequest,
   type SlotAssignment,
+  type SlotValidationRejection,
   type ImageFingerprintLike,
 } from './lib/imageBatchOrchestrator'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, saveAgentRoundSummaryToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, getDirectoryBaseName, readDirectory, joinPath } from './lib/localSave'
+import { isElectron as isElectronEnv, getLocalSavePath, setLocalSavePath, copyRawCacheImagesToRoot, getImageExtensionFromDataUrl, saveImageToLocal, saveTaskMetaToLocal, savePromptToLocal, saveAgentConversationToLocal, saveAgentRoundSummaryToLocal, readFileBuffer, saveRawCacheImageToLocal, exportZipToPath, selectZipSavePath, getLocalImageSaveDirectory, getExplicitImageSaveDirectory, getDirectoryBaseName, readDirectory, joinPath, sanitizeFolderName } from './lib/localSave'
 import { migrateLegacyImages } from './lib/imageStorageMigration'
 import { buildElectronImageExportEntries, collectReferencedExportImageIds } from './lib/dataExport'
 import { ByteLruCache } from './lib/byteLruCache'
@@ -213,7 +215,7 @@ function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
 
-export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'backup' | 'about'
+export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'backup' | 'mcp' | 'about'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -276,11 +278,22 @@ function formatLocalSaveBatchFolder(createdAt: number, filenameBatch = 1): strin
   return `${year}${month}${day}-${hours}${minutes}${seconds}-batch-${batch}`
 }
 
-function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number): string | undefined {
+function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number, sopBatch?: TaskRecord['sopBatch']): string | undefined {
   const settings = normalizeSettings(useStore.getState().settings)
-  return settings.imageSaveLayout === 'batch-folder'
-    ? formatLocalSaveBatchFolder(createdAt, filenameBatch)
-    : undefined
+  if (settings.imageSaveLayout !== 'batch-folder') return undefined
+
+  // SOP 批次任务：同一批次的所有任务卡片保存到同一个子目录
+  if (sopBatch?.batchId) {
+    const date = new Date(createdAt)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const sopName = sanitizeFolderName(sopBatch.sopName || 'SOP')
+    const batchShort = sopBatch.batchId.slice(-8)
+    return `${year}${month}${day}-${sopName}-${batchShort}`
+  }
+
+  return formatLocalSaveBatchFolder(createdAt, filenameBatch)
 }
 
 async function getTaskImageSaveDirectory(task: TaskRecord, subFolder?: string): Promise<string | null> {
@@ -4695,7 +4708,7 @@ export async function submitTaskWithData(
     elapsed: null,
     scheduledOutputPath,
     scheduledOutputSubFolder,
-    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, sopBatch),
   }
 
   const latestTasks = useStore.getState().tasks
@@ -6032,7 +6045,7 @@ async function executeAgentStrategyRound(options: {
         finishedAt: null,
         elapsed: null,
         sourceMode: 'agent',
-        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
+        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, undefined),
         agentConversationId: conversationId,
         agentRoundId: roundId,
         agentMessageId: assistantMessageId,
@@ -6563,7 +6576,7 @@ async function executeAgentRound(
         finishedAt: null,
         elapsed: null,
         sourceMode: 'agent',
-        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
+        localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, undefined),
         agentConversationId: conversationId,
         agentRoundId: roundId,
         agentMessageId: assistantMessageId,
@@ -7218,7 +7231,7 @@ async function executeAgentRound(
           finishedAt: Date.now(),
           elapsed: Date.now() - startedAt,
           sourceMode: 'agent',
-          localSaveBatchFolder: getTaskLocalSaveBatchFolder(startedAt, filenameBatch),
+          localSaveBatchFolder: getTaskLocalSaveBatchFolder(startedAt, filenameBatch, undefined),
           agentConversationId: conversationId,
           agentRoundId: roundId,
           agentMessageId: assistantMessageId,
@@ -7880,11 +7893,20 @@ async function executeTask(taskId: string) {
           rawUrl?: string
         }> = []
         const rejectedExact: number[] = []
+        const validationRejections: SlotValidationRejection[] = []
         const seen: ImageFingerprintLike[] = []
         for (let i = 0; i < request.slotIndexes.length; i++) {
           const slotIndex = request.slotIndexes[i]
           const image = result.images[i]
           if (!image) continue
+          const aspectRatioGate = await validateGeneratedImageAspectRatio(image, taskParams.size)
+          if (!aspectRatioGate.accepted) {
+            validationRejections.push({
+              slotIndex,
+              error: aspectRatioGate.error ?? `图片比例不符合任务要求 ${taskParams.size}，错误图片已拦截`,
+            })
+            continue
+          }
           const prepared = await prepareGeneratedImage(
             image,
             taskParams,
@@ -7938,6 +7960,7 @@ async function executeTask(taskId: string) {
           requestId,
           assignments,
           rejectedExact.length ? { slotIndexes: rejectedExact, kind: 'exact-duplicate' } : undefined,
+          validationRejections,
         )
         const current = useStore.getState().tasks.find((t) => t.id === taskId)
         if (current && current.status === 'running') {
@@ -8151,6 +8174,9 @@ async function executeTask(taskId: string) {
         .map((s) => ({ index: s.index, error: s.error! }))
       const hasPartialFailure = batchItemErrors.length > 0
       const finalCompletion = getBatchCompletion(state, policy)
+      const finalStatus = finalCompletion.status === 'partial-failure' && doneSlots.length === 0
+        ? 'error'
+        : finalCompletion.status
       return {
         images,
         outputImages,
@@ -8161,9 +8187,9 @@ async function executeTask(taskId: string) {
         // 始终输出槽位级状态，便于 UI 展示「生成中 X/N」「补齐 Y 张」等。
         batchItemStatuses,
         batchItemErrors,
-        status: finalCompletion.status,
-        ...(finalCompletion.status === 'error'
-          ? { error: state.error ?? '生成失败' }
+        status: finalStatus,
+        ...(finalStatus === 'error'
+          ? { error: state.error ?? batchItemErrors[0]?.error ?? '生成失败' }
           : hasPartialFailure
             ? { error: `${batchItemErrors.length} 张图片生成失败` }
             : {}),
@@ -8180,46 +8206,80 @@ async function executeTask(taskId: string) {
     if (n > 1) {
       result = await executeOrchestratedBatch()
     } else {
-      let singleRequestProgressed = false
-      result = await retryTransientRequest(() => callImageApi({
-        settings: requestSettings,
-        prompt: appendAdNegativeRule(
-          replaceImageMentionsForApi(resolveTaskPrompt(0), inputDataUrls.length, undefined, variableResolver),
-          task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
-        ),
-        params: task.params,
-        inputImageDataUrls: inputDataUrls,
-        maskDataUrl,
-        onFalRequestEnqueued: (request) => {
-          singleRequestProgressed = true
-          falRequestInfo = request
-          updateTaskProgress(taskId, 'relay-received')
-          return updateTaskInStore(taskId, {
-            falRequestId: request.requestId,
-            falEndpoint: request.endpoint,
-            falRecoverable: false,
-          })
-        },
-        onCustomTaskEnqueued: (request) => {
-          singleRequestProgressed = true
-          customTaskInfo = request
-          updateTaskProgress(taskId, 'relay-received')
-          return updateTaskInStore(taskId, {
-            customTaskId: request.taskId,
-            customRecoverable: false,
-          })
-        },
-        onPartialImage: (partial) => {
-          singleRequestProgressed = true
-          updateTaskProgress(taskId, 'previewing')
-          useRuntimeStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
-          void persistTaskStreamPartialImage(taskId, partial.image)
-          scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
-        },
+      const aspectRatioAttempts = 3
+      let acceptedResult: CallApiResult | undefined
+      let lastAspectRatioError = ''
+
+      for (let aspectAttempt = 0; aspectAttempt < aspectRatioAttempts; aspectAttempt++) {
+        let singleRequestProgressed = false
+        const candidateResult = await retryTransientRequest(() => callImageApi({
+          settings: requestSettings,
+          prompt: appendAdNegativeRule(
+            replaceImageMentionsForApi(resolveTaskPrompt(0), inputDataUrls.length, undefined, variableResolver),
+            task.adNegativeRuleSnapshot?.content ?? getAdNegativeRule(requestSettings, task.params.adNegativeRuleId).content,
+          ),
+          params: task.params,
+          inputImageDataUrls: inputDataUrls,
+          maskDataUrl,
+          onFalRequestEnqueued: (request) => {
+            singleRequestProgressed = true
+            falRequestInfo = request
+            updateTaskProgress(taskId, 'relay-received')
+            return updateTaskInStore(taskId, {
+              falRequestId: request.requestId,
+              falEndpoint: request.endpoint,
+              falRecoverable: false,
+            })
+          },
+          onCustomTaskEnqueued: (request) => {
+            singleRequestProgressed = true
+            customTaskInfo = request
+            updateTaskProgress(taskId, 'relay-received')
+            return updateTaskInStore(taskId, {
+              customTaskId: request.taskId,
+              customRecoverable: false,
+            })
+          },
+          onPartialImage: (partial) => {
+            singleRequestProgressed = true
+            updateTaskProgress(taskId, 'previewing')
+            useRuntimeStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
+            void persistTaskStreamPartialImage(taskId, partial.image)
+            scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
+          },
         }), {
           maxRetries: normalizeMaxRetries(activeProfile.maxRetries),
           shouldRetry: (error) => !singleRequestProgressed && isRetryableError(error),
         })
+
+        lastAspectRatioError = candidateResult.images.length > 0 ? '' : '服务商未返回图片'
+        for (const image of candidateResult.images) {
+          const aspectRatioGate = await validateGeneratedImageAspectRatio(image, taskParams.size)
+          if (!aspectRatioGate.accepted) {
+            lastAspectRatioError = aspectRatioGate.error ?? `图片比例不符合任务要求 ${taskParams.size}`
+            break
+          }
+        }
+
+        if (!lastAspectRatioError) {
+          acceptedResult = candidateResult
+          break
+        }
+
+        useRuntimeStore.getState().setTaskStreamPreview(taskId)
+        if (aspectAttempt < aspectRatioAttempts - 1) {
+          updateTaskProgress(
+            taskId,
+            'generating',
+            `${lastAspectRatioError}，正在重新生成（${aspectAttempt + 1}/2）`,
+          )
+        }
+      }
+
+      if (!acceptedResult) {
+        throw new Error(`${lastAspectRatioError || '图片比例门禁未通过'}；自动重新生成 2 次后仍未通过`)
+      }
+      result = acceptedResult
     }
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -8780,7 +8840,7 @@ export async function retryTask(task: TaskRecord, options: { sopBatch?: TaskReco
     createdAt,
     finishedAt: null,
     elapsed: null,
-    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch),
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, options.sopBatch ?? task.sopBatch),
   }
 
   const latestTasks = useStore.getState().tasks

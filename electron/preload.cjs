@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: () => ipcRenderer.invoke('fs:select-directory'),
   selectFile: (filters) => ipcRenderer.invoke('fs:select-file', { filters }),
   selectFiles: (filters) => ipcRenderer.invoke('fs:select-files', { filters }),
+  loadHanhaiProcessingPresets: (filePath) => ipcRenderer.invoke('hanhai:load-processing-presets', { filePath }),
   saveImage: (filePath, dataUrl) => ipcRenderer.invoke('fs:save-image', { filePath, dataUrl }),
   saveCompositeImage: (filePath, dataUrl, maxSizeKb) => ipcRenderer.invoke('composite:save-image', { filePath, dataUrl, maxSizeKb }),
   authorizeCompositeOutputDirectory: (dirPath) => ipcRenderer.invoke('composite:authorize-output-directory', { dirPath }),
@@ -82,5 +83,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('update:install'),
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
   getStartupMode: () => ipcRenderer.invoke('app:get-startup-mode'),
+  mcpRegisterTools: (tools) => ipcRenderer.send('mcp:register-tools', tools),
+  onMcpToolCall: (callback) => {
+    const handler = (_event, payload) => callback(payload)
+    ipcRenderer.on('mcp:tool-call', handler)
+    return () => ipcRenderer.removeListener('mcp:tool-call', handler)
+  },
+  mcpRespondToolCall: (id, payload) => ipcRenderer.send('mcp:tool-result', { id, ...payload }),
+  mcpGetConfig: () => ipcRenderer.invoke('mcp:get-config'),
+  mcpGetStatus: () => ipcRenderer.invoke('mcp:get-status'),
+  mcpUpdateConfig: (patch) => ipcRenderer.invoke('mcp:update-config', patch),
   isElectron: true,
 })

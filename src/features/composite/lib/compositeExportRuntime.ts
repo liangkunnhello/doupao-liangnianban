@@ -36,10 +36,14 @@ export async function waitWhilePaused(
 async function renderWithMaxKb(
   input: Omit<Parameters<typeof renderCompositeV2ToJpegDataUrl>[0], 'quality'>,
   maxSizeKb: number,
+  maxQuality = 0.9,
   callbacks?: { shouldPause: () => boolean; shouldCancel: () => boolean },
 ) {
   let low = 0.01
-  let high = 0.9
+  let high = Math.max(low, Math.min(1, maxQuality))
+  if (maxSizeKb <= 0) {
+    return { dataUrl: await renderCompositeV2ToJpegDataUrl({ ...input, quality: high }) }
+  }
   let bestDataUrl = await renderCompositeV2ToJpegDataUrl({ ...input, quality: low })
   
   if (callbacks?.shouldCancel()) throw new Error('渲染被取消')
@@ -81,12 +85,14 @@ export function buildPresetOutputPathParts(
 ) {
   const output = buildCompositeOutputPathParts({
     ...buildPresetTemplateVariables(item),
-    namingTemplate: '',
+    namingTemplate: item.preset.outputFolderTemplate ?? '',
     filenameTemplate: item.preset.filenameTemplate,
     preserveSourceDir: false,
   })
   return {
-    subfolders: [output.filename.replace(/\.jpg$/i, '')],
+    subfolders: item.preset.outputFolderTemplate
+      ? output.subfolders
+      : [output.filename.replace(/\.jpg$/i, '')],
     filename: output.filename,
   }
 }
@@ -97,7 +103,9 @@ function buildPresetTemplateVariables(item: CompositeV2ExportItem) {
     channel: item.outputRule.channelName,
     size: item.outputRule.name,
     preset: item.preset.name,
-    index: item.index,
+    index: item.preset.indexPadding
+      ? String(item.index).padStart(item.preset.indexPadding, '0')
+      : item.index,
     source: item.background.name.replace(/\.[^.]+$/, ''),
     sourceDir: item.background.relativeDir,
     custom: item.custom,
@@ -151,7 +159,7 @@ export async function runCompositeV2Export(snapshot: CompositeV2ExportSnapshot, 
         preset: item.preset,
         targetSize: { width: item.outputRule.width, height: item.outputRule.height },
         fitMode: snapshot.fitMode,
-      }, item.outputRule.maxSizeKb, {
+      }, item.outputRule.maxSizeKb, item.outputRule.jpegQuality ?? 0.9, {
         shouldPause: callbacks.shouldPause,
         shouldCancel: callbacks.shouldCancel,
       })

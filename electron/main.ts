@@ -5,6 +5,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { registerIpcHandlers, initLocalSavePath } from './ipc-handlers'
 import { registerApiTransport } from './api-transport'
+import { initMcpServer, mcpNotifyRendererGone } from './mcp-server'
 import { decideRendererRecovery } from './renderer-crash-recovery'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -166,6 +167,7 @@ function createWindow() {
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[renderer-crash]', details.reason, details.exitCode)
+    mcpNotifyRendererGone()
     const now = Date.now()
     rendererCrashTimestamps = [...rendererCrashTimestamps.filter((timestamp) => now - timestamp <= 60_000), now]
     const decision = decideRendererRecovery(rendererCrashTimestamps, now)
@@ -197,6 +199,9 @@ app.whenReady().then(() => {
   initLocalSavePath()
   registerIpcHandlers()
   registerApiTransport()
+  void initMcpServer({ getMainWindow: () => mainWindow }).catch((error) => {
+    console.error('[mcp] 初始化失败', error)
+  })
   ipcMain.handle('app:get-startup-mode', () => ({ safeMode: rendererSafeMode }))
 
   ipcMain.handle('update:check', async () => {

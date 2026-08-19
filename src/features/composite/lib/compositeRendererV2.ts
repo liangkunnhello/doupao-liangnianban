@@ -114,16 +114,36 @@ async function drawLayer(ctx: CanvasRenderingContext2D, layer: CompositeV2TextLa
   if (layer.type !== 'text') {
     const image = await resolveLayerImage(layer)
     if (image) {
+      const drawImage = () => {
+        if (layer.imageFit !== 'crop-fill') {
+          ctx.drawImage(image, -rect.width / 2, -rect.height / 2, rect.width, rect.height)
+          return
+        }
+        const factor = Math.max(rect.width / image.naturalWidth, rect.height / image.naturalHeight)
+        const sourceWidth = rect.width / factor
+        const sourceHeight = rect.height / factor
+        ctx.drawImage(
+          image,
+          (image.naturalWidth - sourceWidth) / 2,
+          (image.naturalHeight - sourceHeight) / 2,
+          sourceWidth,
+          sourceHeight,
+          -rect.width / 2,
+          -rect.height / 2,
+          rect.width,
+          rect.height,
+        )
+      }
       if (layer.clip) {
         const radius = Math.min(layer.radius, rect.width / 2, rect.height / 2)
         ctx.save()
         ctx.beginPath()
         ctx.roundRect(-rect.width / 2, -rect.height / 2, rect.width, rect.height, radius)
         ctx.clip()
-        ctx.drawImage(image, -rect.width / 2, -rect.height / 2, rect.width, rect.height)
+        drawImage()
         ctx.restore()
       } else {
-        ctx.drawImage(image, -rect.width / 2, -rect.height / 2, rect.width, rect.height)
+        drawImage()
       }
       const strokeWidth = getScaledLayerStrokeWidth(layer.stroke, preset.baseCanvas, target)
       if (strokeWidth > 0) {

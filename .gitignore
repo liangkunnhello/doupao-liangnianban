@@ -18,3 +18,15 @@ latest.yml
 # build / runtime logs
 *.log
 .impeccable/
+.zcode/
+
+# Local integration probes and machine-specific snapshots
+.hanhai-presets.json
+.hanhai.mjs
+.mcp-doupao.mjs
+.mcp-tools.json
+scripts/dump-settings.mjs
+scripts/probe-models.mjs
+scripts/probe-protocol.mjs
+scripts/test-responses-request.mjs
+scripts/test-sop-prompt-request.mjs

@@ -7,6 +7,8 @@ import { writeStreamingZip, type StreamingZipRequest } from './streaming-zip'
 
 const LOCAL_SETTINGS_FILE = 'local-settings.json'
 const sessionAllowedRoots = new Set<string>()
+const HANHAI_PRESET_RELATIVE_PATH = path.join('hanhai_java_workspace', 'data', 'shared', 'processing_presets.json')
+const INVISIBLE_PATH_CHARS = /[\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g
 
 export function pruneBackupFiles(pathsByNewestFirst: string[], keep: number): void {
   for (const filePath of pathsByNewestFirst.slice(Math.max(0, keep))) {
@@ -82,6 +84,90 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export function findLatestHanhaiProcessingPresetsPath(videosRoot: string): string | null {
+  if (!existsSync(videosRoot) || !statSync(videosRoot).isDirectory()) return null
+  const candidates = readdirSync(videosRoot)
+    .filter((name) => name.startsWith('瀚海源码完整版_'))
+    .map((name) => path.join(videosRoot, name, HANHAI_PRESET_RELATIVE_PATH))
+    .filter((filePath) => {
+      try {
+        return statSync(filePath).isFile()
+      } catch {
+        return false
+      }
+    })
+    .map((filePath) => ({ filePath, modifiedAt: statSync(filePath).mtimeMs }))
+    .sort((a, b) => b.modifiedAt - a.modifiedAt)
+  return candidates[0]?.filePath ?? null
+}
+
+function collectHanhaiWatermarkPaths(value: unknown, result = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectHanhaiWatermarkPaths(item, result))
+    return result
+  }
+  if (!value || typeof value !== 'object') return result
+  const record = value as Record<string, unknown>
+  if (Array.isArray(record.watermarks)) {
+    record.watermarks.forEach((watermark) => {
+      if (!watermark || typeof watermark !== 'object') return
+      const entry = watermark as Record<string, unknown>
+      if (String(entry.type ?? 'image').toLowerCase() === 'text') return
+      const raw = typeof entry.path === 'string' ? entry.path : typeof entry.asset === 'string' ? entry.asset : ''
+      const cleaned = raw.replace(INVISIBLE_PATH_CHARS, '').trim()
+      if (cleaned) result.add(cleaned)
+    })
+  }
+  if (Array.isArray(record.children)) collectHanhaiWatermarkPaths(record.children, result)
+  return result
+}
+
+function readHanhaiImportAsset(rawPath: string, configPath: string) {
+  const cleanedPath = rawPath.replace(INVISIBLE_PATH_CHARS, '').trim()
+  const workspaceRoot = path.resolve(path.dirname(configPath), '..', '..')
+  const fallbackPath = path.join(workspaceRoot, 'frontend', 'assets', 'watermarks', path.basename(cleanedPath))
+  const resolvedPath = [cleanedPath, fallbackPath].find((candidate) => {
+    try {
+      return path.isAbsolute(candidate) && statSync(candidate).isFile() && isCompositeImagePath(candidate)
+    } catch {
+      return false
+    }
+  })
+  if (!resolvedPath) {
+    return { path: cleanedPath, name: path.basename(cleanedPath), dataUrl: null, width: 0, height: 0 }
+  }
+  const buffer = readFileSync(resolvedPath)
+  const dimensions = sizeOf(buffer)
+  return {
+    path: cleanedPath,
+    name: path.basename(resolvedPath),
+    dataUrl: `data:${mimeFromImagePath(resolvedPath)};base64,${buffer.toString('base64')}`,
+    width: dimensions.width ?? 0,
+    height: dimensions.height ?? 0,
+  }
+}
+
+export function loadHanhaiProcessingPresets(filePath?: string | null) {
+  const locatedPath = filePath?.trim() || findLatestHanhaiProcessingPresetsPath(app.getPath('videos'))
+  if (!locatedPath) return null
+  const normalizedPath = normalizeFsPath(locatedPath)
+  if (!filePath) addAllowedRoot(path.dirname(normalizedPath))
+  const safePath = assertAllowedPath(normalizedPath)
+  if (path.basename(safePath).toLowerCase() !== 'processing_presets.json') {
+    throw new Error('请选择瀚海的 processing_presets.json')
+  }
+  if (!existsSync(safePath) || !statSync(safePath).isFile()) throw new Error('瀚海预设文件不存在')
+  const jsonText = readFileSync(safePath, 'utf-8')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonText)
+  } catch {
+    throw new Error('瀚海预设 JSON 格式无效')
+  }
+  const assets = [...collectHanhaiWatermarkPaths(parsed)].map((assetPath) => readHanhaiImportAsset(assetPath, safePath))
+  return { configPath: safePath, jsonText, assets }
 }
 
 async function listBackupFiles(backupDir: string, baseName: string): Promise<string[]> {
@@ -578,6 +664,14 @@ export function registerIpcHandlers(): void {
     if (result.canceled || result.filePaths.length === 0) return null
     result.filePaths.forEach(p => addAllowedRoot(path.dirname(p)))
     return result.filePaths
+  })
+
+  ipcMain.handle('hanhai:load-processing-presets', async (_event, { filePath }: { filePath?: string | null } = {}) => {
+    try {
+      return { success: true, source: loadHanhaiProcessingPresets(filePath) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '读取瀚海产品预设失败' }
+    }
   })
 
   ipcMain.handle('fs:save-image', async (_event, { filePath, dataUrl }: { filePath: string; dataUrl: string }) => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getApiErrorMessage, retryTransientRequest } from './imageApiShared'
+import { getApiErrorMessage, getImageMimeFromDataUrl, normalizeBase64Image, retryTransientRequest } from './imageApiShared'
 
 describe('retryTransientRequest', () => {
   afterEach(() => {
@@ -33,5 +33,21 @@ describe('retryTransientRequest', () => {
     }), { status: 503 }))
 
     expect(message).toBe('HTTP 503: upstream overloaded')
+  })
+})
+
+describe('image MIME normalization', () => {
+  it('uses the actual PNG signature when a provider labels it as JPEG', () => {
+    const mislabeled = 'data:image/jpeg;base64,iVBORw0KGgo='
+
+    expect(normalizeBase64Image(mislabeled, 'image/jpeg')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(getImageMimeFromDataUrl(mislabeled)).toBe('image/png')
+  })
+
+  it('keeps valid JPEG payloads marked as JPEG', () => {
+    const jpeg = 'data:image/jpeg;base64,/9j/4AAQ'
+
+    expect(normalizeBase64Image(jpeg, 'image/png')).toBe(jpeg)
+    expect(getImageMimeFromDataUrl(jpeg)).toBe('image/jpeg')
   })
 })

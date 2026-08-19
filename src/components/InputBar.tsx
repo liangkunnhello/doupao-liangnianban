@@ -26,6 +26,10 @@ import ViewportTooltip from './ViewportTooltip'
 import { CloseIcon, FolderOpenIcon, TagsIcon } from './icons'
 import AssistantActionBar from '../features/assistantActions/AssistantActionBar'
 import { getGallerySopPromptRunStorageKey, type GallerySopRunStatus } from '../features/strategy/adapters/gallerySopRun'
+import {
+  GALLERY_SOP_PROMPT_RUN_REQUEST_EVENT,
+  type GallerySopPromptRunRequest,
+} from '../features/strategy/adapters/gallerySopPromptRunRequest'
 import { getSopRunCounts, getSopTotalImageCount, MAX_SOP_IMAGES_PER_PROMPT } from '../features/strategy/sopPromptBatch'
 import { useRequirementPrototype } from '../features/requirementPrototype/store'
 import { getSopExecutionMode, type SopLibraryItem } from '../features/strategy/types'
@@ -590,6 +594,7 @@ export default function InputBar() {
   const [showAgentBatchPlanner, setShowAgentBatchPlanner] = useState(false)
   const [showGallerySopBatch, setShowGallerySopBatch] = useState(false)
   const [gallerySopBatchTabIds, setGallerySopBatchTabIds] = useState<string[]>([])
+  const [gallerySopBatchInstanceByTab, setGallerySopBatchInstanceByTab] = useState<Record<string, number>>({})
   const [visibleGallerySopBatchTabId, setVisibleGallerySopBatchTabId] = useState<string | null>(null)
   const [showGallerySopManagement, setShowGallerySopManagement] = useState(false)
   /**
@@ -829,8 +834,45 @@ export default function InputBar() {
   }, [gallerySopId, sopItems])
 
   useEffect(() => {
+    const handlePromptRunRequest = (event: Event) => {
+      const detail = (event as CustomEvent<GallerySopPromptRunRequest>).detail
+      const sop = sopItems.find((item) => item.id === detail?.sopId)
+      if (!sop || (sop.executionMode ?? 'prompt-generator') !== 'prompt-generator') {
+        showToast('无法启动提示词批次：SOP 不存在或不是生成型 SOP', 'error')
+        return
+      }
+      const scopeId = activeWorkspaceTabId ?? '__default__'
+      const quantity = getSopRunCounts(detail.quantity, 1).promptCount
+      const requestedImagesPerPrompt = getSopRunCounts(
+        quantity,
+        detail.imagesPerPrompt ?? gallerySopImagesPerPromptByTab[scopeId] ?? 1,
+      ).imagesPerPrompt
+      window.localStorage.removeItem(getGallerySopPromptRunStorageKey(activeWorkspaceTabId))
+      setSavedSopPromptCount(0)
+      setGallerySopRunStatusByTab((current) => {
+        const next = { ...current }
+        delete next[scopeId]
+        return next
+      })
+      setGallerySopIdsByTab((current) => ({ ...current, [scopeId]: sop.id }))
+      setGallerySopPromptCountsByTab((current) => ({ ...current, [scopeId]: quantity }))
+      setGallerySopImagesPerPromptByTab((current) => ({ ...current, [scopeId]: requestedImagesPerPrompt }))
+      setGallerySopAutoGenerateByTab((current) => ({ ...current, [scopeId]: false }))
+      setGallerySopSecondReferenceByTab((current) => ({ ...current, [scopeId]: false }))
+      setGallerySopBatchInstanceByTab((current) => ({ ...current, [scopeId]: (current[scopeId] ?? 0) + 1 }))
+      setGallerySopBatchTabIds((current) => current.includes(scopeId) ? current : [...current, scopeId])
+      setVisibleGallerySopBatchTabId(scopeId)
+      silentGallerySopTabsRef.current.delete(scopeId)
+      setShowGallerySopBatch(true)
+      setGallerySopAutoStartTabId(scopeId)
+    }
+    window.addEventListener(GALLERY_SOP_PROMPT_RUN_REQUEST_EVENT, handlePromptRunRequest)
+    return () => window.removeEventListener(GALLERY_SOP_PROMPT_RUN_REQUEST_EVENT, handlePromptRunRequest)
+  }, [activeWorkspaceTabId, gallerySopImagesPerPromptByTab, showToast, sopItems])
+
+  useEffect(() => {
     refreshSavedSopPromptCount()
-  }, [refreshSavedSopPromptCount, showGallerySopBatch])
+  }, [refreshSavedSopPromptCount])
 
   useEffect(() => {
     if (visibleGallerySopBatchTabId && visibleGallerySopBatchTabId !== gallerySopScopeId) {
@@ -4020,7 +4062,7 @@ export default function InputBar() {
       {gallerySopBatchTabIds.map((tabId) => createPortal(
         <Suspense fallback={null}>
         <GallerySopBatchModal
-          key={tabId}
+          key={`${tabId}:${gallerySopBatchInstanceByTab[tabId] ?? 0}`}
           workspaceTabId={tabId === '__default__' ? null : tabId}
           visible={showGallerySopBatch && visibleGallerySopBatchTabId === tabId}
           initialSopId={gallerySopIdsByTab[tabId] ?? ''}
@@ -4032,11 +4074,8 @@ export default function InputBar() {
           autoStart={gallerySopAutoStartTabId === tabId}
           onAutoStartConsumed={() => setGallerySopAutoStartTabId(null)}
           onStatusChange={handleGallerySopRunStatusChange}
-          onNeedsAttention={(reason) => {
+          onNeedsAttention={() => {
             revealGallerySopBatch(tabId)
-            if (reason === 'existing-prompts') {
-              showToast('检测到上一批未提交的提示词，请先确认是继续提交还是清空重来', 'error')
-            }
           }}
           onBackground={() => {
             silentGallerySopTabsRef.current.add(tabId)

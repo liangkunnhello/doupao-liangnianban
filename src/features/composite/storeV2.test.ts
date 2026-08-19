@@ -8,6 +8,7 @@ import {
 } from './storeV2'
 import { createDefaultCompositeV2Preset, createDefaultCompositeV2PresetGroup } from './lib/compositeV2Defaults'
 import type { CompositeV2ImageLayer, CompositeV2TextLayer } from './lib/compositeV2Types'
+import type { HanhaiImportBundle } from './lib/hanhaiPresetImport'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -616,5 +617,29 @@ describe('composite v2 store state factory', () => {
 
     expect(store.getState().outputRuleGroups[1]!.rules.every((rule) => rule.enabled)).toBe(true)
     expect(store.getState().outputRuleGroups[0]).toEqual(untouchedGroup)
+  })
+
+  it('imports Hanhai presets atomically and skips the same stable source id later', () => {
+    const store = createCompositeV2Store()
+    const importedPreset = {
+      ...createDefaultCompositeV2Preset(10),
+      id: 'hanhai:preset:source-a',
+      name: '瀚海预设 A',
+    }
+    const bundle: HanhaiImportBundle = {
+      presets: [importedPreset],
+      presetGroups: [{ id: 'hanhai:group:source', name: '瀚海组', presetIds: [importedPreset.id], updatedAt: 10 }],
+      projectLogos: [{ id: 'hanhai:asset:hash-a', name: 'watermark.png', assetId: 'hash-a' }],
+      customVariables: [{ id: 'hanhai:variable:strategy_name', name: 'strategy_name', value: '未指定策略' }],
+    }
+
+    expect(store.getState().importHanhaiPresets(bundle)).toEqual({ imported: 1, skipped: 0 })
+    store.getState().updatePreset(importedPreset.id, { name: '用户已修改名称' })
+    expect(store.getState().importHanhaiPresets(bundle)).toEqual({ imported: 0, skipped: 1 })
+
+    expect(store.getState().presets.filter((preset) => preset.id === importedPreset.id)).toHaveLength(1)
+    expect(store.getState().presets.find((preset) => preset.id === importedPreset.id)?.name).toBe('用户已修改名称')
+    expect(store.getState().presetGroups.find((group) => group.id === 'hanhai:group:source')?.presetIds).toEqual([importedPreset.id])
+    expect(store.getState().projectLogos.filter((logo) => logo.id === 'hanhai:asset:hash-a')).toHaveLength(1)
   })
 })

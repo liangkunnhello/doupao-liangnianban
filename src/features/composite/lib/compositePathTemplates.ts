@@ -3,7 +3,7 @@ type TemplateVars = {
   channel: string
   size: string
   preset: string
-  index: number
+  index: number | string
   source: string
   sourceDir: string
   custom: string

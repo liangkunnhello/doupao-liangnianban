@@ -108,6 +108,7 @@ function createImageTool(params: TaskParams, profile: ApiProfile, maskDataUrl?: 
     action: 'auto',
     size: params.size,
     output_format: params.output_format,
+    background: 'opaque',
     moderation: params.moderation,
   }
 
@@ -1584,6 +1585,7 @@ export async function callBatchImageSingle(opts: {
       action: referenceImageDataUrls.length > 0 ? 'auto' : 'generate',
       size: params.size,
       output_format: params.output_format,
+      background: 'opaque',
       moderation: params.moderation,
       quality: params.quality,
     }

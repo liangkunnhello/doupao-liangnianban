@@ -1,13 +1,17 @@
 import { getAgentTextApiProfile } from '../../../lib/apiProfiles'
+import { apiFetch } from '../../../lib/desktopApiFetch'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from '../../../lib/devProxy'
 import { submitTaskWithData, useStore } from '../../../store'
 import { parseVariablePrompt } from '../../../lib/variablePrompt'
 import {
   buildSopRequestContent,
+  extractChatCompletionText,
   extractResponseText,
   getSopGeneratorInstruction,
   parseGeneratedSop,
   parseGeneratedVariablePrompt,
+  toChatCompletionMessages,
+  toChatResponseFormat,
   validateSopGenerationInput,
   type GenerateSop,
 } from '../sopGeneration'
@@ -24,6 +28,99 @@ import {
   EXCLUDE_TEXT_SKILL_INSTRUCTION,
   KEEP_TEXT_SKILL_INSTRUCTION,
 } from '../variablePromptTextPolicy'
+
+const SOP_TEXT_REQUEST_TIMEOUT_CAP_SECONDS = 180
+const SOP_TEXT_REQUEST_TIMEOUT_FALLBACK_SECONDS = 180
+
+type BufferedApiResponse = {
+  ok: boolean
+  status: number
+  body: string
+}
+
+function getSopTextRequestTimeoutSeconds(configuredTimeout: number | undefined) {
+  const normalized = typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout)
+    ? Math.max(1, configuredTimeout)
+    : SOP_TEXT_REQUEST_TIMEOUT_FALLBACK_SECONDS
+  return Math.min(normalized, SOP_TEXT_REQUEST_TIMEOUT_CAP_SECONDS)
+}
+
+async function postSopModelRequest(
+  url: string,
+  body: unknown,
+  apiKey: string,
+  configuredTimeout: number | undefined,
+  externalSignal: AbortSignal | undefined,
+  operation: string,
+): Promise<BufferedApiResponse> {
+  externalSignal?.throwIfAborted()
+  const controller = new AbortController()
+  const timeoutSeconds = getSopTextRequestTimeoutSeconds(configuredTimeout)
+  let timedOut = false
+  const abortFromCaller = () => controller.abort(externalSignal?.reason)
+  externalSignal?.addEventListener('abort', abortFromCaller, { once: true })
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort(new DOMException(`${operation}超时`, 'TimeoutError'))
+  }, timeoutSeconds * 1000)
+
+  try {
+    const response = await apiFetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+      cache: 'no-store',
+      body: JSON.stringify(body),
+    })
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: await response.text(),
+    }
+  } catch (error) {
+    if (externalSignal?.aborted) {
+      throw externalSignal.reason instanceof Error ? externalSignal.reason : error
+    }
+    if (timedOut) {
+      throw new Error(`${operation}超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或检查文本模型服务。`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    externalSignal?.removeEventListener('abort', abortFromCaller)
+  }
+}
+
+function parseBufferedResponse(response: BufferedApiResponse) {
+  return JSON.parse(response.body) as unknown
+}
+
+function shouldPreferChatCompletions(model: string) {
+  return /(?:^|[/_.-])gemini(?:$|[/_.-])/i.test(model.trim())
+}
+
+function toBufferedRequestFailure(error: unknown): BufferedApiResponse {
+  return {
+    ok: false,
+    status: 0,
+    body: error instanceof Error ? error.message : String(error),
+  }
+}
+
+function getBufferedResponseText(response: BufferedApiResponse, useChat: boolean) {
+  let payload: unknown
+  try {
+    payload = parseBufferedResponse(response)
+  } catch {
+    throw new Error('文本模型返回了无法解析的响应')
+  }
+  const text = useChat ? extractChatCompletionText(payload) : extractResponseText(payload)
+  if (!text.trim()) throw new Error('文本模型返回成功状态，但没有返回任何文本内容')
+  return text
+}
 
 const SOP_GENERATION_TEXT_FORMAT = {
   type: 'json_schema',
@@ -116,34 +213,48 @@ export const generateSopFromStore: GenerateSop = async (
       : '正在整理生成说明与元指令',
   })
   const content = buildSopRequestContent(brief, context, referenceImages, kind, excludeText)
-  const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
+  let useChat = settings.agentTextProtocol === 'chat-completions' || shouldPreferChatCompletions(profile.model || settings.model)
+  const buildRequestUrl = (useChat: boolean) => buildApiUrl(
+    profile.baseUrl,
+    useChat ? 'chat/completions' : 'responses',
+    proxy,
+    shouldUseApiProxy(profile.apiProxy, proxy),
+  )
   const baseInstruction = getSopGeneratorInstruction(kind, metaInstruction)
   const responseFormat = variablePromptMode ? VARIABLE_PROMPT_GENERATION_TEXT_FORMAT : SOP_GENERATION_TEXT_FORMAT
-  const send = (useStructuredOutput: boolean, retryIncomplete = false) => {
+  const send = (useStructuredOutput: boolean, useChat: boolean, retryIncomplete = false) => {
     options?.signal?.throwIfAborted()
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${profile.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: options?.signal,
-      cache: 'no-store',
-      body: JSON.stringify({
-        model: profile.model || settings.model,
-        instructions: [
-          baseInstruction,
-          variablePromptMode
-            ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
-            : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
-          variablePromptMode ? (excludeText ? EXCLUDE_TEXT_SKILL_INSTRUCTION : KEEP_TEXT_SKILL_INSTRUCTION) : '',
-          retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
-        ].filter(Boolean).join('\n\n'),
-        input: [{ role: 'user', content }],
-        max_output_tokens: 8000,
-        ...(useStructuredOutput ? { text: { format: responseFormat } } : {}),
-      }),
-    })
+    const instructions = [
+      baseInstruction,
+      variablePromptMode
+        ? '应用只接收 name、description、variablePrompt 三个字段；不得返回 sop。variablePrompt 必须是可直接拆解生图的完整模板，包含正文变量、单独一行的“可变项：”和逐行变量定义。'
+        : '应用只接收 name、description、sop 三个字段；不得省略任何字段，sop 必须包含完整正文。',
+      variablePromptMode ? (excludeText ? EXCLUDE_TEXT_SKILL_INSTRUCTION : KEEP_TEXT_SKILL_INSTRUCTION) : '',
+      retryIncomplete ? '上一轮结果结构不完整。请重新完整生成，不要复述错误结果。' : '',
+    ].filter(Boolean).join('\n\n')
+    const body = useChat
+      ? {
+          model: profile.model || settings.model,
+          messages: toChatCompletionMessages(instructions, [{ role: 'user', content }]),
+          max_tokens: 8000,
+          ...(useStructuredOutput ? { response_format: toChatResponseFormat(responseFormat) } : {}),
+        }
+      : {
+          model: profile.model || settings.model,
+          instructions,
+          input: [{ role: 'user', content }],
+          max_output_tokens: 8000,
+          ...(useStructuredOutput ? { text: { format: responseFormat } } : {}),
+        }
+    return postSopModelRequest(buildRequestUrl(useChat), body, profile.apiKey, profile.timeout, options?.signal, variablePromptMode ? '变量提示词生成' : 'SOP 生成')
+  }
+  const sendSafely = async (useStructuredOutput: boolean, chat: boolean, retryIncomplete = false) => {
+    try {
+      return await send(useStructuredOutput, chat, retryIncomplete)
+    } catch (error) {
+      options?.signal?.throwIfAborted()
+      return toBufferedRequestFailure(error)
+    }
   }
 
   options?.onProgress?.({
@@ -153,16 +264,29 @@ export const generateSopFromStore: GenerateSop = async (
       : `AI 正在分析输入并${variablePromptMode ? '反推变量提示词' : '编译 SOP'}`,
   })
   let structuredOutputEnabled = true
-  let response = await send(structuredOutputEnabled)
+  let protocolFallbackUsed = false
+  let response = await sendSafely(structuredOutputEnabled, useChat)
   options?.signal?.throwIfAborted()
-  if (!response.ok && (response.status === 400 || response.status === 422)) {
+  // 第 1 层：结构化输出被拒（部分模型不支持 json_schema）→ 关掉结构化输出，同一协议重试一次。
+  if (!response.ok && structuredOutputEnabled && (response.status === 400 || response.status === 422)) {
     structuredOutputEnabled = false
     options?.onProgress?.({ stage: 'request', message: '当前模型已切换为兼容生成模式' })
-    response = await send(false)
+    response = await sendSafely(false, useChat)
+  }
+  // 第 2 层：协议层失败（Responses 端不受支持 / 渠道不可用）→ 自动切换到另一种协议重试一次。
+  if (!response.ok) {
+    const alternateChat = !useChat
+    options?.onProgress?.({
+      stage: 'request',
+      message: alternateChat ? 'Responses 协议不可用，已自动切换为 Chat Completions' : 'Chat Completions 协议不可用，已自动切换为 Responses',
+    })
+    useChat = alternateChat
+    protocolFallbackUsed = true
+    response = await sendSafely(structuredOutputEnabled, useChat)
   }
   if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}生成失败（${response.status}）：${body.slice(0, 180)}`)
+    const status = response.status > 0 ? `（${response.status}）` : ''
+    throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}生成失败${status}：${response.body.slice(0, 180)}`)
   }
   options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验变量提示词语法与选项池' : '正在校验名称、说明与 SOP 正文' })
   const parse = (text: string) => {
@@ -175,22 +299,40 @@ export const generateSopFromStore: GenerateSop = async (
     }
     return { ...generated, content: contentWithTextPolicy }
   }
+  let responseText: string
   try {
-    const responseText = extractResponseText(await response.json())
+    responseText = getBufferedResponseText(response, useChat)
+  } catch (error) {
+    options?.signal?.throwIfAborted()
+    if (protocolFallbackUsed) throw error
+    const alternateChat = !useChat
+    options?.onProgress?.({
+      stage: 'request',
+      message: alternateChat ? 'Responses 返回空内容，正在切换为 Chat Completions' : 'Chat Completions 返回空内容，正在切换为 Responses',
+    })
+    const alternateResponse = await sendSafely(structuredOutputEnabled, alternateChat, true)
+    if (!alternateResponse.ok) {
+      const status = alternateResponse.status > 0 ? `（${alternateResponse.status}）` : ''
+      throw new Error(`${error instanceof Error ? error.message : '文本模型返回内容无效'}；备用协议也失败${status}：${alternateResponse.body.slice(0, 180)}`)
+    }
+    useChat = alternateChat
+    response = alternateResponse
+    responseText = getBufferedResponseText(response, useChat)
+  }
+  try {
     options?.signal?.throwIfAborted()
     return parse(responseText)
   } catch (error) {
     options?.signal?.throwIfAborted()
     options?.onProgress?.({ stage: 'repair', message: '返回结构不完整，正在自动修复并重试' })
-    const retryResponse = await send(structuredOutputEnabled, true)
+    const retryResponse = await sendSafely(structuredOutputEnabled, useChat, true)
     options?.signal?.throwIfAborted()
     if (!retryResponse.ok) {
-      const body = await retryResponse.text()
-      throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}自动修复失败（${retryResponse.status}）：${body.slice(0, 180)}`)
+      throw new Error(`${variablePromptMode ? '变量提示词' : 'SOP'}自动修复失败（${retryResponse.status}）：${retryResponse.body.slice(0, 180)}`)
     }
     options?.onProgress?.({ stage: 'parse', message: variablePromptMode ? '正在校验修复后的变量提示词' : '正在校验修复后的 SOP 结构' })
     try {
-      const retryResponseText = extractResponseText(await retryResponse.json())
+      const retryResponseText = getBufferedResponseText(retryResponse, useChat)
       options?.signal?.throwIfAborted()
       return parse(retryResponseText)
     } catch (retryError) {
@@ -224,7 +366,8 @@ export async function generatePromptsFromSopStore(
   }
 
   const proxy = readClientDevProxyConfig()
-  const url = buildApiUrl(profile.baseUrl, 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
+  let useChat = settings.agentTextProtocol === 'chat-completions' || shouldPreferChatCompletions(profile.model || settings.model)
+  const buildRequestUrl = (chat: boolean) => buildApiUrl(profile.baseUrl, chat ? 'chat/completions' : 'responses', proxy, shouldUseApiProxy(profile.apiProxy, proxy))
   let structuredOutputEnabled = true
 
   return generateSopPromptBatches(quantity, async (batchQuantity, existingPrompts) => {
@@ -232,42 +375,72 @@ export async function generatePromptsFromSopStore(
       ...options.context,
       existingPrompts,
     })
-    const input = options.referenceImages?.length
-      ? [{
-        role: 'user',
-        content: [
-          { type: 'input_text', text: requestText },
-          ...options.referenceImages.map((image) => ({ type: 'input_image', image_url: image.dataUrl })),
-        ],
-      }]
-      : requestText
-    const send = (useStructuredOutput: boolean) => fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${profile.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: options.signal,
-      cache: 'no-store',
-      body: JSON.stringify({
-        model: profile.model || settings.model,
-        instructions: SOP_PROMPT_GENERATOR_INSTRUCTION,
-        input,
-        max_output_tokens: 12000,
-        ...(useStructuredOutput ? { text: { format: buildSopPromptTextFormat(batchQuantity) } } : {}),
-      }),
-    })
+    // 始终使用列表形式 input，兼容不接受字符串 input 的 Responses 后端（如 GPT-5.x 转发渠道）。
+    const input = [{
+      role: 'user',
+      content: [
+        { type: 'input_text', text: requestText },
+        ...(options.referenceImages?.length ? options.referenceImages.map((image) => ({ type: 'input_image', image_url: image.dataUrl })) : []),
+      ],
+    }]
+    const send = (useStructuredOutput: boolean, chat: boolean) => {
+      const body = chat
+        ? {
+            model: profile.model || settings.model,
+            messages: toChatCompletionMessages(SOP_PROMPT_GENERATOR_INSTRUCTION, input),
+            max_tokens: 12000,
+            ...(useStructuredOutput ? { response_format: toChatResponseFormat(buildSopPromptTextFormat(batchQuantity)) } : {}),
+          }
+        : {
+            model: profile.model || settings.model,
+            instructions: SOP_PROMPT_GENERATOR_INSTRUCTION,
+            input,
+            max_output_tokens: 12000,
+            ...(useStructuredOutput ? { text: { format: buildSopPromptTextFormat(batchQuantity) } } : {}),
+          }
+      return postSopModelRequest(buildRequestUrl(chat), body, profile.apiKey, profile.timeout, options.signal, 'SOP 提示词生成')
+    }
+    const sendSafely = async (useStructuredOutput: boolean, chat: boolean) => {
+      try {
+        return await send(useStructuredOutput, chat)
+      } catch (error) {
+        options.signal?.throwIfAborted()
+        return toBufferedRequestFailure(error)
+      }
+    }
 
-    let response = await send(structuredOutputEnabled)
+    let protocolFallbackUsed = false
+    let response = await sendSafely(structuredOutputEnabled, useChat)
+    // 第 1 层：结构化输出被拒 → 关掉结构化输出，同一协议重试一次。
     if (!response.ok && structuredOutputEnabled && (response.status === 400 || response.status === 422)) {
       structuredOutputEnabled = false
-      response = await send(false)
+      response = await sendSafely(false, useChat)
+    }
+    // 第 2 层：协议层失败（Responses 端不受支持 / 渠道不可用）→ 自动切换到另一种协议重试一次。
+    if (!response.ok) {
+      useChat = !useChat
+      protocolFallbackUsed = true
+      response = await sendSafely(structuredOutputEnabled, useChat)
     }
     if (!response.ok) {
-      const body = await response.text()
-      throw new Error(`提示词生成失败（${response.status}）：${body.slice(0, 180)}`)
+      const status = response.status > 0 ? `（${response.status}）` : ''
+      throw new Error(`提示词生成失败${status}：${response.body.slice(0, 180)}`)
     }
-    return parseSopPromptBatchResponse(extractResponseText(await response.json()), batchQuantity, {
+    let responseText: string
+    try {
+      responseText = getBufferedResponseText(response, useChat)
+    } catch (error) {
+      options.signal?.throwIfAborted()
+      if (protocolFallbackUsed) throw error
+      useChat = !useChat
+      response = await sendSafely(structuredOutputEnabled, useChat)
+      if (!response.ok) {
+        const status = response.status > 0 ? `（${response.status}）` : ''
+        throw new Error(`${error instanceof Error ? error.message : '文本模型返回内容无效'}；备用协议也失败${status}：${response.body.slice(0, 180)}`)
+      }
+      responseText = getBufferedResponseText(response, useChat)
+    }
+    return parseSopPromptBatchResponse(responseText, batchQuantity, {
       exact: false,
       existingPrompts,
     })

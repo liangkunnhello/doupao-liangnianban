@@ -69,6 +69,7 @@ export type CompositeV2ImageAssetRef =
 export type CompositeV2MediaLayer = CompositeV2LayerBase & {
   type: 'image' | 'logo'
   asset: CompositeV2ImageAssetRef | null
+  imageFit?: 'stretch' | 'crop-fill'
   radius: number
   clip: boolean
 }
@@ -103,6 +104,7 @@ export type CompositeV2OutputSizeRule = {
   width: number
   height: number
   maxSizeKb: number
+  jpegQuality?: number
   format: CompositeV2ImageFormat
   subfolderTemplate: string
   filenameTemplate: string
@@ -128,6 +130,9 @@ export type CompositeV2Preset = {
   distributionPath: string
   subfolderTemplate: string
   filenameTemplate: string
+  outputFolderTemplate?: string
+  indexPadding?: number
+  outputRuleMode?: 'merge' | 'replace'
   customVariableValues: Record<string, string>
   namingTemplate?: string
   baseCanvas: { width: number; height: number }

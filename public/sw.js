@@ -1,5 +1,5 @@
-const CACHE_NAME = 'gpt-image-playground-v0.6.17'
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.svg']
+const CACHE_NAME = 'gpt-image-playground-v0.7.51'
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './app-icon.png']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

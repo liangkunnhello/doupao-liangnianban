@@ -52,4 +52,56 @@ describe('composite v2 output rules', () => {
     expect(override[0]!.name).not.toBe('mutated')
     expect(override[0]!.rules[0]!.enabled).toBe(false)
   })
+
+  it('keeps importer-owned output groups that do not exist globally', () => {
+    const global = createDefaultCompositeV2OutputRuleGroups()
+    const imported = {
+      id: 'hanhai:output:a',
+      name: '瀚海迁移',
+      distributionPaths: [],
+      rules: [{
+        id: 'hanhai:output-rule:a',
+        name: '1280x720',
+        enabled: true,
+        width: 1280,
+        height: 720,
+        maxSizeKb: 200,
+        jpegQuality: 0.85,
+        format: 'jpg' as const,
+        subfolderTemplate: '',
+        filenameTemplate: '',
+      }],
+    }
+
+    const enabled = getEnabledOutputRules(getEffectiveOutputRuleGroups(presetWithOverride(true, [imported]), global))
+
+    expect(enabled).toEqual([expect.objectContaining({
+      channelName: '瀚海迁移',
+      maxSizeKb: 200,
+      jpegQuality: 0.85,
+    })])
+  })
+
+  it('replaces global outputs for migrated presets', () => {
+    const global = createDefaultCompositeV2OutputRuleGroups()
+    global[0]!.rules[0]!.enabled = true
+    const imported = {
+      id: 'hanhai:output:a',
+      name: '瀚海迁移',
+      distributionPaths: [],
+      rules: [{
+        id: 'hanhai:output-rule:a', name: '1080x1920', enabled: true, width: 1080, height: 1920,
+        maxSizeKb: 180, format: 'jpg' as const, subfolderTemplate: '', filenameTemplate: '',
+      }],
+    }
+
+    const enabled = getEnabledOutputRules(getEffectiveOutputRuleGroups({
+      useOutputOverrides: true,
+      outputRuleGroupsOverride: [imported],
+      outputRuleMode: 'replace',
+    }, global))
+
+    expect(enabled).toHaveLength(1)
+    expect(enabled[0]).toMatchObject({ channelName: '瀚海迁移', width: 1080, height: 1920 })
+  })
 })

@@ -1,5 +1,5 @@
 import type { TaskParams } from '../types'
-import { MIME_MAP } from './imageApiShared'
+import { getImageMimeFromDataUrl, MIME_MAP } from './imageApiShared'
 import { canvasToBlob, loadImage } from './canvasImage'
 
 export interface PostprocessResizePlan {
@@ -39,7 +39,12 @@ export function getImagePostprocessPlan(params: TaskParams): ImagePostprocessPla
 
 export async function postprocessGeneratedImage(dataUrl: string, params: TaskParams): Promise<ProcessImageResult> {
   const plan = getImagePostprocessPlan(params)
-  if (!plan.enabled) {
+  // A few OpenAI-compatible relays return PNG bytes (sometimes with alpha)
+  // even when JPEG was requested. JPEG cannot carry transparency, so normalize
+  // that result onto an opaque white canvas before it reaches storage/export.
+  const sourceMime = canonicalizeImageMime(getImageMimeFromDataUrl(dataUrl) ?? getDataUrlMime(dataUrl))
+  const forceOpaqueJpeg = params.output_format === 'jpeg' && sourceMime !== 'image/jpeg'
+  if (!plan.enabled && !forceOpaqueJpeg) {
     return { dataUrl, actualParams: {} }
   }
 
@@ -56,7 +61,9 @@ export async function postprocessGeneratedImage(dataUrl: string, params: TaskPar
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('褰撳墠娴忚鍣ㄤ笉鏀寔 Canvas')
 
-  const requestedExplicitMime = canonicalizeImageMime(plan.encode.mime)
+  const requestedExplicitMime = forceOpaqueJpeg
+    ? 'image/jpeg'
+    : canonicalizeImageMime(plan.encode.mime)
   const requestedMime = requestedExplicitMime ?? canonicalizeImageMime(getDataUrlMime(dataUrl)) ?? 'image/png'
   if (requestedMime === 'image/jpeg') {
     ctx.fillStyle = '#ffffff'

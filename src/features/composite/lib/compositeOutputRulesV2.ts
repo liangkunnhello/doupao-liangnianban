@@ -6,9 +6,16 @@ export type CompositeV2EnabledOutputRule = CompositeV2OutputSizeRule & {
 }
 
 export function getEffectiveOutputRuleGroups(
-  preset: Pick<CompositeV2Preset, 'useOutputOverrides' | 'outputRuleGroupsOverride'>,
+  preset: Pick<CompositeV2Preset, 'useOutputOverrides' | 'outputRuleGroupsOverride' | 'outputRuleMode'>,
   globalGroups: CompositeV2OutputRuleGroup[],
 ): CompositeV2OutputRuleGroup[] {
+  if (preset.outputRuleMode === 'replace') {
+    return preset.outputRuleGroupsOverride.map((group) => ({
+      ...group,
+      distributionPaths: [...group.distributionPaths],
+      rules: group.rules.map((rule) => ({ ...rule })),
+    }))
+  }
   if (!preset.useOutputOverrides) {
     return globalGroups.map((group) => ({
       ...group,
@@ -16,8 +23,10 @@ export function getEffectiveOutputRuleGroups(
     }))
   }
 
-  // Merge override rules with global rules
-  return globalGroups.map((globalGroup) => {
+  // Existing groups inherit global dimensions and limits; importer-owned groups are
+  // appended intact so a migrated preset can preserve its source output contract.
+  const globalIds = new Set(globalGroups.map((group) => group.id))
+  const mergedGlobalGroups = globalGroups.map((globalGroup) => {
     const overrideGroup = preset.outputRuleGroupsOverride.find(g => g.id === globalGroup.id)
     return {
       ...globalGroup,
@@ -30,6 +39,14 @@ export function getEffectiveOutputRuleGroups(
       })
     }
   })
+  const customOverrideGroups = preset.outputRuleGroupsOverride
+    .filter((group) => !globalIds.has(group.id))
+    .map((group) => ({
+      ...group,
+      distributionPaths: [...group.distributionPaths],
+      rules: group.rules.map((rule) => ({ ...rule })),
+    }))
+  return [...mergedGlobalGroups, ...customOverrideGroups]
 }
 
 export function getEnabledOutputRules(groups: CompositeV2OutputRuleGroup[]): CompositeV2EnabledOutputRule[] {

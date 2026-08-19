@@ -42,6 +42,7 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import { fetchAvailableModels, type AvailableModel, type ModelType } from '../lib/modelCatalog'
 import { formatStorageBytes, getStorageOverview, type StorageOverview } from '../lib/storageStats'
 import Select from './Select'
+import { SettingsMcpPanel } from './SettingsMcpPanel'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
 import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
@@ -52,7 +53,7 @@ function newId(prefix: string) {
 
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
 const COPY_IMPORT_URL_OPTIONS_STORAGE_KEY = 'gpt-image-playground.copy-import-url-options'
-const SETTINGS_TAB_ORDER: SettingsTab[] = ['api', 'general', 'data', 'backup', 'about']
+const SETTINGS_TAB_ORDER: SettingsTab[] = ['api', 'general', 'data', 'backup', 'mcp', 'about']
 
 const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
   includeApiKey: false,
@@ -1576,6 +1577,20 @@ export default function SettingsModal() {
               </button>
               <button
                 role="tab"
+                aria-selected={activeTab === 'mcp'}
+                tabIndex={activeTab === 'mcp' ? 0 : -1}
+                data-settings-tab="mcp"
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, 'mcp')}
+                onClick={() => setActiveTab('mcp')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'mcp' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                MCP
+              </button>
+              <button
+                role="tab"
                 aria-selected={activeTab === 'about'}
                 tabIndex={activeTab === 'about' ? 0 : -1}
                 data-settings-tab="about"
@@ -3032,7 +3047,7 @@ export default function SettingsModal() {
                           className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-white/[0.05] border border-gray-200 dark:border-white/[0.1] rounded-lg text-gray-700 dark:text-gray-300"
                         />
                         <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                          开启批次子目录后，每次提交生成的图片会保存到目标文件夹下同一个批次文件夹中。
+                          开启后，每次提交生成的图片会保存到目标文件夹下同一个批次子目录中；SOP 生图时，同一批次的所有任务卡片共享同一个子目录。
                         </p>
                       </div>
                       {localSavePath && (
@@ -3321,6 +3336,10 @@ export default function SettingsModal() {
                   </div>
                 )}
               </div>
+            )}
+
+            {activeTab === 'mcp' && (
+              <SettingsMcpPanel />
             )}
 
             {activeTab === 'about' && (

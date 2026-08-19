@@ -44,7 +44,47 @@ export function isDataUrl(value: unknown): value is string {
 }
 
 export function normalizeBase64Image(value: string, fallbackMime: string): string {
-  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
+  const normalized = value.trim()
+  const dataUrlMatch = normalized.match(/^data:([^;,]+)(?:;[^,]*)?,(.*)$/is)
+  const encoded = dataUrlMatch ? dataUrlMatch[2] : normalized
+  const detectedMime = detectBase64ImageMime(encoded)
+  const declaredMime = dataUrlMatch?.[1]?.trim().toLowerCase()
+  const mime = detectedMime ?? declaredMime ?? fallbackMime
+  if (dataUrlMatch && (!detectedMime || declaredMime === detectedMime)) return normalized
+  return `data:${mime};base64,${encoded}`
+}
+
+/**
+ * Reads the image signature from a base64 data URL. Some compatible providers
+ * return PNG bytes while echoing the requested JPEG MIME type; trusting only
+ * the data URL header would then save a PNG-with-alpha file as `.jpg`.
+ */
+export function getImageMimeFromDataUrl(dataUrl: string): string | null {
+  const match = dataUrl.trim().match(/^data:([^;,]+)(?:;[^,]*)?,(.*)$/is)
+  if (!match) return null
+  return detectBase64ImageMime(match[2]) ?? match[1].trim().toLowerCase()
+}
+
+function detectBase64ImageMime(value: string): string | null {
+  const normalized = value.replace(/\s/g, '')
+  if (!normalized) return null
+
+  // Decode only the first few bytes. Invalid or placeholder test payloads are
+  // intentionally ignored and fall back to the provider-declared MIME type.
+  try {
+    const binary = atob(normalized.slice(0, 64))
+    const bytes = Array.from(binary, (char) => char.charCodeAt(0))
+    if (bytes.length >= 8 && bytes.slice(0, 8).join(',') === '137,80,78,71,13,10,26,10') return 'image/png'
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+    if (bytes.length >= 12 && bytes.slice(0, 4).join(',') === '82,73,70,70' && bytes.slice(8, 12).join(',') === '87,69,66,80') return 'image/webp'
+    if (bytes.length >= 6) {
+      const header = String.fromCharCode(...bytes.slice(0, 6))
+      if (header === 'GIF87a' || header === 'GIF89a') return 'image/gif'
+    }
+  } catch {
+    return null
+  }
+  return null
 }
 
 function formatMiB(bytes: number): string {

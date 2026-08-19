@@ -295,6 +295,36 @@ describe('ipc composite background filesystem helpers', () => {
     expect(authorize!(null)).toBe(false)
   })
 
+  it('locates and reads a Hanhai processing preset file without modifying it', async () => {
+    const configPath = path.join(
+      allowedRoot,
+      '瀚海源码完整版_20260819-120000',
+      'hanhai_java_workspace',
+      'data',
+      'shared',
+      'processing_presets.json',
+    )
+    const sourceJson = JSON.stringify([{
+      id: 'preset-a',
+      type: 'preset',
+      name: '预设 A',
+      resize: { width: 1280, height: 720, mode: 'fill' },
+      watermarks: [],
+      output: { folder: 'D:/exports', format: 'JPEG', quality: 85, max_size_kb: 200 },
+    }])
+    mkdirSync(path.dirname(configPath), { recursive: true })
+    writeFileSync(configPath, sourceJson, 'utf-8')
+    const { findLatestHanhaiProcessingPresetsPath, loadHanhaiProcessingPresets } = await import('./ipc-handlers')
+
+    expect(findLatestHanhaiProcessingPresetsPath(allowedRoot)).toBe(configPath)
+    expect(loadHanhaiProcessingPresets()).toEqual({
+      configPath,
+      jsonText: sourceJson,
+      assets: [],
+    })
+    expect(existsSync(configPath)).toBe(true)
+  })
+
   it('requires exactly one source for each streaming ZIP entry', async () => {
     const { parseStreamingZipRequest } = await import('./ipc-handlers')
     const base = {

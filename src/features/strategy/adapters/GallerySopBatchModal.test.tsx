@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useState } from 'react'
+import { StrictMode, useState } from 'react'
 import { act, create } from 'react-test-renderer'
 import { DEFAULT_PARAMS, type SopBatchSnapshot, type TaskRecord } from '../../../types'
 import GallerySopBatchModal, { getGallerySopPromptRunStorageKey } from './GallerySopBatchModal'
@@ -161,6 +161,74 @@ describe('GallerySopBatchModal background generation', () => {
 
     expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledOnce()
     expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' }).props.value).toBe('自动生成的提示词')
+  })
+
+  it('keeps prompt generation active when StrictMode replays mount effects', async () => {
+    generateMocks.generatePromptsFromSopStore.mockImplementation(async (_sop, _quantity, _brief, options) => {
+      await options.onBatch?.(['严格模式生成的提示词'], 1, 1)
+      return ['严格模式生成的提示词']
+    })
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(
+        <StrictMode>
+          <GallerySopBatchModal workspaceTabId="tab-a" initialSopId="sop-1" initialPromptCount={1} autoStart onClose={vi.fn()} />
+        </StrictMode>,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' }).props.value).toBe('严格模式生成的提示词')
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'ready',
+      prompts: [expect.objectContaining({ text: '严格模式生成的提示词' })],
+    }))
+  })
+
+  it('marks interrupted prompt runs from the current tab as ready or failed on reload', async () => {
+    const interruptedWithPrompt = {
+      ...createPromptRun('run-with-prompt', '有结果的中断批次'),
+      status: 'generating' as const,
+    }
+    const interruptedWithoutPrompt = {
+      ...createPromptRun('run-without-prompt', '无结果的中断批次'),
+      status: 'generating' as const,
+      promptCount: 0,
+      prompts: [],
+    }
+    const otherTabRun = {
+      ...createPromptRun('run-other-tab', '其他标签页批次'),
+      workspaceTabId: 'tab-b',
+      status: 'generating' as const,
+    }
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([
+      interruptedWithPrompt,
+      interruptedWithoutPrompt,
+      otherTabRun,
+    ])
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<GallerySopBatchModal workspaceTabId="tab-a" initialSopId="sop-1" onClose={vi.fn()} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'run-with-prompt',
+      status: 'ready',
+    }))
+    expect(dbMocks.putSopBatchSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'run-without-prompt',
+      status: 'failed',
+    }))
+    expect(dbMocks.putSopBatchSnapshot).not.toHaveBeenCalledWith(expect.objectContaining({
+      id: 'run-other-tab',
+    }))
   })
 
   it('continues generating and persists the result after being moved to the background', async () => {
@@ -387,6 +455,7 @@ describe('GallerySopBatchModal background generation', () => {
   })
 
   it('asks the host for attention instead of silently skipping auto-start when prompts remain', async () => {
+    generateMocks.generatePromptsFromSopStore.mockResolvedValue(['补齐生成的提示词'])
     const storedRun: SopBatchSnapshot = {
       id: 'sop-run-leftover',
       batchId: '',
@@ -438,6 +507,144 @@ describe('GallerySopBatchModal background generation', () => {
     expect(generateMocks.generatePromptsFromSopStore).not.toHaveBeenCalled()
     expect(onNeedsAttention).toHaveBeenCalledWith('existing-prompts')
     expect(onAutoStartConsumed).toHaveBeenCalledOnce()
+    expect(storeState.setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: '检测到上一批未提交的提示词',
+      buttons: expect.arrayContaining([
+        expect.objectContaining({ label: '补齐到 2 条' }),
+        expect.objectContaining({ label: '继续提交' }),
+        expect.objectContaining({ label: '清空重来' }),
+      ]),
+    }))
+
+    const dialog = storeState.setConfirmDialog.mock.calls.at(-1)?.[0]
+    const fillButton = dialog?.buttons?.find((button: { label: string }) => button.label === '补齐到 2 条')
+    await act(async () => {
+      fillButton?.action()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(generateMocks.generatePromptsFromSopStore).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sop-1' }),
+      1,
+      '上一批要求',
+      expect.any(Object),
+    )
+    expect(renderer!.root.findByProps({ 'aria-label': '第 1 条提示词' }).props.value).toBe('上一批残留提示词')
+    expect(renderer!.root.findByProps({ 'aria-label': '第 2 条提示词' }).props.value).toBe('补齐生成的提示词')
+  })
+
+  it('uses the current per-prompt image count when continuing a restored prompt list', async () => {
+    const storedRun: SopBatchSnapshot = {
+      id: 'sop-run-old-count',
+      batchId: '',
+      workspaceTabId: 'tab-a',
+      createdAt: 10,
+      updatedAt: 20,
+      status: 'ready',
+      sop: { id: 'sop-1', name: '商品图 SOP', description: '', content: '生成商品图。' },
+      brief: '',
+      referenceImageIds: [],
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      prompts: [{ id: 'prompt-old-count', text: '已保存提示词', origin: 'ai', edited: false, sourceId: 'text-to-image' }],
+      params: { ...DEFAULT_PARAMS, n: 1 },
+    }
+    window.localStorage.setItem(getGallerySopPromptRunStorageKey('tab-a'), JSON.stringify({
+      version: 4,
+      activeRunId: storedRun.id,
+      selectedSopId: 'sop-1',
+      promptCount: 1,
+      imagesPerPrompt: 1,
+      availablePrompts: 1,
+    }))
+    dbMocks.getAllSopBatchSnapshots.mockResolvedValue([storedRun])
+    dbMocks.getSopBatchSnapshot.mockResolvedValue(storedRun)
+    storeMocks.submitTaskWithData.mockResolvedValue('task-current-count')
+
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          initialImagesPerPrompt={10}
+          autoStart
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    const dialog = storeState.setConfirmDialog.mock.calls.at(-1)?.[0]
+    const continueButton = dialog?.buttons?.find((button: { label: string }) => button.label === '继续提交')
+    await act(async () => {
+      continueButton?.action()
+      await Promise.resolve()
+    })
+
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ n: 10 }),
+        sopBatch: expect.objectContaining({ imagesPerPrompt: 10 }),
+      }),
+      { silentSuccess: true },
+    )
+  })
+
+  it('syncs a changed per-prompt image count into a mounted background batch', async () => {
+    generateMocks.generatePromptsFromSopStore.mockImplementation(async (_sop, _quantity, _brief, options) => {
+      await options.onBatch?.(['后台数量同步提示词'], 1, 1)
+      return ['后台数量同步提示词']
+    })
+    storeMocks.submitTaskWithData.mockResolvedValue('task-background-count')
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          initialImagesPerPrompt={1}
+          initialAutoGenerate
+          visible={false}
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    mountedRenderers.push(renderer!)
+
+    await act(async () => {
+      renderer!.update(
+        <GallerySopBatchModal
+          workspaceTabId="tab-a"
+          initialSopId="sop-1"
+          initialPromptCount={1}
+          initialImagesPerPrompt={10}
+          initialAutoGenerate
+          autoStart
+          visible={false}
+          onClose={vi.fn()}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(storeMocks.submitTaskWithData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ n: 10 }),
+        sopBatch: expect.objectContaining({ imagesPerPrompt: 10 }),
+      }),
+      { silentSuccess: true },
+    )
   })
 
   it('shows saved prompt collections in one directory without starting a new generation', async () => {

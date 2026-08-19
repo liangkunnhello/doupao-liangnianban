@@ -44,7 +44,7 @@ function mockResponse(text: string) {
     ok: true,
     status: 200,
     json: vi.fn().mockResolvedValue({ output: [{ content: [{ type: 'output_text', text }] }] }),
-    text: vi.fn().mockResolvedValue(''),
+    text: vi.fn().mockResolvedValue(JSON.stringify({ output: [{ content: [{ type: 'output_text', text }] }] })),
   } as unknown as Response
 }
 

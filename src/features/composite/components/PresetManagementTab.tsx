@@ -6,6 +6,8 @@ import {
   FileTextIcon as FileText,
   FolderIcon as Folder,
   FolderOpenIcon as FolderOpen,
+  ImportIcon as Import,
+  Loader2Icon as Loader2,
   PlusIcon as Plus,
   TrashIcon as Trash2,
 } from '../../../design-system/icons'
@@ -24,6 +26,15 @@ import { PresetCanvasEditor } from './PresetCanvasEditor'
 import { PresetLayerPanel } from './PresetLayerPanel'
 import { PresetNamingFields } from './PresetNamingFields'
 import { useAppDialog } from '../../../hooks/useAppDialog'
+import {
+  buildHanhaiImportBundle,
+  createHanhaiImportPreview,
+  normalizeHanhaiAssetPath,
+  parseHanhaiPresetConfig,
+  type HanhaiImportPreview,
+  type HanhaiImportSource,
+  type ParsedHanhaiPresetConfig,
+} from '../lib/hanhaiPresetImport'
 
 const GROUP_DRAG_TYPE = 'application/x-doupao-preset-group'
 const LIBRARY_PRESET_DRAG_TYPE = 'application/x-doupao-library-preset'
@@ -32,6 +43,12 @@ const PRESET_BASE_SIZES = [
   { value: '1080x1920', label: '1080×1920', width: 1080, height: 1920 },
   { value: '800x800', label: '800×800', width: 800, height: 800 },
 ] as const
+
+type HanhaiImportDialogState = {
+  source: HanhaiImportSource
+  parsed: ParsedHanhaiPresetConfig
+  preview: HanhaiImportPreview
+}
 
 function formatNamingDate(date = new Date()) {
   return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`
@@ -52,6 +69,9 @@ export function PresetManagementTab() {
   const [editingPresetName, setEditingPresetName] = useState('')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [draggingLibraryPresetId, setDraggingLibraryPresetId] = useState('')
+  const [hanhaiImportDialog, setHanhaiImportDialog] = useState<HanhaiImportDialogState | null>(null)
+  const [isLoadingHanhai, setIsLoadingHanhai] = useState(false)
+  const [isImportingHanhai, setIsImportingHanhai] = useState(false)
 
   const toggleGroup = (groupId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -293,6 +313,81 @@ export function PresetManagementTab() {
     selectNewestLayer(activePreset.id)
   }
 
+  async function loadHanhaiImport(manualSelection = false) {
+    const api = window.electronAPI
+    if (!api?.loadHanhaiProcessingPresets) {
+      openInfoDialog({ title: '当前环境不支持', message: '请在桌面客户端中导入瀚海产品预设。' })
+      return
+    }
+    setIsLoadingHanhai(true)
+    try {
+      let filePath: string | null | undefined
+      if (manualSelection) {
+        filePath = await api.selectFile([{ name: '瀚海产品预设', extensions: ['json'] }])
+        if (!filePath) return
+      }
+      let response = await api.loadHanhaiProcessingPresets(filePath)
+      if (response.success && !response.source && !manualSelection) {
+        filePath = await api.selectFile([{ name: '瀚海产品预设', extensions: ['json'] }])
+        if (!filePath) return
+        response = await api.loadHanhaiProcessingPresets(filePath)
+      }
+      if (!response.success) throw new Error(response.error)
+      if (!response.source) throw new Error('没有找到瀚海 processing_presets.json')
+      const parsed = parseHanhaiPresetConfig(response.source.jsonText)
+      const preview = createHanhaiImportPreview(
+        parsed,
+        response.source.assets,
+        useCompositeV2Store.getState().presets.map((preset) => preset.id),
+      )
+      setHanhaiImportDialog({ source: response.source, parsed, preview })
+    } catch (error) {
+      openInfoDialog({
+        title: '无法读取瀚海预设',
+        message: error instanceof Error ? error.message : '读取瀚海产品预设失败。',
+      })
+    } finally {
+      setIsLoadingHanhai(false)
+    }
+  }
+
+  async function confirmHanhaiImport() {
+    if (!hanhaiImportDialog || hanhaiImportDialog.preview.newCount === 0) return
+    setIsImportingHanhai(true)
+    try {
+      const availableAssets = hanhaiImportDialog.source.assets.filter(
+        (asset): asset is Extract<typeof asset, { dataUrl: string }> => Boolean(asset.dataUrl),
+      )
+      const blobs = await Promise.all(availableAssets.map((asset) => dataUrlToCompositeBlob(asset.dataUrl)))
+      const assetIds = await storeCompositeBlobs(blobs)
+      const assetIdsByPath = new Map(availableAssets.map((asset, index) => [
+        normalizeHanhaiAssetPath(asset.path),
+        assetIds[index]!,
+      ]))
+      const currentPresetIds = useCompositeV2Store.getState().presets.map((preset) => preset.id)
+      const bundle = buildHanhaiImportBundle(
+        hanhaiImportDialog.parsed,
+        hanhaiImportDialog.source.assets,
+        assetIdsByPath,
+        currentPresetIds,
+      )
+      const result = useCompositeV2Store.getState().importHanhaiPresets(bundle)
+      const missingCount = hanhaiImportDialog.preview.missingAssetPresetCount
+      setHanhaiImportDialog(null)
+      openInfoDialog({
+        title: '瀚海预设导入完成',
+        message: `新增 ${result.imported} 条，跳过重复 ${hanhaiImportDialog.preview.duplicateCount + result.skipped} 条${missingCount ? `；${missingCount} 条已标记缺失水印` : ''}。`,
+      })
+    } catch (error) {
+      openInfoDialog({
+        title: '导入失败',
+        message: error instanceof Error ? error.message : '瀚海产品预设导入失败。',
+      })
+    } finally {
+      setIsImportingHanhai(false)
+    }
+  }
+
   return (
     <div
       data-layout="preset-management-workspace"
@@ -474,7 +569,19 @@ export function PresetManagementTab() {
         <section className="min-h-0 flex flex-col overflow-hidden bg-white dark:bg-gray-950">
           <header className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-white/[0.08] shrink-0">
             <h2 className="text-sm font-semibold">全局水印预设库</h2>
-            <button type="button" title="新建预设" onClick={() => store.createPreset('新预设')} className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-200 dark:border-white/[0.08] hover:bg-gray-50 dark:hover:bg-gray-900"><Plus className="h-4 w-4" /></button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                title="导入瀚海产品预设"
+                aria-label="导入瀚海产品预设"
+                disabled={isLoadingHanhai}
+                onClick={() => void loadHanhaiImport()}
+                className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-200 text-blue-600 hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60 dark:border-white/[0.08] dark:text-blue-400 dark:hover:bg-blue-500/10"
+              >
+                {isLoadingHanhai ? <Loader2 className="h-4 w-4 animate-spin" /> : <Import className="h-4 w-4" />}
+              </button>
+              <button type="button" title="新建预设" onClick={() => store.createPreset('新预设')} className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-gray-200 dark:border-white/[0.08] hover:bg-gray-50 dark:hover:bg-gray-900"><Plus className="h-4 w-4" /></button>
+            </div>
           </header>
           <div className="p-3 shrink-0"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="按名称搜索" aria-label="搜索预设" className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-gray-900" /></div>
           <div className="flex-1 overflow-y-auto space-y-0.5 px-2 pb-2">
@@ -597,7 +704,15 @@ export function PresetManagementTab() {
                 </label>
                 {activePreset.useOutputOverrides && (
                   <div className="space-y-3">
-                    {store.outputRuleGroups.map((globalGroup) => {
+                    {(activePreset.outputRuleMode === 'replace'
+                      ? activePreset.outputRuleGroupsOverride
+                      : [
+                          ...store.outputRuleGroups,
+                          ...activePreset.outputRuleGroupsOverride.filter(
+                            (group) => !store.outputRuleGroups.some((globalGroup) => globalGroup.id === group.id),
+                          ),
+                        ]
+                    ).map((globalGroup) => {
                       const overrideGroup = activePreset.outputRuleGroupsOverride.find(g => g.id === globalGroup.id)
                       const mergedRules = globalGroup.rules.map(globalRule => {
                         const overrideRule = overrideGroup?.rules.find(r => r.id === globalRule.id)
@@ -714,6 +829,9 @@ export function PresetManagementTab() {
                                   className="hidden cursor-pointer"
                                 />
                                 {rule.width} × {rule.height}
+                                {globalGroup.id.startsWith('hanhai:output:') && (
+                                  <span className="ml-1 opacity-70">· {rule.maxSizeKb}KB · Q{Math.round((rule.jpegQuality ?? 0.9) * 100)}</span>
+                                )}
                               </label>
                             ))}
                           </div>
@@ -789,6 +907,75 @@ export function PresetManagementTab() {
           />
         </div>
       </div>
+
+      {hanhaiImportDialog && (
+        <div
+          className="ds-modal-layer fixed inset-0 flex items-center justify-center p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isImportingHanhai) setHanhaiImportDialog(null)
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hanhai-import-title"
+            className="ds-modal-surface relative z-10 flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border"
+          >
+            <header className="border-b border-gray-200 px-5 py-4 dark:border-white/[0.08]">
+              <h2 id="hanhai-import-title" className="text-base font-semibold">导入瀚海产品预设</h2>
+              <p className="mt-1 truncate text-xs text-gray-500" title={hanhaiImportDialog.source.configPath}>{hanhaiImportDialog.source.configPath}</p>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="grid grid-cols-5 gap-2">
+                {[
+                  ['检测总数', hanhaiImportDialog.preview.totalCount],
+                  ['本次新增', hanhaiImportDialog.preview.newCount],
+                  ['重复跳过', hanhaiImportDialog.preview.duplicateCount],
+                  ['配置完整', hanhaiImportDialog.preview.completeCount],
+                  ['缺少素材', hanhaiImportDialog.preview.missingAssetPresetCount],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 dark:border-white/[0.08] dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">{label}</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-blue-900 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-100">
+                导入不会覆盖豆泡已有预设。图片水印会复制到豆泡内部素材库；再次导入相同来源 ID 时直接跳过。
+              </div>
+              {hanhaiImportDialog.preview.missingAssets.length > 0 && (
+                <div className="mt-4">
+                  <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300">缺失水印明细</h3>
+                  <div className="mt-2 max-h-52 space-y-2 overflow-y-auto rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-500/20 dark:bg-amber-500/10">
+                    {hanhaiImportDialog.preview.missingAssets.map((item, index) => (
+                      <div key={`${item.presetId}:${item.path}:${index}`} className="text-xs">
+                        <div className="font-medium text-gray-800 dark:text-gray-100">{item.presetName}</div>
+                        <div className="mt-0.5 break-all text-amber-700 dark:text-amber-300">{item.path}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500">这些预设仍会导入，并以“缺水印”标记；补齐图片后可在图层面板替换。</p>
+                </div>
+              )}
+            </div>
+            <footer className="flex items-center justify-between border-t border-gray-200 px-5 py-4 dark:border-white/[0.08]">
+              <button type="button" disabled={isImportingHanhai} onClick={() => void loadHanhaiImport(true)} className="rounded-md border border-gray-200 px-3 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-gray-900">选择其他 JSON</button>
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={isImportingHanhai} onClick={() => setHanhaiImportDialog(null)} className="rounded-md border border-gray-200 px-4 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-gray-900">取消</button>
+                <button
+                  type="button"
+                  disabled={isImportingHanhai || hanhaiImportDialog.preview.newCount === 0}
+                  onClick={() => void confirmHanhaiImport()}
+                  className="inline-flex min-w-24 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isImportingHanhai && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {hanhaiImportDialog.preview.newCount === 0 ? '没有可导入项' : `确认导入 ${hanhaiImportDialog.preview.newCount} 条`}
+                </button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

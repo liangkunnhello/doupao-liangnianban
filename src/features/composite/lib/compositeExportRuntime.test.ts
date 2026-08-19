@@ -115,6 +115,33 @@ describe('composite export runtime helpers', () => {
     expect(buildPresetOutputRootPath(item)).toBe('D:\\Exports\\20260702\\项目A')
   })
 
+  it('uses migrated output folder templates and zero-padded indexes', () => {
+    const item: CompositeV2ExportItem = {
+      snapshotId: 'snapshot',
+      preset: {
+        ...createDefaultCompositeV2Preset(1),
+        name: '瀚海预设',
+        filenameTemplate: '{date}-产品-{index}',
+        outputFolderTemplate: '{date}-产品-',
+        indexPadding: 3,
+      },
+      outputRule: {
+        id: 'rule', name: '1280x720', channelId: 'hanhai', channelName: '瀚海迁移', enabled: true,
+        width: 1280, height: 720, maxSizeKb: 200, jpegQuality: 0.85, format: 'jpg',
+        subfolderTemplate: '', filenameTemplate: '',
+      },
+      background: { path: 'D:/source.png', name: 'source.png', relativeDir: '', width: 1280, height: 720 },
+      date: '20260819',
+      index: 7,
+      custom: '',
+    }
+
+    expect(buildPresetOutputPathParts(item, { preserveSourceDir: false })).toEqual({
+      subfolders: ['20260819-产品-'],
+      filename: '20260819-产品-007.jpg',
+    })
+  })
+
   it('authorizes each composite output root once per export run', async () => {
     const authorize = vi.fn(async () => true)
     const api = {
