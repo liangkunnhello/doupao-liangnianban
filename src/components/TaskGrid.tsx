@@ -12,6 +12,9 @@ import { EmptyState, SegmentedControl } from '../design-system'
 import TaskCard from './TaskCard'
 import SopBatchTaskCard from './SopBatchTaskCard'
 import SopBatchDetailModal from './SopBatchDetailModal'
+import ReverseSopTaskCard from './ReverseSopTaskCard'
+import ReverseSopDetailModal from './ReverseSopDetailModal'
+import { retryReverseSopTask, stopReverseSopTask } from '../features/strategy/adapters/reverseSopRunner'
 import GalleryImageTile, { buildGalleryImageItems } from './GalleryImageTile'
 
 const GALLERY_COLUMNS_STORAGE_KEY = 'doupao.gallery-columns'
@@ -67,6 +70,7 @@ export default function TaskGrid() {
   const [scrollTop, setScrollTop] = useState(0)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
   const [batchDetail, setBatchDetail] = useState<{ sopName: string; tasks: TaskRecord[] } | null>(null)
+  const [reverseSopDetail, setReverseSopDetail] = useState<{ controller: TaskRecord; imageTasks: TaskRecord[] } | null>(null)
   const [galleryColumns, setGalleryColumns] = useState(getInitialGalleryColumns)
   const [gridWidth, setGridWidth] = useState(0)
   const [imageAspectRatios, setImageAspectRatios] = useState<Record<string, number>>({})
@@ -597,6 +601,27 @@ export default function TaskGrid() {
                     isSelected={selectedTaskIdSet.has(item.task.id)}
                   />
                 </div>
+              ) : item.kind === 'reverse-sop' ? (
+                <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.controller.id} data-task-ids={[item.controller, ...item.imageTasks].map((task) => task.id).join(',')}>
+                  <ReverseSopTaskCard
+                    controller={item.controller}
+                    imageTasks={item.imageTasks}
+                    isSelected={[item.controller, ...item.imageTasks].every((task) => selectedTaskIdSet.has(task.id))}
+                    onClick={(event) => {
+                      if (Date.now() < suppressClickUntil.current) return
+                      const isCtrl = isMac ? event.metaKey : event.ctrlKey
+                      if (isCtrl) {
+                        toggleBatchSelection([item.controller, ...item.imageTasks])
+                        return
+                      }
+                      setReverseSopDetail({ controller: item.controller, imageTasks: item.imageTasks })
+                    }}
+                    onOpen={() => setReverseSopDetail({ controller: item.controller, imageTasks: item.imageTasks })}
+                    onStop={() => stopReverseSopTask(item.controller.id)}
+                    onRetry={() => retryReverseSopTask(item.controller.id)}
+                    onDelete={() => handleDeleteBatch([item.controller, ...item.imageTasks])}
+                  />
+                </div>
               ) : (
                 <div key={item.id} className="gallery-card-wrapper task-card-wrapper" data-task-id={item.tasks[0]?.id} data-task-ids={item.tasks.map((task) => task.id).join(',')}>
                   <SopBatchTaskCard
@@ -686,6 +711,12 @@ export default function TaskGrid() {
         tasks={batchDetail.tasks}
         onClose={() => setBatchDetail(null)}
         onOpenImage={(imageId) => setLightboxImageId(imageId, batchDetail.tasks.flatMap((task) => task.outputImages))}
+      />}
+      {galleryViewMode === 'tasks' && reverseSopDetail && <ReverseSopDetailModal
+        controller={reverseSopDetail.controller}
+        imageTasks={reverseSopDetail.imageTasks}
+        onClose={() => setReverseSopDetail(null)}
+        onOpenImage={(imageId) => setLightboxImageId(imageId, reverseSopDetail.imageTasks.flatMap((task) => task.outputImages))}
       />}
       </div>
     </>

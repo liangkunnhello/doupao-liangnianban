@@ -106,6 +106,62 @@ export function getMetaInstructionExcludeText(meta: Pick<SopMetaInstruction, 'ki
   return meta.excludeTextByDefault ?? true
 }
 
+/**
+ * Resolve the variable-prompt skill for a gallery workspace tab.
+ *
+ * Existing libraries associate a generated SOP with its source meta instruction
+ * (`SopLibraryItem.metaInstructionId`) rather than associating the meta itself
+ * with a group.  The resolver supports both shapes, so imported libraries and
+ * newly-created explicitly grouped meta instructions behave the same way.
+ */
+export function resolveMetaInstructionForWorkspaceTab(
+  tabName: string | undefined,
+  groups: SopGroup[],
+  items: SopLibraryItem[],
+  metaInstructions: SopMetaInstruction[],
+) {
+  const normalize = (value: string | undefined) => (value ?? '').trim().toLocaleLowerCase()
+  const normalizedTabName = normalize(tabName)
+  const variableMetas = metaInstructions.filter((item) => item.kind === 'variable-prompt-skill')
+  const appCopy = metaInstructions.find((item) => item.id === APP_COPY_SKILL_META_ID)
+  const visual = metaInstructions.find((item) => item.id === 'sop-meta-skill-image-generation-strategies')
+
+  if (!normalizedTabName) return appCopy ?? visual ?? variableMetas[0] ?? metaInstructions[0]
+
+  const namedMeta = variableMetas.find((item) => normalize(item.name) === normalizedTabName)
+  if (namedMeta) return namedMeta
+
+  const group = groups.find((item) => normalize(item.name) === normalizedTabName)
+  if (group) {
+    const groupedMetaIds = new Set(
+      items
+        .filter((item) => item.groupId === group.id && item.metaInstructionId)
+        .map((item) => item.metaInstructionId as string),
+    )
+    const groupedMeta = variableMetas.find((item) => item.groupId === group.id)
+      ?? variableMetas.find((item) => groupedMetaIds.has(item.id))
+    if (groupedMeta) return groupedMeta
+  }
+
+  // A tab name may include a product/category suffix, e.g. "保险 / 图标".
+  const fuzzyGroup = groups.find((item) => {
+    const groupName = normalize(item.name)
+    return groupName && (normalizedTabName.includes(groupName) || groupName.includes(normalizedTabName))
+  })
+  if (fuzzyGroup) {
+    const groupedMetaIds = new Set(
+      items
+        .filter((item) => item.groupId === fuzzyGroup.id && item.metaInstructionId)
+        .map((item) => item.metaInstructionId as string),
+    )
+    const groupedMeta = variableMetas.find((item) => item.groupId === fuzzyGroup.id)
+      ?? variableMetas.find((item) => groupedMetaIds.has(item.id))
+    if (groupedMeta) return groupedMeta
+  }
+
+  return appCopy ?? visual ?? variableMetas[0] ?? metaInstructions[0]
+}
+
 const VARIABLE_PROMPT_SKILL_META_IDS = new Set([
   'sop-meta-skill-image-generation-strategies',
   'sop-meta-skill-app-copy-strategies',

@@ -21,6 +21,7 @@ import VarEntryEditor from './components/VarEntryEditor'
 import WorkspaceTabBar from './components/WorkspaceTabBar'
 import AppPageRail from './components/AppPageRail'
 import RequirementQueueRunner from './features/requirementPrototype/QueueRunner'
+import { resumeReverseSopTasks } from './features/strategy/adapters/reverseSopRunner'
 const AgentWorkspace = React.lazy(() => import('./components/AgentWorkspace'))
 const CompositeWorkspace = React.lazy(() => import('./features/composite/CompositeWorkspace'))
 const StrategyWorkspace = React.lazy(() => import('./features/strategy/adapters/RequirementStrategyWorkspace'))
@@ -125,7 +126,9 @@ export default function App() {
       const startupModePromise = window.electronAPI?.getStartupMode?.() ?? Promise.resolve({ safeMode: false })
       storeInitializationPromise = Promise.all([startupModePromise, startupSettingsPromise]).then(([{ safeMode }]) => {
         setStartupSafeMode(safeMode)
-        return initStore({ safeMode })
+        return initStore({ safeMode }).then(() => {
+          resumeReverseSopTasks()
+        })
       }).catch((error) => {
         console.error('Store initialization failed:', error)
         useStore.getState().showToast(`启动数据加载失败：${error instanceof Error ? error.message : String(error)}`, 'error')

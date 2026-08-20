@@ -10,6 +10,13 @@ export type SopBatchSummary = {
 export type TaskGridItem =
   | { kind: 'task'; id: string; createdAt: number; task: TaskRecord }
   | {
+      kind: 'reverse-sop'
+      id: string
+      createdAt: number
+      controller: TaskRecord
+      imageTasks: TaskRecord[]
+    }
+  | {
       kind: 'sop-batch'
       id: string
       createdAt: number
@@ -66,9 +73,19 @@ function summarize(tasks: TaskRecord[]): SopBatchSummary {
 
 export function groupSopBatchTasks(tasks: TaskRecord[]): TaskGridItem[] {
   const batches = new Map<string, TaskRecord[]>()
+  const reverseControllers = new Map<string, TaskRecord>()
+  const reverseImageTasks = new Map<string, TaskRecord[]>()
   const items: TaskGridItem[] = []
 
   for (const task of tasks) {
+    if (task.reverseSop?.role === 'controller') {
+      reverseControllers.set(task.reverseSop.runId, task)
+      continue
+    }
+    if (task.reverseSop?.role === 'image') {
+      reverseImageTasks.set(task.reverseSop.runId, [...(reverseImageTasks.get(task.reverseSop.runId) ?? []), task])
+      continue
+    }
     const groupId = task.sopBatch?.snapshotId || task.sopBatch?.batchId
     if (!groupId) {
       items.push({ kind: 'task', id: task.id, createdAt: task.createdAt, task })
@@ -90,6 +107,27 @@ export function groupSopBatchTasks(tasks: TaskRecord[]): TaskGridItem[] {
       tasks: sortedTasks,
       summary: summarize(sortedTasks),
     })
+  }
+
+  for (const [runId, controller] of reverseControllers) {
+    const activeChildIds = controller.reverseSop?.role === 'controller'
+      ? new Set(controller.reverseSop.imageTaskIds)
+      : new Set<string>()
+    const children = (reverseImageTasks.get(runId) ?? []).filter((task) => activeChildIds.has(task.id))
+    items.push({
+      kind: 'reverse-sop',
+      id: `reverse-sop:${runId}`,
+      createdAt: Math.max(controller.createdAt, ...children.map((task) => task.createdAt)),
+      controller,
+      imageTasks: children.sort((a, b) => (a.reverseSop?.role === 'image' ? a.reverseSop.promptIndex : 0) - (b.reverseSop?.role === 'image' ? b.reverseSop.promptIndex : 0)),
+    })
+  }
+
+  // A controller can be filtered out while a child remains visible. Do not
+  // hide that result: show it as an ordinary task in that narrow case.
+  for (const [runId, children] of reverseImageTasks) {
+    if (reverseControllers.has(runId)) continue
+    children.forEach((task) => items.push({ kind: 'task', id: task.id, createdAt: task.createdAt, task }))
   }
 
   return items.sort((a, b) => b.createdAt - a.createdAt)

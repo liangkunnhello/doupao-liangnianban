@@ -111,6 +111,8 @@ export const legacyComponentCoverage: LegacyComponentCoverage[] = [
   { module: 'src/components/PromptInputDialog.tsx', responsibility: '提示词输入弹窗', decision: 'compose', targets: ['Dialog', 'TextArea', 'Button'] },
   { module: 'src/components/PromptVariableEditor.tsx', responsibility: '提示词变量编辑器（富文本 contentEditable）', decision: 'retain', targets: [] },
   { module: 'src/components/RandomPromptModal.tsx', responsibility: '随机词库管理弹窗', decision: 'retain', targets: ['Dialog', 'Tabs', 'SearchField', 'ListRow', 'EmptyState'] },
+  { module: 'src/components/ReverseSopDetailModal.tsx', responsibility: '反推 SOP 任务流程、产物和图片详情', decision: 'compose', targets: ['Dialog', 'CodeBlock', 'Progress', 'Thumbnail', 'Button'] },
+  { module: 'src/components/ReverseSopTaskCard.tsx', responsibility: '反推 SOP 独立任务卡和阶段操作', decision: 'compose', targets: ['Card', 'Thumbnail', 'StatusIndicator', 'Toolbar'] },
   { module: 'src/components/ScheduleModal.tsx', responsibility: '日程表、任务单元和预览弹窗', decision: 'retain', targets: ['Dialog', 'Tabs', 'Toolbar', 'ListRow', 'Popover'] },
   { module: 'src/components/ScheduleRunner.tsx', responsibility: '日程执行协调器', decision: 'retain', targets: ['ToastMessage', 'StatusIndicator', 'Progress'] },
   { module: 'src/components/SearchBar.tsx', responsibility: '画廊筛选和搜索工具条', decision: 'compose', targets: ['Toolbar', 'SearchField', 'SelectField', 'IconButton'] },

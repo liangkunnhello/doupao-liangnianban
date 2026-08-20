@@ -134,6 +134,8 @@ export interface SopLibraryItem {
 
 export interface SopMetaInstruction {
   id: string
+  /** Optional SOP group association used by workspace-tab routing. */
+  groupId?: string
   name: string
   description: string
   instruction: string

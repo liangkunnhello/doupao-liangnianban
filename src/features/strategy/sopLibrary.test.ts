@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getMetaInstructionExcludeText, mergeBuiltInSopMetaInstructions, migrateSopLibraryExecutionModes, seedSopMetaInstructions } from './sopLibrary'
+import { getMetaInstructionExcludeText, mergeBuiltInSopMetaInstructions, migrateSopLibraryExecutionModes, resolveMetaInstructionForWorkspaceTab, seedSopMetaInstructions } from './sopLibrary'
 import type { SopLibraryItem, SopMetaInstruction } from './types'
 
 function asset(content: string, metaInstructionId?: string): SopLibraryItem {
@@ -66,5 +66,39 @@ describe('SOP library compatibility migration', () => {
     expect(copySkill.excludeText).toBe(false)
     expect(manualCopy.excludeText).toBe(false)
     expect(explicit.excludeText).toBe(false)
+  })
+})
+
+describe('workspace tab meta-instruction routing', () => {
+  it('uses the meta instruction explicitly associated with a matching group', () => {
+    const metas = seedSopMetaInstructions()
+    const custom = {
+      id: 'meta-insurance',
+      groupId: 'group-insurance',
+      name: '保险图标变量技能',
+      description: '',
+      instruction: '保险专用规则',
+      kind: 'variable-prompt-skill' as const,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const resolved = resolveMetaInstructionForWorkspaceTab(
+      '保险',
+      [{ id: 'group-insurance', name: '保险', createdAt: 1, updatedAt: 1 }],
+      [],
+      [...metas, custom],
+    )
+    expect(resolved?.id).toBe(custom.id)
+  })
+
+  it('supports existing generated assets that link a group to a meta instruction', () => {
+    const metas = seedSopMetaInstructions()
+    const resolved = resolveMetaInstructionForWorkspaceTab(
+      '保险 / 图标',
+      [{ id: 'group-insurance', name: '保险', createdAt: 1, updatedAt: 1 }],
+      [{ ...asset('变量提示词', 'sop-meta-skill-image-generation-strategies'), groupId: 'group-insurance' }],
+      metas,
+    )
+    expect(resolved?.id).toBe('sop-meta-skill-image-generation-strategies')
   })
 })

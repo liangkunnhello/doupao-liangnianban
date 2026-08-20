@@ -494,6 +494,9 @@ export default function SopManagementCenter({
     const now = Date.now()
     const item: SopMetaInstruction = {
       id: sopLibraryId('meta'),
+      groupId: selectedGroupId !== 'all' && selectedGroupId !== 'ungrouped' && selectedGroupId !== 'favorites' && selectedGroupId !== 'recent'
+        ? selectedGroupId
+        : undefined,
       name: '未命名生成元指令',
       description: '',
       instruction: '',
@@ -984,6 +987,7 @@ export default function SopManagementCenter({
                     <Button disabled={!metaDraft.name.trim() || !metaDraft.instruction.trim()} onClick={() => onSaveMetaInstruction({ ...metaDraft, updatedAt: Date.now() })} leadingIcon={<Save size={15} />}>保存</Button>
                   </div>
                   <TextField label="名称" value={metaDraft.name} onChange={(event) => setMetaDraft({ ...metaDraft, name: event.target.value })} />
+                  <SelectField label="所属分组（可选）" value={metaDraft.groupId ?? ''} onChange={(event) => setMetaDraft({ ...metaDraft, groupId: event.target.value || undefined })} options={[{ value: '', label: '未分组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} />
                   <SelectField label="类型" value={metaDraft.kind} onChange={(event) => {
                     const kind = event.target.value as SopMetaInstruction['kind']
                     setMetaDraft({ ...metaDraft, kind, excludeTextByDefault: kind === 'variable-prompt-skill' ? metaDraft.excludeTextByDefault ?? true : metaDraft.excludeTextByDefault })

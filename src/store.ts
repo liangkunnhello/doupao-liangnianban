@@ -27,6 +27,7 @@ import type {
   ExportData,
   ResponsesApiResponse,
   ResponsesOutputItem,
+  ReverseSopControllerMeta,
   WorkspaceTab,
   WorkspaceTabGroup,
   WordLibraryGroup,
@@ -142,6 +143,7 @@ import { createWorkspaceBackupState, restoreWorkspaceBackupState } from './lib/w
 import { buildGeneratedImageFileNameBase, findNextGeneratedImageSequence } from './lib/generatedImageFilename'
 import { assignMissingGeneratedImageBatches, getNextGeneratedImageBatch } from './lib/generatedImageBatch'
 import { useRequirementPrototype } from './features/requirementPrototype/store'
+import { resolveMetaInstructionForWorkspaceTab } from './features/strategy/sopLibrary'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -278,7 +280,7 @@ function formatLocalSaveBatchFolder(createdAt: number, filenameBatch = 1): strin
   return `${year}${month}${day}-${hours}${minutes}${seconds}-batch-${batch}`
 }
 
-function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number, sopBatch?: TaskRecord['sopBatch']): string | undefined {
+function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number, sopBatch?: TaskRecord['sopBatch'], reverseSop?: TaskRecord['reverseSop']): string | undefined {
   const settings = normalizeSettings(useStore.getState().settings)
   if (settings.imageSaveLayout !== 'batch-folder') return undefined
 
@@ -291,6 +293,12 @@ function getTaskLocalSaveBatchFolder(createdAt: number, filenameBatch: number, s
     const sopName = sanitizeFolderName(sopBatch.sopName || 'SOP')
     const batchShort = sopBatch.batchId.slice(-8)
     return `${year}${month}${day}-${sopName}-${batchShort}`
+  }
+
+  if (reverseSop?.runId) {
+    const date = new Date(createdAt)
+    const dateLabel = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`
+    return `${dateLabel}-反推SOP-${reverseSop.runId.slice(-8)}`
   }
 
   return formatLocalSaveBatchFolder(createdAt, filenameBatch)
@@ -3572,6 +3580,7 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
+    if (task.reverseSop?.role === 'controller') return task
     const hasPersistedRemoteRequest = task.remoteGenerationRequests?.some((request) =>
       (request.provider === 'fal' || request.provider === 'custom') &&
       Boolean(request.remoteRequestId) &&
@@ -4560,6 +4569,95 @@ function inferSizeTier(size: string): SizeTier {
   return '1K'
 }
 
+/**
+ * Creates the visible controller immediately. The reverse-SOP runner fills in
+ * its artifacts later and creates ordinary child image tasks as each variable
+ * prompt template becomes available.
+ */
+export async function createReverseSopTask(data: {
+  inputImages: InputImage[]
+  brief: string
+  promptCount: number
+  imagesPerPrompt: number
+  useReferenceImages: boolean
+  params: TaskParams
+  targetTabId?: string | null
+  scheduledOutputPath?: string
+  scheduledOutputSubFolder?: string
+}) {
+  if (data.inputImages.length === 0) throw new Error('反推 SOP 模式至少需要一张参考图片')
+
+  const state = useStore.getState()
+  const settings = normalizeSettings(state.settings)
+  const profile = getActiveApiProfile(settings)
+  const tabId = data.targetTabId ?? state.activeWorkspaceTabId ?? state.workspaceTabs[0]?.id ?? null
+  const workspaceTabName = tabId ? state.workspaceTabs.find((tab) => tab.id === tabId)?.name : undefined
+  const resolvedMetaInstruction = resolveMetaInstructionForWorkspaceTab(
+    workspaceTabName,
+    useRequirementPrototype.getState().sopGroups,
+    useRequirementPrototype.getState().sopLibrary,
+    useRequirementPrototype.getState().sopMetaInstructions,
+  )
+  const createdAt = Date.now()
+  const taskId = genId()
+  const filenameBatch = getNextTaskFilenameBatch(createdAt, tabId)
+  const runId = `reverse-sop-${createdAt.toString(36)}-${taskId.slice(-6)}`
+  const meta: ReverseSopControllerMeta = {
+    role: 'controller',
+    runId,
+    sourceImageIds: data.inputImages.map((image) => image.id),
+    brief: data.brief.trim(),
+    workspaceTabName,
+    metaInstructionId: resolvedMetaInstruction?.id,
+    metaInstructionName: resolvedMetaInstruction?.name,
+    promptCount: Math.max(1, Math.trunc(data.promptCount)),
+    imagesPerPrompt: Math.max(1, Math.trunc(data.imagesPerPrompt)),
+    useReferenceImages: data.useReferenceImages,
+    stage: 'queued',
+    stageMessage: '已创建任务，等待反推 SOP',
+    variablePrompts: [],
+    concretePrompts: [],
+    imageTaskIds: [],
+  }
+
+  for (const image of data.inputImages) await storeImage(image.dataUrl)
+
+  const task: TaskRecord = {
+    id: taskId,
+    prompt: data.brief.trim() || '参考图反推 SOP',
+    reverseSop: meta,
+    params: normalizeParamsForSettings({ ...data.params, n: meta.imagesPerPrompt }, settings, { hasInputImages: false }),
+    apiProvider: profile.provider,
+    apiProfileId: profile.id,
+    apiProfileName: profile.name,
+    apiMode: profile.apiMode,
+    apiModel: profile.model,
+    inputImageIds: [...meta.sourceImageIds],
+    outputImages: [],
+    filenameBatch,
+    status: 'running',
+    error: null,
+    progressStage: 'queued',
+    progressMessage: meta.stageMessage,
+    progressUpdatedAt: createdAt,
+    createdAt,
+    finishedAt: null,
+    elapsed: null,
+    scheduledOutputPath: data.scheduledOutputPath,
+    scheduledOutputSubFolder: data.scheduledOutputSubFolder,
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, undefined, meta),
+  }
+
+  state.setTasks([task, ...state.tasks])
+  if (tabId) {
+    useStore.setState((current) => ({
+      workspaceTabs: current.workspaceTabs.map((tab) => tab.id === tabId ? { ...tab, tasks: [task, ...tab.tasks] } : tab),
+    }))
+  }
+  await putTask(task)
+  return taskId
+}
+
 /** 提交新任务（使用显式数据，不依赖全局状态） */
 export async function submitTaskWithData(
   data: {
@@ -4573,13 +4671,14 @@ export async function submitTaskWithData(
     scheduledOutputSubFolder?: string
     apiProfileId?: string
     sopBatch?: TaskRecord['sopBatch']
+    reverseSop?: TaskRecord['reverseSop']
   },
   options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; silentSuccess?: boolean } = {},
 ) {
   const { settings, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
-  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId, sopBatch } = data
+  const { prompt, inputImages, inputImageFolder, params, maskDraft, targetTabId, scheduledOutputPath, scheduledOutputSubFolder, apiProfileId, sopBatch, reverseSop } = data
 
   const variablePrompt = parseVariablePrompt(prompt)
   if (variablePrompt.detected && !variablePrompt.enabled) {
@@ -4686,6 +4785,7 @@ export async function submitTaskWithData(
     id: taskId,
     prompt: prompt.trim(),
     sopBatch,
+    reverseSop,
     params: normalizedParams,
     adNegativeRuleSnapshot: createAdNegativeRuleSnapshot(normalizedSettings, normalizedParams.adNegativeRuleId),
     apiProvider: activeProfile.provider,
@@ -4708,7 +4808,7 @@ export async function submitTaskWithData(
     elapsed: null,
     scheduledOutputPath,
     scheduledOutputSubFolder,
-    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, sopBatch),
+    localSaveBatchFolder: getTaskLocalSaveBatchFolder(createdAt, filenameBatch, sopBatch, reverseSop),
   }
 
   const latestTasks = useStore.getState().tasks

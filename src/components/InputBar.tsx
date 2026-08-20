@@ -1,8 +1,8 @@
 import { lazy, Suspense, useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, submitAgentStrategyMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, submitAgentStrategyMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, moveTasksToWorkspaceTab, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, createReverseSopTask } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { getActiveApiProfile, getAgentApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { getActiveApiProfile, getAgentApiProfile, getAgentTextApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import {
   MAX_DIRECT_INPUT_IMAGES,
@@ -46,6 +46,7 @@ import {
   GALLERY_AGENT_SIMILARITY_LEVELS,
   type GalleryAgentSimilarity,
 } from '../features/strategy/galleryAgentGeneration'
+import { startReverseSopTask } from '../features/strategy/adapters/reverseSopRunner'
 
 const AgentBatchPlannerModal = lazy(() => import('./AgentBatchPlannerModal'))
 const GallerySopBatchModal = lazy(() => import('../features/strategy/adapters/GallerySopBatchModal'))
@@ -615,6 +616,7 @@ export default function InputBar() {
   const [gallerySopSecondReferenceByTab, setGallerySopSecondReferenceByTab] = useState<Record<string, boolean>>({})
   const [gallerySopRunStatusByTab, setGallerySopRunStatusByTab] = useState<Record<string, GallerySopRunStatus>>({})
   const [agentStrategyEnabled, setAgentStrategyEnabled] = useState(readAgentStrategyMode)
+  const [reverseSopMode, setReverseSopMode] = useState(false)
   const [agentStrategySimilarity, setAgentStrategySimilarity] = useState<GalleryAgentSimilarity>(readAgentStrategySimilarity)
   const [agentStrategyExcludeText, setAgentStrategyExcludeText] = useState(readAgentStrategyExcludeText)
   const [taskMoveMenuOpen, setTaskMoveMenuOpen] = useState(false)
@@ -1187,18 +1189,24 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const gallerySopModeActive = appMode === 'gallery' && Boolean(activeGallerySop && getSopExecutionMode(activeGallerySop) === 'prompt-generator')
+  const hasReverseSopTextConfig = Boolean(getAgentTextApiProfile(settings).apiKey)
+  const gallerySopModeActive = appMode === 'gallery' && !reverseSopMode && Boolean(activeGallerySop && getSopExecutionMode(activeGallerySop) === 'prompt-generator')
   const gallerySopIsRunning = gallerySopRunStatus?.phase === 'generating' || gallerySopRunStatus?.phase === 'paused' || gallerySopRunStatus?.phase === 'submitting'
   const gallerySopAvailablePromptCount = gallerySopRunStatus?.availablePrompts ?? savedSopPromptCount
   const gallerySopHasPromptList = gallerySopAvailablePromptCount > 0
   const agentStrategyModeActive = appMode === 'agent' && agentStrategyEnabled
-  const canSubmit = agentStrategyModeActive
+  const reverseSopModeActive = appMode === 'gallery' && reverseSopMode
+  const canSubmit = reverseSopModeActive
+    ? Boolean(inputImages.length > 0 && hasSubmitApiConfig && hasReverseSopTextConfig && !activeAgentIsRunning)
+    : agentStrategyModeActive
     ? Boolean(inputImages.length > 0 && hasSubmitApiConfig && !activeAgentIsRunning)
     : gallerySopModeActive
     ? Boolean(activeGallerySop && !activeAgentIsRunning)
     : Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
+    : reverseSopModeActive
+      ? `反推 SOP 并生成 ${gallerySopPromptCount * gallerySopImagesPerPrompt} 张图片`
     : agentStrategyModeActive
       ? `策略智能体生成 ${params.n} 张图片`
     : gallerySopModeActive
@@ -1212,6 +1220,8 @@ export default function InputBar() {
       : '请先配置 API'
   const submitButtonText = activeAgentIsRunning
     ? '停止'
+    : reverseSopModeActive
+      ? '反推 SOP 生图'
     : agentStrategyModeActive
       ? `智能生成 ${params.n} 张`
     : gallerySopModeActive
@@ -1223,6 +1233,8 @@ export default function InputBar() {
     : maskDraft ? '遮罩编辑' : '生成图像'
   const submitTooltipText = activeAgentIsRunning
     ? '停止生成'
+    : reverseSopModeActive
+      ? inputImages.length === 0 ? '请先添加至少一张参考图片' : !hasReverseSopTextConfig ? '请先配置文本模型 API' : submitButtonAriaLabel
     : agentStrategyModeActive
       ? inputImages.length === 0
         ? '请先添加至少一张参考图片'
@@ -1235,13 +1247,49 @@ export default function InputBar() {
     agentStrategyModeActive ||
     (gallerySopModeActive ? true : !hasSubmitApiConfig)
   )
-  const promptPlaceholder = agentStrategyModeActive
+  const promptPlaceholder = reverseSopModeActive
+    ? '可补充反推方向、比例和内容限制；上传参考图后会立即创建独立任务卡'
+    : agentStrategyModeActive
     ? '补充产品、目标受众、文案保留或画面限制（可选）；智能体会先识别产品并选择策略技能'
     : gallerySopModeActive
     ? '本次生成要求（可选）：补充本批次的主题、内容和限制；留空则完全按 SOP 执行'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitCurrentMode = useCallback(() => {
-    if (appMode === 'agent') {
+    if (reverseSopModeActive) {
+      void (async () => {
+        if (inputImages.length === 0) {
+          showToast('反推 SOP 模式至少需要一张参考图片', 'error')
+          return
+        }
+        if (!hasSubmitApiConfig) {
+          showToast('请先配置图片生成 API', 'error')
+          return
+        }
+        if (!hasReverseSopTextConfig) {
+          showToast('请先配置文本模型 API', 'error')
+          return
+        }
+        try {
+          const taskId = await createReverseSopTask({
+            inputImages,
+            brief: prompt,
+            promptCount: gallerySopPromptCount,
+            imagesPerPrompt: gallerySopImagesPerPrompt,
+            useReferenceImages: true,
+            params,
+            targetTabId: activeWorkspaceTabId,
+            scheduledOutputPath: customOutputPath.trim() || undefined,
+            scheduledOutputSubFolder: workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId)?.name,
+          })
+          startReverseSopTask(taskId)
+          // 参考图已被父任务持久化，清空输入区便于立刻提交下一张独立任务。
+          clearInputImages()
+          showToast('已创建反推 SOP 任务卡，后台开始执行', 'success')
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : String(error), 'error')
+        }
+      })()
+    } else if (appMode === 'agent') {
       if (agentStrategyModeActive) void submitAgentStrategyMessage({ similarity: agentStrategySimilarity, excludeText: agentStrategyExcludeText })
       else void submitAgentMessage()
     } else if (gallerySopModeActive) {
@@ -1263,7 +1311,7 @@ export default function InputBar() {
     } else {
       void submitTask()
     }
-  }, [activeGallerySop, agentStrategyExcludeText, agentStrategyModeActive, agentStrategySimilarity, appMode, gallerySopAutoGenerate, gallerySopIsRunning, gallerySopModeActive, gallerySopPromptCount, gallerySopScopeId, openGallerySopBatch, revealGallerySopBatch])
+  }, [activeGallerySop, activeWorkspaceTabId, agentStrategyExcludeText, agentStrategyModeActive, agentStrategySimilarity, appMode, clearInputImages, customOutputPath, gallerySopAutoGenerate, gallerySopImagesPerPrompt, gallerySopIsRunning, gallerySopModeActive, gallerySopPromptCount, gallerySopScopeId, hasReverseSopTextConfig, hasSubmitApiConfig, inputImages, openGallerySopBatch, params, prompt, reverseSopModeActive, revealGallerySopBatch, showToast, workspaceTabs])
   const stopActiveAgentResponse = useCallback(() => {
     stopAgentResponse(activeAgentConversationId)
   }, [activeAgentConversationId])
@@ -3032,6 +3080,36 @@ export default function InputBar() {
 
   const renderSopContextControls = () => {
     if (appMode !== 'gallery') return null
+    if (reverseSopModeActive) {
+      return (
+        <>
+          <button
+            type="button"
+            role="switch"
+            aria-checked
+            aria-label="反推 SOP 模式"
+            onClick={() => setReverseSopMode(false)}
+            className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-amber-100 px-3 text-xs font-semibold text-amber-800 transition hover:bg-amber-200 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/25"
+          >
+            <WandSparkles size={15} />
+            反推 SOP
+            <span aria-hidden="true" className="relative h-4 w-7 overflow-hidden rounded-full bg-amber-600"><span className="absolute left-3.5 top-0.5 h-3 w-3 rounded-full bg-white" /></span>
+          </button>
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm focus-within:ring-2 focus-within:ring-amber-500 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span>提示词</span>
+            <input type="number" min={1} value={gallerySopPromptCount} onChange={(event) => event.target.value && setGallerySopPromptCount(Number(event.target.value))} aria-label="反推 SOP 展开提示词数量" className="w-10 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100" />
+          </label>
+          <label className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-gray-200/70 bg-white/55 px-3 text-xs text-gray-500 shadow-sm focus-within:ring-2 focus-within:ring-amber-500 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span>每条</span>
+            <input type="number" min={1} max={MAX_SOP_IMAGES_PER_PROMPT} value={gallerySopImagesPerPrompt} onChange={(event) => event.target.value && setGallerySopImagesPerPrompt(Number(event.target.value))} aria-label="每条提示词生成图片数" className="w-8 bg-transparent text-center font-semibold text-gray-800 outline-none dark:text-gray-100" />
+            <span>张</span>
+          </label>
+          <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-amber-50 px-3 text-xs font-medium text-amber-800 dark:bg-amber-500/10 dark:text-amber-100">
+            预计 {gallerySopTotalImages} 张
+          </span>
+        </>
+      )
+    }
     const hasSopSelection = Boolean(activeGallerySop)
     const sharedReferenceCount = inputImages.length || inputImageFolder?.imageIds.length || 0
     const progressLabel = gallerySopRunStatus
@@ -3055,6 +3133,21 @@ export default function InputBar() {
         : '提示词管理'
     return (
       <>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={false}
+          aria-label="反推 SOP 模式"
+          onClick={() => {
+            setGallerySopId('')
+            setReverseSopMode(true)
+          }}
+          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-gray-100 px-3 text-xs font-semibold text-gray-500 transition hover:bg-amber-100 hover:text-amber-800 dark:bg-white/[0.06] dark:text-gray-400 dark:hover:bg-amber-500/15 dark:hover:text-amber-100"
+        >
+          <WandSparkles size={15} />
+          反推 SOP
+          <span aria-hidden="true" className="relative h-4 w-7 overflow-hidden rounded-full bg-gray-300 dark:bg-gray-600"><span className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white" /></span>
+        </button>
         <button
           type="button"
           onClick={() => setShowGallerySopManagement(true)}

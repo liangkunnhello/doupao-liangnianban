@@ -343,6 +343,71 @@ export interface SopBatchTaskMeta {
   imagesPerPrompt?: number
 }
 
+export type ReverseSopStage =
+  | 'queued'
+  | 'reverse-sop'
+  | 'generate-variable-prompts'
+  | 'expand-variable-prompts'
+  | 'generate-images'
+  | 'completed'
+  | 'error'
+  | 'stopped'
+
+export interface ReverseSopVariablePrompt {
+  id: string
+  name: string
+  description: string
+  content: string
+}
+
+export interface ReverseSopConcretePrompt {
+  id: string
+  variablePromptId: string
+  text: string
+}
+
+/**
+ * A reverse-SOP run has one persisted controller task and zero or more normal
+ * image tasks. Keeping both under one run id lets the gallery render one card
+ * while the existing image queue remains responsible for generation/recovery.
+ */
+export interface ReverseSopControllerMeta {
+  role: 'controller'
+  runId: string
+  sourceImageIds: string[]
+  brief: string
+  /** The workspace tab name used to resolve a tab-specific SOP meta instruction. */
+  workspaceTabName?: string
+  /** Resolved at task creation so a later tab rename cannot change this run. */
+  metaInstructionId?: string
+  metaInstructionName?: string
+  promptCount: number
+  imagesPerPrompt: number
+  useReferenceImages: boolean
+  stage: ReverseSopStage
+  stageMessage?: string
+  sop?: {
+    name: string
+    description: string
+    content: string
+  }
+  variablePrompts: ReverseSopVariablePrompt[]
+  concretePrompts: ReverseSopConcretePrompt[]
+  imageTaskIds: string[]
+  failedStage?: ReverseSopStage
+  stoppedAt?: number
+}
+
+export interface ReverseSopImageTaskMeta {
+  role: 'image'
+  runId: string
+  controllerTaskId: string
+  concretePromptId: string
+  promptIndex: number
+}
+
+export type ReverseSopTaskMeta = ReverseSopControllerMeta | ReverseSopImageTaskMeta
+
 export interface SopBatchSnapshot {
   id: string
   /** 用户可编辑的提示词集标题；旧记录缺省时由 SOP 名称、本次要求或日期生成。 */
@@ -393,6 +458,8 @@ export interface TaskRecord {
   prompt: string
   /** 画廊 SOP 批量生成任务标识；每个任务固定对应一条提示词，可生成多张图片。 */
   sopBatch?: SopBatchTaskMeta
+  /** 参考图反推 SOP 流程的父任务或其下属生图任务标记。 */
+  reverseSop?: ReverseSopTaskMeta
   params: TaskParams
   /** Immutable copy of the business compliance rule used for this request. */
   adNegativeRuleSnapshot?: Pick<AdNegativeRuleProfile, 'id' | 'name' | 'content' | 'version'>
